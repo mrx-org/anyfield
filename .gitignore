@@ -1,0 +1,7 @@
+*.nii
+*.nii.gz
+*.stl
+niivue_/
+node_modules/
+.cursor/
+terminals/
