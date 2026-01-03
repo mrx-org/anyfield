@@ -121,3 +121,23 @@ This method is robust against any initial rotation or translation of the STL and
 3. **Extract spacing from affine**, never trust `pixDims` alone.
 4. **Use rotated affines** for oriented masks to avoid interpolation and "bounding box" over-coverage.
 5. **Calibrate UI interactions for DPR** to ensure precise dragging and rotation.
+
+---
+
+## Voxel Center vs. Corner (+0.5 Correction)
+
+When aligning a discrete NIfTI mask with a continuous STL mesh, there is often an ambiguity regarding whether coordinates refer to **voxel centers** or **voxel corners**.
+
+### The Logic
+- **NIfTI Standard**: In world space, the coordinate $[x, y, z]$ typically points to the **center** of a voxel.
+- **Mesh Alignment**: If the first voxel's center is at $[0, 0, 0]$, its physical boundaries (corners) actually extend to $[-0.5 \cdot sp, -0.5 \cdot sp, -0.5 \cdot sp]$.
+
+### Implementation in this App
+The rotated affine matrix calculation for the FOV mask **implicitly handles the +0.5 voxel shift**. 
+
+When calculating the `rasOrigin` (the center of voxel $[0,0,0]$), we use:
+$$P_{local,0} = \left[ -L_x/2 + sp_x/2, \quad -L_y/2 + sp_y/2, \quad -L_z/2 + sp_z/2 \right]$$
+
+Adding half the voxel spacing ($sp/2$) effectively shifts the grid so that the **entire voxel volume** stays contained within the theoretical FOV box. Without this correction, the mask would appear shifted by half a voxel in all directions relative to the STL mesh.
+
+Because this logic is mathematically robust and hardcoded into the export, the manual "Shift Voxel" toggle is unnecessary and has been removed from the UI.

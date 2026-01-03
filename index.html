@@ -24,11 +24,26 @@
       }
       .layout {
         height: 100%;
-        display: grid;
-        grid-template-columns: 320px 1fr;
+        display: flex;
+        flex-direction: column;
         gap: 12px;
         padding: 12px;
         box-sizing: border-box;
+      }
+      .viewer {
+        flex: 1;
+        position: relative;
+        background: #000;
+        border: 1px solid var(--border);
+        border-radius: 10px;
+        overflow: hidden;
+        min-height: 400px;
+      }
+      .options-grid {
+        display: grid;
+        grid-template-columns: repeat(4, 1fr);
+        gap: 12px;
+        height: auto;
       }
       .panel {
         background: var(--panel);
@@ -38,12 +53,11 @@
         overflow: auto;
       }
       .panel h1 {
-        font-size: 16px;
+        font-size: 14px;
         margin: 0 0 10px;
-      }
-      .panel p {
-        color: var(--muted);
-        margin: 0 0 12px;
+        text-transform: uppercase;
+        letter-spacing: 0.05em;
+        color: var(--accent);
       }
       .row {
         display: grid;
@@ -58,8 +72,9 @@
         background: rgba(255, 255, 255, 0.06);
         color: var(--text);
         border-radius: 8px;
-        padding: 10px 12px;
+        padding: 8px 10px;
         cursor: pointer;
+        font-size: 12px;
       }
       .btn.primary {
         background: var(--accent);
@@ -70,34 +85,32 @@
         cursor: not-allowed;
       }
       .kv {
-        border-top: 1px solid var(--border);
-        margin-top: 12px;
-        padding-top: 12px;
+        margin-top: 8px;
         color: var(--muted);
         display: grid;
-        gap: 6px;
-        font-size: 12px;
+        gap: 4px;
+        font-size: 11px;
       }
       .stateBox {
-        margin-top: 12px;
-        padding: 10px;
+        margin-top: 10px;
+        padding: 8px;
         border: 1px solid var(--border);
-        border-radius: 10px;
+        border-radius: 8px;
         background: rgba(255, 255, 255, 0.04);
         display: grid;
-        gap: 6px;
+        gap: 4px;
         color: var(--muted);
-        font-size: 12px;
+        font-size: 11px;
       }
       .stateRow {
         display: grid;
-        grid-template-columns: 110px 1fr;
-        gap: 8px;
+        grid-template-columns: 90px 1fr;
+        gap: 6px;
         align-items: baseline;
       }
       .stateKey {
         color: var(--text);
-        opacity: 0.9;
+        opacity: 0.8;
       }
       .stateVal {
         font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas,
@@ -107,12 +120,11 @@
         overflow: hidden;
         text-overflow: ellipsis;
       }
-      .viewer {
-        position: relative;
-        background: #000;
-        border: 1px solid var(--border);
-        border-radius: 10px;
-        overflow: hidden;
+      .stateVal.auto-wrap {
+        white-space: normal;
+        overflow: visible;
+        text-overflow: clip;
+        word-break: break-all;
       }
       canvas {
         width: 100%;
@@ -136,9 +148,15 @@
         white-space: nowrap;
       }
       .hint {
-        margin-top: 8px;
-        color: var(--muted);
-        font-size: 12px;
+        margin-top: 10px;
+        color: var(--text);
+        opacity: 0.95;
+        font-size: 14px;
+        line-height: 1.5;
+        background: rgba(255, 255, 255, 0.07);
+        padding: 10px;
+        border-radius: 6px;
+        border: 1px solid var(--border);
       }
       .toggle {
         display: flex;
@@ -168,7 +186,31 @@
         font-size: 12px;
       }
       .sliderRow input[type="range"] {
-        width: 100%;
+        width: 60px;
+      }
+      .num-input {
+        background: rgba(255, 255, 255, 0.08);
+        border: 1px solid var(--border);
+        color: var(--text);
+        border-radius: 4px;
+        padding: 2px 4px;
+        width: 45px;
+        font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace;
+        font-size: 11px;
+        text-align: right;
+      }
+      .num-input::-webkit-inner-spin-button, 
+      .num-input::-webkit-outer-spin-button { 
+        -webkit-appearance: none; 
+        margin: 0; 
+      }
+      .num-input {
+        -moz-appearance: textfield;
+      }
+      .input-sync {
+        display: flex;
+        align-items: center;
+        gap: 6px;
       }
       .mono {
         font-variant-numeric: tabular-nums;
@@ -182,149 +224,174 @@
   </head>
   <body>
     <div class="layout">
-      <div class="panel">
-        <h1>Niivue Minimal Viewer</h1>
-        <p>
-          Upload a NIfTI volume (<code>.nii</code> / <code>.nii.gz</code>) or
-          load the MNI152 demo.
-        </p>
-
-        <div class="row">
-          <input id="file" type="file" accept=".nii,.nii.gz,.gz" />
-          <button id="load-demo" class="btn primary">Load demo (MNI152)</button>
-          <button id="reset" class="btn">Reset camera</button>
-          <label class="toggle">
-            <input id="showFov" type="checkbox" checked />
-            Show FOV edge box
-          </label>
-          <label class="toggle">
-            <input id="sliceMM" type="checkbox" />
-            Slice MM
-          </label>
-          <label class="toggle">
-            <input id="radiological" type="checkbox" />
-            Radiological
-          </label>
-          <label class="toggle">
-            <input id="showRender" type="checkbox" checked />
-            3D Render
-          </label>
-          <label class="toggle">
-            <input id="showCrosshair" type="checkbox" checked />
-            Crosshair
-          </label>
-          <div class="sliderRow" style="margin-top: 8px;">
-            <div style="font-size: 12px; color: var(--muted);">Zoom 2D: <span class="mono" id="zoom2DVal">0.65</span>x</div>
-            <input id="zoom2D" type="range" min="0.2" max="2.0" step="0.05" value="0.65" style="width: 100px;" />
-          </div>
-          <div class="sliderGroup" id="fovControls">
-            <div class="sliderRow">
-              <div>FOV X (mm) <span class="mono" id="fovXVal">—</span></div>
-              <input id="fovX" type="range" min="10" max="400" step="1" value="220" />
-            </div>
-            <div class="sliderRow">
-              <div>FOV Y (mm) <span class="mono" id="fovYVal">—</span></div>
-              <input id="fovY" type="range" min="10" max="400" step="1" value="220" />
-            </div>
-            <div class="sliderRow">
-              <div>FOV Z (mm) <span class="mono" id="fovZVal">—</span></div>
-              <input id="fovZ" type="range" min="10" max="400" step="1" value="100" />
-            </div>
-            <div class="sliderRow">
-              <div>Offset X (mm) <span class="mono" id="fovOffXVal">0 mm</span></div>
-              <input id="fovOffX" type="range" min="-100" max="100" step="0.1" value="0" />
-            </div>
-            <div class="sliderRow">
-              <div>Offset Y (mm) <span class="mono" id="fovOffYVal">0 mm</span></div>
-              <input id="fovOffY" type="range" min="-100" max="100" step="0.1" value="0" />
-            </div>
-            <div class="sliderRow">
-              <div>Offset Z (mm) <span class="mono" id="fovOffZVal">0 mm</span></div>
-              <input id="fovOffZ" type="range" min="-100" max="100" step="0.1" value="0" />
-            </div>
-            <div class="sliderRow">
-              <div>Rot X (deg) <span class="mono" id="fovRotXVal">0°</span></div>
-              <input id="fovRotX" type="range" min="-180" max="180" step="1" value="0" />
-            </div>
-            <div class="sliderRow">
-              <div>Rot Y (deg) <span class="mono" id="fovRotYVal">0°</span></div>
-              <input id="fovRotY" type="range" min="-180" max="180" step="1" value="0" />
-            </div>
-            <div class="sliderRow">
-              <div>Rot Z (deg) <span class="mono" id="fovRotZVal">0°</span></div>
-              <input id="fovRotZ" type="range" min="-180" max="180" step="1" value="0" />
-            </div>
-            <div class="sliderRow">
-              <div>Shift Voxel</div>
-              <label class="toggle" style="justify-content:flex-end; margin:0">
-                <input id="exportHalfVox" type="checkbox" />
-                +0.5 Correction
-              </label>
-            </div>
-            <div class="sliderRow">
-              <div><strong>FOV Mask Matrix Size</strong></div>
-            </div>
-            <div class="sliderRow">
-              <div>Mask X <span class="mono" id="maskXVal">128</span></div>
-              <input id="maskX" type="range" min="16" max="512" step="1" value="128" />
-            </div>
-            <div class="sliderRow">
-              <div>Mask Y <span class="mono" id="maskYVal">128</span></div>
-              <input id="maskY" type="range" min="16" max="512" step="1" value="128" />
-            </div>
-            <div class="sliderRow">
-              <div>Mask Z <span class="mono" id="maskZVal">1</span></div>
-              <input id="maskZ" type="range" min="1" max="512" step="1" value="1" />
-            </div>
-            <div class="sliderRow">
-              <div></div>
-              <button id="downloadFovMesh" class="btn" type="button">Download FOV (.stl) + NIfTI</button>
-            </div>
-            <div class="sliderRow">
-              <div></div>
-              <button id="btnClipFov" class="btn" type="button">Debug Coordinates & Box</button>
-            </div>
-          </div>
-
-        </div>
-
-        <div class="hint">
-          Tip: Hold <strong>Ctrl</strong> + Left-drag to move, <strong>Ctrl</strong> + Right-drag to rotate. <strong>Ctrl</strong> + Scroll to resize.
-        </div>
-
-        <div class="stateBox">
-          <div class="stateRow">
-            <div class="stateKey">Rotation</div>
-            <div class="stateVal">
-              az=<span id="azVal">—</span>°, el=<span id="elVal">—</span>°
-            </div>
-          </div>
-          <div class="stateRow">
-            <div class="stateKey">Slices (vox)</div>
-            <div class="stateVal"><span id="voxVal">—</span></div>
-          </div>
-          <div class="stateRow">
-            <div class="stateKey">Location (mm)</div>
-            <div class="stateVal"><span id="mmVal">—</span></div>
-          </div>
-          <div class="stateRow">
-            <div class="stateKey">Info</div>
-            <div class="stateVal"><span id="locStrVal">—</span></div>
-          </div>
-        </div>
-
-        <div class="kv">
-          <div><strong>Status:</strong> <span id="statusText">idle</span></div>
-          <div>
-            <strong>Note:</strong> This page imports Niivue from a CDN
-            (<code>unpkg</code>).
-          </div>
-        </div>
-      </div>
-
       <div class="viewer">
         <canvas id="gl"></canvas>
         <div class="status" id="statusOverlay">idle</div>
+      </div>
+
+      <div class="options-grid">
+        <!-- Pane 1: Load file/demo + Status + Note -->
+        <div class="panel">
+          <h1>Volume Source</h1>
+          <div class="row">
+            <input id="file" type="file" accept=".nii,.nii.gz,.gz" />
+            <button id="load-demo" class="btn primary">Load demo (MNI152)</button>
+          </div>
+          <div class="stateBox">
+            <div class="stateRow">
+              <div class="stateKey">Status</div>
+              <div class="stateVal auto-wrap" id="statusText">idle</div>
+            </div>
+            <div class="stateRow">
+              <div class="stateKey">Rotation</div>
+              <div class="stateVal">az=<span id="azVal">—</span>°, el=<span id="elVal">—</span>°</div>
+            </div>
+            <div class="stateRow">
+              <div class="stateKey">Slices (vox)</div>
+              <div class="stateVal"><span id="voxVal">—</span></div>
+            </div>
+            <div class="stateRow">
+              <div class="stateKey">Location (mm)</div>
+              <div class="stateVal"><span id="mmVal">—</span></div>
+            </div>
+          </div>
+          <div class="kv">
+            <div><strong>Note:</strong> Niivue via CDN (unpkg).</div>
+            <div style="border-top: 1px solid var(--border); margin-top: 4px; padding-top: 4px;">
+              <strong>Info:</strong>
+              <div id="locStrVal" class="stateVal auto-wrap" style="margin-top: 2px;">—</div>
+            </div>
+          </div>
+        </div>
+
+        <!-- Pane 2: Checkboxes and Zoom -->
+        <div class="panel">
+          <h1>View Options</h1>
+          <div class="row" style="grid-template-columns: 1fr 1fr; gap: 4px;">
+            <label class="toggle"><input id="showFov" type="checkbox" checked /> FOV Box</label>
+            <label class="toggle"><input id="sliceMM" type="checkbox" /> Slice MM</label>
+            <label class="toggle"><input id="radiological" type="checkbox" /> Radio.</label>
+            <label class="toggle"><input id="showRender" type="checkbox" checked /> 3D Render</label>
+            <label class="toggle"><input id="showCrosshair" type="checkbox" checked /> Crosshair</label>
+          </div>
+          <div class="sliderGroup" style="margin-top: 8px;">
+            <div class="sliderRow">
+              <div>Zoom 2D</div>
+              <div class="input-sync">
+                <input id="zoom2DVal" type="number" class="num-input" step="0.05" />
+                <input id="zoom2D" type="range" min="0.2" max="2.0" step="0.05" value="0.9" />
+              </div>
+            </div>
+          </div>
+          <div class="hint">
+            Ctrl+Left: Move FOV<br>
+            Ctrl+Right: Rotate FOV<br>
+            Ctrl+Scroll: Resize FOV
+          </div>
+        </div>
+
+        <!-- Pane 3: FOV size, offset, and rotation sliders -->
+        <div class="panel">
+          <h1>FOV Parameters</h1>
+          <div class="sliderGroup" id="fovControls">
+            <div class="sliderRow">
+              <div>Size X (mm)</div>
+              <div class="input-sync">
+                <input id="fovXVal" type="number" class="num-input" step="1" />
+                <input id="fovX" type="range" min="1" max="600" step="1" value="220" />
+              </div>
+            </div>
+            <div class="sliderRow">
+              <div>Size Y (mm)</div>
+              <div class="input-sync">
+                <input id="fovYVal" type="number" class="num-input" step="1" />
+                <input id="fovY" type="range" min="1" max="600" step="1" value="220" />
+              </div>
+            </div>
+            <div class="sliderRow">
+              <div>Size Z (mm)</div>
+              <div class="input-sync">
+                <input id="fovZVal" type="number" class="num-input" step="1" />
+                <input id="fovZ" type="range" min="1" max="600" step="1" value="100" />
+              </div>
+            </div>
+            <div class="sliderRow" style="margin-top: 2px; border-top: 1px solid var(--border); padding-top: 2px;">
+              <div>Off X (mm)</div>
+              <div class="input-sync">
+                <input id="fovOffXVal" type="number" class="num-input" step="0.1" />
+                <input id="fovOffX" type="range" min="-100" max="100" step="0.1" value="0" />
+              </div>
+            </div>
+            <div class="sliderRow">
+              <div>Off Y (mm)</div>
+              <div class="input-sync">
+                <input id="fovOffYVal" type="number" class="num-input" step="0.1" />
+                <input id="fovOffY" type="range" min="-100" max="100" step="0.1" value="0" />
+              </div>
+            </div>
+            <div class="sliderRow">
+              <div>Off Z (mm)</div>
+              <div class="input-sync">
+                <input id="fovOffZVal" type="number" class="num-input" step="0.1" />
+                <input id="fovOffZ" type="range" min="-100" max="100" step="0.1" value="0" />
+              </div>
+            </div>
+            <div class="sliderRow" style="margin-top: 2px; border-top: 1px solid var(--border); padding-top: 2px;">
+              <div>Rot X (deg)</div>
+              <div class="input-sync">
+                <input id="fovRotXVal" type="number" class="num-input" step="1" />
+                <input id="fovRotX" type="range" min="-180" max="180" step="1" value="0" />
+              </div>
+            </div>
+            <div class="sliderRow">
+              <div>Rot Y (deg)</div>
+              <div class="input-sync">
+                <input id="fovRotYVal" type="number" class="num-input" step="1" />
+                <input id="fovRotY" type="range" min="-180" max="180" step="1" value="0" />
+              </div>
+            </div>
+            <div class="sliderRow">
+              <div>Rot Z (deg)</div>
+              <div class="input-sync">
+                <input id="fovRotZVal" type="number" class="num-input" step="1" />
+                <input id="fovRotZ" type="range" min="-180" max="180" step="1" value="0" />
+              </div>
+            </div>
+          </div>
+        </div>
+
+        <!-- Pane 4: FOV mask matrix size and Download button -->
+        <div class="panel">
+          <h1>Export & Mask</h1>
+          <div class="sliderGroup">
+            <div class="sliderRow">
+              <div>Mask X</div>
+              <div class="input-sync">
+                <input id="maskXVal" type="number" class="num-input" step="1" />
+                <input id="maskX" type="range" min="16" max="512" step="1" value="128" />
+              </div>
+            </div>
+            <div class="sliderRow">
+              <div>Mask Y</div>
+              <div class="input-sync">
+                <input id="maskYVal" type="number" class="num-input" step="1" />
+                <input id="maskY" type="range" min="16" max="512" step="1" value="128" />
+              </div>
+            </div>
+            <div class="sliderRow">
+              <div>Mask Z</div>
+              <div class="input-sync">
+                <input id="maskZVal" type="number" class="num-input" step="1" />
+                <input id="maskZ" type="range" min="1" max="512" step="1" value="1" />
+              </div>
+            </div>
+          </div>
+          <div class="row" style="margin-top: 12px;">
+            <button id="downloadFovMesh" class="btn primary" type="button" style="width: 100%;">
+              Download FOV (.stl) + NIfTI
+            </button>
+          </div>
+        </div>
       </div>
     </div>
 
@@ -338,7 +405,6 @@
       const statusOverlay = document.getElementById("statusOverlay");
       const fileInput = document.getElementById("file");
       const btnDemo = document.getElementById("load-demo");
-      const btnReset = document.getElementById("reset");
       const showFov = document.getElementById("showFov");
       const sliceMM = document.getElementById("sliceMM");
       const radiological = document.getElementById("radiological");
@@ -365,7 +431,6 @@
       const fovRotXVal = document.getElementById("fovRotXVal");
       const fovRotYVal = document.getElementById("fovRotYVal");
       const fovRotZVal = document.getElementById("fovRotZVal");
-      const exportHalfVox = document.getElementById("exportHalfVox");
       const maskX = document.getElementById("maskX");
       const maskY = document.getElementById("maskY");
       const maskZ = document.getElementById("maskZ");
@@ -373,7 +438,6 @@
       const maskYVal = document.getElementById("maskYVal");
       const maskZVal = document.getElementById("maskZVal");
       const downloadFovMesh = document.getElementById("downloadFovMesh");
-      const btnClipFov = document.getElementById("btnClipFov");
       const azVal = document.getElementById("azVal");
       const elVal = document.getElementById("elVal");
       const voxVal = document.getElementById("voxVal");
@@ -535,7 +599,7 @@
       showRender.checked = true;
 
       // Set default 2D Zoom
-      nv.scene.pan2Dxyzmm[3] = 0.65;
+      nv.scene.pan2Dxyzmm[3] = 0.9;
 
       // Keep offsets stable relative to the FOV center when FOV size changes:
       // Box is defined as Center +/- Size/2, so Center is stable by default.
@@ -790,13 +854,42 @@
             isDraggingFov = false;
             nv.opts.dragMode = savedDragMode; 
             setStatus("FOV Drag finished");
+            syncFovLabels(); // Final precision catch-up
          }
          if (isRotatingFov) {
             isRotatingFov = false;
             nv.opts.dragMode = savedDragMode;
             setStatus("FOV Rotate finished");
+            syncFovLabels(); // Final precision catch-up
          }
       });
+
+      canvas.addEventListener("wheel", (e) => {
+          if (e.ctrlKey) {
+              e.preventDefault();
+              e.stopPropagation();
+              e.stopImmediatePropagation();
+              
+              updateViewFromMouse(e);
+              if (currentAxCorSag === null) return;
+              
+              // Determine direction: deltaY > 0 is scroll down (usually shrink), < 0 is scroll up (expand)
+              const delta = e.deltaY > 0 ? -2 : 2; 
+              
+              let targetInput = null;
+              if (currentAxCorSag === 0) targetInput = fovY;      // Axial -> Resize Y
+              else if (currentAxCorSag === 1) targetInput = fovX; // Coronal -> Resize X
+              else if (currentAxCorSag === 2) targetInput = fovZ; // Sagittal -> Resize Z
+              
+              if (targetInput) {
+                  let newVal = Number(targetInput.value) + delta;
+                  newVal = Math.max(Number(targetInput.min), Math.min(Number(targetInput.max), newVal));
+                  targetInput.value = String(newVal);
+                  rebuildFovLive();
+                  setStatus(`Resized FOV: ${newVal} mm`);
+              }
+          }
+      }, { passive: false, capture: true });
 
       // (We can keep onDragRelease as a fallback or remove it if live dragging works well.
       //  Removing it prevents double-updates.)
@@ -1323,8 +1416,6 @@
                 if (typeof nv.drawScene === 'function') nv.drawScene();
                 else nv.updateGLVolume();
             }
-            // Sync UI text (optional, fast)
-            syncFovLabels();
          } catch(e) {
              console.error("FOV Update failed", e);
          }
@@ -1353,51 +1444,69 @@
         nv.setCrosshairWidth(showCrosshair.checked ? 1 : 0);
       });
 
-      zoom2D.addEventListener("input", () => {
-        const val = parseFloat(zoom2D.value);
-        zoom2DVal.textContent = val.toFixed(2);
-        const pan = nv.scene.pan2Dxyzmm;
-        nv.setPan2Dxyzmm([pan[0], pan[1], pan[2], val]);
-      });
-
       function syncFovLabels() {
-        fovXVal.textContent = `${Math.round(Number(fovX.value))} mm`;
-        fovYVal.textContent = `${Math.round(Number(fovY.value))} mm`;
-        fovZVal.textContent = `${Math.round(Number(fovZ.value))} mm`;
-        fovOffXVal.textContent = `${Number(fovOffX.value).toFixed(1)} mm`;
-        fovOffYVal.textContent = `${Number(fovOffY.value).toFixed(1)} mm`;
-        fovOffZVal.textContent = `${Number(fovOffZ.value).toFixed(1)} mm`;
-        fovRotXVal.textContent = `${Math.round(Number(fovRotX.value))}°`;
-        fovRotYVal.textContent = `${Math.round(Number(fovRotY.value))}°`;
-        fovRotZVal.textContent = `${Math.round(Number(fovRotZ.value))}°`;
-        maskXVal.textContent = `${Math.round(Number(maskX.value))}`;
-        maskYVal.textContent = `${Math.round(Number(maskY.value))}`;
-        maskZVal.textContent = `${Math.round(Number(maskZ.value))}`;
+        fovXVal.value = Math.round(Number(fovX.value));
+        fovYVal.value = Math.round(Number(fovY.value));
+        fovZVal.value = Math.round(Number(fovZ.value));
+        fovOffXVal.value = Number(fovOffX.value).toFixed(1);
+        fovOffYVal.value = Number(fovOffY.value).toFixed(1);
+        fovOffZVal.value = Number(fovOffZ.value).toFixed(1);
+        fovRotXVal.value = Math.round(Number(fovRotX.value));
+        fovRotYVal.value = Math.round(Number(fovRotY.value));
+        fovRotZVal.value = Math.round(Number(fovRotZ.value));
+        maskXVal.value = Math.round(Number(maskX.value));
+        maskYVal.value = Math.round(Number(maskY.value));
+        maskZVal.value = Math.round(Number(maskZ.value));
+        zoom2DVal.value = parseFloat(zoom2D.value).toFixed(2);
       }
 
-      function rebuildFovLive() {
-        syncFovLabels();
+      let labelSyncTimeout = null;
+      function rebuildFovLive(forceSync = false) {
+        if (forceSync) {
+            if (labelSyncTimeout) clearTimeout(labelSyncTimeout);
+            syncFovLabels();
+        } else {
+            // Schedule label update for when the mouse is idle (100ms)
+            if (labelSyncTimeout) clearTimeout(labelSyncTimeout);
+            labelSyncTimeout = setTimeout(syncFovLabels, 100);
+        }
+
         if (!showFov.checked) return;
         if (!nv.volumes?.length) return;
         requestFovUpdate();
       }
 
-      // With the box defined as [Center - Size/2, Center + Size/2],
-      // changing the Size (FOV) expands/shrinks it symmetrically around the Center.
-      // So we no longer need to adjust offsets to keep it centered.
-      
-      fovX.addEventListener("input", rebuildFovLive);
-      fovY.addEventListener("input", rebuildFovLive);
-      fovZ.addEventListener("input", rebuildFovLive);
-      fovOffX.addEventListener("input", rebuildFovLive);
-      fovOffY.addEventListener("input", rebuildFovLive);
-      fovOffZ.addEventListener("input", rebuildFovLive);
-      fovRotX.addEventListener("input", rebuildFovLive);
-      fovRotY.addEventListener("input", rebuildFovLive);
-      fovRotZ.addEventListener("input", rebuildFovLive);
-      maskX.addEventListener("input", syncFovLabels);
-      maskY.addEventListener("input", syncFovLabels);
-      maskZ.addEventListener("input", syncFovLabels);
+      function bindBiDirectional(slider, numInput, callback) {
+        slider.addEventListener("input", () => {
+          numInput.value = slider.value;
+          if (callback) callback();
+        });
+        numInput.addEventListener("input", () => {
+          if (numInput.value === "") return;
+          slider.value = numInput.value;
+          if (callback) callback();
+        });
+      }
+
+      bindBiDirectional(zoom2D, zoom2DVal, () => {
+        const val = parseFloat(zoom2D.value);
+        const pan = nv.scene.pan2Dxyzmm;
+        nv.setPan2Dxyzmm([pan[0], pan[1], pan[2], val]);
+        syncFovLabels();
+      });
+
+      bindBiDirectional(fovX, fovXVal, () => rebuildFovLive(true));
+      bindBiDirectional(fovY, fovYVal, () => rebuildFovLive(true));
+      bindBiDirectional(fovZ, fovZVal, () => rebuildFovLive(true));
+      bindBiDirectional(fovOffX, fovOffXVal, () => rebuildFovLive(true));
+      bindBiDirectional(fovOffY, fovOffYVal, () => rebuildFovLive(true));
+      bindBiDirectional(fovOffZ, fovOffZVal, () => rebuildFovLive(true));
+      bindBiDirectional(fovRotX, fovRotXVal, () => rebuildFovLive(true));
+      bindBiDirectional(fovRotY, fovRotYVal, () => rebuildFovLive(true));
+      bindBiDirectional(fovRotZ, fovRotZVal, () => rebuildFovLive(true));
+      bindBiDirectional(maskX, maskXVal, syncFovLabels);
+      bindBiDirectional(maskY, maskYVal, syncFovLabels);
+      bindBiDirectional(maskZ, maskZVal, syncFovLabels);
       syncFovLabels();
       fovControls.style.display = showFov.checked ? "grid" : "none";
 
@@ -1407,7 +1516,6 @@
             setStatus("Download: no FOV mesh yet (toggle FOV on + load a volume)");
             return;
           }
-          const halfVox = Boolean(exportHalfVox?.checked);
 
           const vol = nv.volumes?.[0];
           const hdr = vol?.hdr ?? vol?.header;
@@ -1460,7 +1568,6 @@
           }
           
           // 5. What we're exporting
-          console.log("Export options: halfVox=", halfVox);
           console.log("==========================================");
           
           // ===== EXPORT: STL in RAS coordinates (Niivue/NIfTI standard) =====
@@ -1792,64 +1899,8 @@
 
           setStatus(`Downloading: STL + fov-mask.nii + volume...`);
         } catch (e) {
-          console.error(e);
-          setStatus(`Download error: ${e?.message ?? String(e)}`);
-        }
-      });
-
-      btnClipFov.addEventListener("click", () => {
-          try {
-              const { vol, dim3, affine } = getVolumeInfo();
-              if (!vol) return;
-              
-              console.log("--- DEBUG COORDINATES ---");
-              console.log("Header Affine:", vol.hdr.affine);
-              console.log("matRAS:", vol.matRAS);
-              console.log("pixDims:", vol.hdr.pixDims);
-              console.log("dims:", dim3);
-              
-              const vox2mm = voxToMmFactory(vol, affine);
-              const originDisp = vox2mm(0,0,0);
-              console.log("Display Origin (Vox 0,0,0 -> World):", originDisp);
-              
-              // 1. Draw Bounding Box of Volume
-              // Voxel [0,0,0] to [dx, dy, dz]
-              const [dx, dy, dz] = dim3;
-              const bboxVerts = [];
-              const bboxTris = [];
-              
-              // Helper to add lines (thin tubes)
-              const addLine = (p1Vox, p2Vox) => {
-                  const w1 = vox2mm(p1Vox[0], p1Vox[1], p1Vox[2]);
-                  const w2 = vox2mm(p2Vox[0], p2Vox[1], p2Vox[2]);
-                  // Quick & dirty tube: just 2 tris? No, need NVMesh. 
-                  // Let's just create points for a line or thin box.
-                  // For simplicity, we reuse addCuboid from earlier logic but manually.
-              };
-              
-              // Actually, let's just create a Mesh that Is the Bounding Box
-              const corners = [
-                  [0,0,0], [dx,0,0], [dx,dy,0], [0,dy,0],
-                  [0,0,dz], [dx,0,dz], [dx,dy,dz], [0,dy,dz]
-              ];
-              const cornersWorld = corners.map(p => vox2mm(p[0], p[1], p[2]));
-              
-              // Build a simple wireframe-like mesh (tubes along edges)
-              // ... Reuse getFovGeometry logic?
-              // Let's just add a new NVMesh which is the Volume Box
-              
-              const boxColor = new Uint8Array([0, 255, 0, 255]); // Green
-              
-              // We need to generate geometry. 
-              // Let's assume we can see the console logs first.
-              setStatus(`Debug: Origin at ${originDisp.map(x=>x.toFixed(1))}. Check Console.`);
-              
-              // Also add a clip plane at the origin to see where it cuts
-              // nv.setClipPlane([1, 0, 0, -originDisp[0]]); // Cut at X origin
-              
-          } catch(e) {
               console.error(e);
-              setStatus("Debug Error: " + e.message);
+          setStatus(`Download error: ${e?.message ?? String(e)}`);
           }
       });
 
@@ -1872,29 +1923,28 @@
               // Convert native world units to mm for UI defaults.
               fullFovMm = [dx * voxelSpacingMm[0], dy * voxelSpacingMm[1], dz * voxelSpacingMm[2]];
 
-              const setRange = (el, mm, defaultVal) => {
-                const max = Math.max(10, Math.ceil(mm * 2));
-                el.min = "10";
-                el.max = String(max);
-                el.step = "1";
+              const setRange = (el, numEl, mm, defaultVal) => {
+                el.min = numEl.min = "1";
+                el.max = numEl.max = "600";
+                el.step = numEl.step = "1";
                 // If a default value is provided, use it; otherwise fit to volume
-                el.value = defaultVal !== undefined ? String(defaultVal) : String(Math.round(mm));
+                el.value = numEl.value = defaultVal !== undefined ? String(defaultVal) : String(Math.round(mm));
               };
-              setRange(fovX, fullFovMm[0], 220);
-              setRange(fovY, fullFovMm[1], 220);
-              setRange(fovZ, fullFovMm[2], 100);
+              setRange(fovX, fovXVal, fullFovMm[0], 220);
+              setRange(fovY, fovYVal, fullFovMm[1], 220);
+              setRange(fovZ, fovZVal, fullFovMm[2], 100);
 
-              const setOffRange = (el, mm) => {
+              const setOffRange = (el, numEl, mm) => {
                 const max = Math.max(10, Math.ceil(mm));
-                el.min = String(-max);
-                el.max = String(max);
-                el.step = "0.1";
-                el.value = "0";
+                el.min = numEl.min = String(-max);
+                el.max = numEl.max = String(max);
+                el.step = numEl.step = "0.1";
+                el.value = numEl.value = "0";
               };
               // Allow offsets up to ~half the full FOV in each axis.
-              setOffRange(fovOffX, fullFovMm[0] / 2);
-              setOffRange(fovOffY, fullFovMm[1] / 2);
-              setOffRange(fovOffZ, fullFovMm[2] / 2);
+              setOffRange(fovOffX, fovOffXVal, fullFovMm[0] / 2);
+              setOffRange(fovOffY, fovOffYVal, fullFovMm[1] / 2);
+              setOffRange(fovOffZ, fovOffZVal, fullFovMm[2] / 2);
             }
           } catch (e) {
             console.warn("Failed to init FOV mm sliders; using defaults.", e);
@@ -1925,16 +1975,6 @@
         } finally {
           // Release the blob URL after Niivue has fetched it.
           setTimeout(() => URL.revokeObjectURL(url), 30_000);
-        }
-      });
-
-      btnReset.addEventListener("click", () => {
-        try {
-          nv.setClipPlane([0, 0, 0, 0]);
-          nv.updateGLVolume();
-          setStatus("reset");
-        } catch (e) {
-          console.error(e);
         }
       });
     </script>
