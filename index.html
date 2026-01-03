@@ -233,8 +233,12 @@
         <!-- Pane 1: Load file/demo + Status + Note -->
         <div class="panel">
           <h1>Volume Source</h1>
-        <div class="row">
-          <input id="file" type="file" accept=".nii,.nii.gz,.gz" />
+          <div class="row" style="display: flex; flex-direction: column; gap: 8px;">
+            <div style="display: flex; gap: 8px;">
+              <button id="btn-new-file" class="btn primary" style="flex: 1;">New File</button>
+              <button id="btn-add-file" class="btn" style="flex: 1;">Add File</button>
+              <input id="file" type="file" accept=".nii,.nii.gz,.gz" style="display: none;" />
+            </div>
           <button id="load-demo" class="btn primary">Load demo (MNI152)</button>
             </div>
           <div class="stateBox">
@@ -443,6 +447,20 @@
       const voxVal = document.getElementById("voxVal");
       const mmVal = document.getElementById("mmVal");
       const locStrVal = document.getElementById("locStrVal");
+
+      const btnNewFile = document.getElementById("btn-new-file");
+      const btnAddFile = document.getElementById("btn-add-file");
+      let isAddingVolume = false;
+
+      btnNewFile.addEventListener("click", () => {
+        isAddingVolume = false;
+        fileInput.click();
+      });
+
+      btnAddFile.addEventListener("click", () => {
+        isAddingVolume = true;
+        fileInput.click();
+      });
 
 
       // Convert column-major 16-float affine to row-major for NIfTI header
@@ -921,7 +939,7 @@
               if (currentAxCorSag === null) return;
               
               // Determine direction: deltaY > 0 is scroll down (usually shrink), < 0 is scroll up (expand)
-              const delta = e.deltaY > 0 ? -2 : 2; 
+              const delta = e.deltaY > 0 ? -10 : 10; 
               
               let targetInput = null;
               if (currentAxCorSag === 0) targetInput = fovY;      // Axial -> Resize Y
@@ -1952,53 +1970,71 @@
           }
       });
 
-      async function loadUrl(url, name) {
+      async function loadUrl(url, name, isAdding = false) {
         try {
           btnDemo.disabled = true;
+          btnNewFile.disabled = true;
+          btnAddFile.disabled = true;
           fileInput.disabled = true;
           setStatus(`loading: ${name ?? url}`);
 
-          await nv.loadVolumes([{ url, name: name ?? "volume" }]);
+          if (isAdding) {
+            // "Trick" for masks: set a colormap, opacity, and intensity range
+            // so that 0 values are transparent and 1s are visible.
+            const isMask = name && name.toLowerCase().includes("mask");
+            await nv.addVolumesFromUrl([{ 
+              url, 
+              name: name ?? "volume",
+              colormap: isMask ? "red" : "gray",
+              opacity: isMask ? 0.8 : 0.5,
+              cal_min: isMask ? 0.5 : undefined,
+              cal_max: isMask ? 1.0 : undefined
+            }]);
+          } else {
+            await nv.loadVolumes([{ url, name: name ?? "volume" }]);
+          }
 
-          // Initialize mm-based slider defaults/ranges based on the loaded volume.
-          try {
-            const info = getVolumeInfo();
-            voxelSpacingMm = estimateVoxelSpacingMm(info);
-            // "remove all this uneccesary stuff" - simplified default center logic.
-            
-            if (info.dim3) {
-              const [dx, dy, dz] = info.dim3;
-              // Convert native world units to mm for UI defaults.
-              fullFovMm = [dx * voxelSpacingMm[0], dy * voxelSpacingMm[1], dz * voxelSpacingMm[2]];
+          // Initialize mm-based slider defaults/ranges based on the loaded volume (if it's the first one).
+          if (!isAdding || nv.volumes.length === 1) {
+            try {
+              const info = getVolumeInfo();
+              voxelSpacingMm = estimateVoxelSpacingMm(info);
+              // "remove all this uneccesary stuff" - simplified default center logic.
+              
+              if (info.dim3) {
+                const [dx, dy, dz] = info.dim3;
+                // Convert native world units to mm for UI defaults.
+                fullFovMm = [dx * voxelSpacingMm[0], dy * voxelSpacingMm[1], dz * voxelSpacingMm[2]];
 
-              const setRange = (el, numEl, mm, defaultVal) => {
-                el.min = numEl.min = "1";
-                el.max = numEl.max = "600";
-                el.step = numEl.step = "1";
-                // If a default value is provided, use it; otherwise fit to volume
-                el.value = numEl.value = defaultVal !== undefined ? String(defaultVal) : String(Math.round(mm));
-              };
-              setRange(fovX, fovXVal, fullFovMm[0], 220);
-              setRange(fovY, fovYVal, fullFovMm[1], 220);
-              setRange(fovZ, fovZVal, fullFovMm[2], 100);
+                const setRange = (el, numEl, mm, defaultVal) => {
+                  el.min = numEl.min = "1";
+                  el.max = numEl.max = "600";
+                  el.step = numEl.step = "1";
+                  // If a default value is provided, use it; otherwise fit to volume
+                  el.value = numEl.value = defaultVal !== undefined ? String(defaultVal) : String(Math.round(mm));
+                };
+                setRange(fovX, fovXVal, fullFovMm[0], 220);
+                setRange(fovY, fovYVal, fullFovMm[1], 220);
+                setRange(fovZ, fovZVal, fullFovMm[2], 100);
 
-              const setOffRange = (el, numEl, mm) => {
-                // Use a large fixed range (±500mm) to prevent clamping/jumping 
-                // during drag, regardless of volume size.
-                const max = 500;
-                el.min = numEl.min = String(-max);
-                el.max = numEl.max = String(max);
-                el.step = numEl.step = "0.1";
-                el.value = numEl.value = "0";
-              };
-              // Allow offsets up to ~half the full FOV in each axis.
-              setOffRange(fovOffX, fovOffXVal, fullFovMm[0] / 2);
-              setOffRange(fovOffY, fovOffYVal, fullFovMm[1] / 2);
-              setOffRange(fovOffZ, fovOffZVal, fullFovMm[2] / 2);
+                const setOffRange = (el, numEl, mm) => {
+                  // Use a large fixed range (±500mm) to prevent clamping/jumping 
+                  // during drag, regardless of volume size.
+                  const max = 500;
+                  el.min = numEl.min = String(-max);
+                  el.max = numEl.max = String(max);
+                  el.step = numEl.step = "0.1";
+                  el.value = numEl.value = "0";
+                };
+                // Allow offsets up to ~half the full FOV in each axis.
+                setOffRange(fovOffX, fovOffXVal, fullFovMm[0] / 2);
+                setOffRange(fovOffY, fovOffYVal, fullFovMm[1] / 2);
+                setOffRange(fovOffZ, fovOffZVal, fullFovMm[2] / 2);
+              }
+            } catch (e) {
+              console.warn("Failed to init FOV mm sliders; using defaults.", e);
+              voxelSpacingMm = voxelSpacingMm ?? [1, 1, 1];
             }
-          } catch (e) {
-            console.warn("Failed to init FOV mm sliders; using defaults.", e);
-            voxelSpacingMm = voxelSpacingMm ?? [1, 1, 1];
           }
           syncFovLabels();
           setFovVisible(showFov.checked);
@@ -2008,6 +2044,8 @@
           setStatus(`error: ${e?.message ?? String(e)}`);
         } finally {
           btnDemo.disabled = false;
+          btnNewFile.disabled = false;
+          btnAddFile.disabled = false;
           fileInput.disabled = false;
         }
       }
@@ -2021,8 +2059,10 @@
         // Niivue accepts URLs; blob URLs work great for local files.
         const url = URL.createObjectURL(file);
         try {
-          await loadUrl(url, file.name);
+          await loadUrl(url, file.name, isAddingVolume);
         } finally {
+          // Reset value so selecting the same file again triggers 'change'
+          fileInput.value = "";
           // Release the blob URL after Niivue has fetched it.
           setTimeout(() => URL.revokeObjectURL(url), 30_000);
         }
