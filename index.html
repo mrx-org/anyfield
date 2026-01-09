@@ -546,6 +546,12 @@ def resample_to_reference(source_img, reference_img, order=3):
     new_header = source_img.header.copy()
     resampled_img = nib.Nifti1Image(resampled_data, reference_affine, header=new_header)
     
+    # CRITICAL: Sync both sform AND qform to the reference affine
+    # nibabel only sets sform by default - qform keeps old values from copied header
+    # MITK prefers qform, causing misalignment if not synced
+    resampled_img.set_sform(reference_affine, code=2)
+    resampled_img.set_qform(reference_affine, code=2)
+    
     ref_zooms = reference_img.header.get_zooms()[:3]
     src_zooms = source_img.header.get_zooms()
     new_zooms = list(ref_zooms)
@@ -1847,37 +1853,15 @@ def run_resampling(source_bytes, reference_bytes):
         let currentAffineRow = null;
         let currentAffineCol = vol.matRAS;
         
-        if (currentAffineCol && currentAffineCol.length === 16 && hdr?.affine) {
-            let hdrAffine = hdr.affine;
-            let hdrAffineRow = null;
-            if (Array.isArray(hdrAffine)) {
-                if (hdrAffine.length === 16) hdrAffineRow = hdrAffine;
-                else if (hdrAffine.length === 4 && Array.isArray(hdrAffine[0])) {
-                    hdrAffineRow = [
-                        hdrAffine[0][0], hdrAffine[0][1], hdrAffine[0][2], hdrAffine[0][3],
-                        hdrAffine[1][0], hdrAffine[1][1], hdrAffine[1][2], hdrAffine[1][3],
-                        hdrAffine[2][0], hdrAffine[2][1], hdrAffine[2][2], hdrAffine[2][3],
-                        hdrAffine[3][0], hdrAffine[3][1], hdrAffine[3][2], hdrAffine[3][3]
-                    ];
-                }
-            }
-            
-            if (hdrAffineRow) {
-                const hdrTranslation = [hdrAffineRow[3], hdrAffineRow[7], hdrAffineRow[11]];
-                const matRASRow = affineColToRowMajor(currentAffineCol);
-                const finalAffineRow = [...matRASRow];
-                finalAffineRow[3] = hdrTranslation[0];
-                finalAffineRow[7] = hdrTranslation[1];
-                finalAffineRow[11] = hdrTranslation[2];
-                currentAffineRow = finalAffineRow;
-            } else {
-                currentAffineRow = affineColToRowMajor(currentAffineCol);
-            }
-        } else if (hdr?.affine) {
+        // Priority: Use hdr.affine (sform from file) as primary source
+        // This ensures we preserve the exact affine set in Python (qform/sform)
+        // Only fall back to matRAS if hdr.affine is not available
+        if (hdr?.affine) {
             const hdrAffine = hdr.affine;
             if (Array.isArray(hdrAffine)) {
-                if (hdrAffine.length === 16) currentAffineRow = hdrAffine;
-                else if (hdrAffine.length === 4 && Array.isArray(hdrAffine[0])) {
+                if (hdrAffine.length === 16) {
+                    currentAffineRow = [...hdrAffine];
+                } else if (hdrAffine.length === 4 && Array.isArray(hdrAffine[0])) {
                     currentAffineRow = [
                         hdrAffine[0][0], hdrAffine[0][1], hdrAffine[0][2], hdrAffine[0][3],
                         hdrAffine[1][0], hdrAffine[1][1], hdrAffine[1][2], hdrAffine[1][3],
@@ -1888,9 +1872,13 @@ def run_resampling(source_bytes, reference_bytes):
             }
         }
         
+        // Fallback to matRAS if hdr.affine not available
         if (!currentAffineRow) {
-            if (currentAffineCol && currentAffineCol.length === 16) currentAffineRow = affineColToRowMajor(currentAffineCol);
-            else throw new Error("Cannot determine affine");
+            if (currentAffineCol && currentAffineCol.length === 16) {
+                currentAffineRow = affineColToRowMajor(currentAffineCol);
+            } else {
+                throw new Error("Cannot determine affine");
+            }
         }
         
         const sx = Math.hypot(currentAffineRow[0], currentAffineRow[4], currentAffineRow[8]);
