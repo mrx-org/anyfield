@@ -44,7 +44,12 @@ A modular, flexible widget for exploring sequences/protocols organized by file, 
         const explorer = new SequenceExplorer('my-explorer', {
             onlySeqPrefix: false,
             sources: [
-                LoadScripts.local_file('mr0_rare_2d_seq.py', 'RARE 2D')
+                {
+                    'name': 'RARE 2D',
+                    'type': 'local_file',
+                    'path': 'mr0_rare_2d_seq.py',
+                    'dependencies': ['pypulseq']
+                }
             ],
             onSequenceSelect: (sequence) => {
                 console.log('Selected:', sequence);
@@ -76,7 +81,12 @@ A modular, flexible widget for exploring sequences/protocols organized by file, 
 
 #### 1. Local File
 ```javascript
-LoadScripts.local_file('path/to/file.py', 'Display Name', ['pypulseq'])
+{
+    'name': 'Display Name',
+    'type': 'local_file',
+    'path': 'path/to/file.py',
+    'dependencies': ['pypulseq']
+}
 // or
 {
     type: 'local_file',
@@ -88,7 +98,12 @@ LoadScripts.local_file('path/to/file.py', 'Display Name', ['pypulseq'])
 
 #### 2. GitHub Raw File
 ```javascript
-LoadScripts.github_raw('https://raw.githubusercontent.com/user/repo/main/file.py', 'Display Name', ['numpy', 'mrseq'])
+{
+    'name': 'Display Name',
+    'type': 'github_raw',
+    'url': 'https://raw.githubusercontent.com/user/repo/main/file.py',
+    'dependencies': ['numpy', 'mrseq']
+}
 // or
 {
     type: 'github_raw',
@@ -100,8 +115,18 @@ LoadScripts.github_raw('https://raw.githubusercontent.com/user/repo/main/file.py
 
 #### 3. GitHub Folder
 ```javascript
-LoadScripts.mrseq  // Predefined: mrseq scripts folder (includes dependencies)
-LoadScripts.pypulseq_examples  // Predefined: pypulseq examples (includes pypulseq)
+                {
+                    'name': 'mrseq',
+                    'type': 'pyodide_module',
+                    'module': 'mrseq.scripts',
+                    'dependencies': ['numpy>=2.0.0', 'pypulseq', {'name': 'mrseq', 'deps': False}, 'ismrmrd']
+                },
+                {
+                    'name': 'pypulseq_examples',
+                    'type': 'github_folder',
+                    'url': 'https://github.com/imr-framework/pypulseq/tree/master/examples/scripts',
+                    'dependencies': ['pypulseq']
+                }
 // or
 {
     type: 'github_folder',
@@ -155,15 +180,16 @@ Each source can specify `dependencies` that will be automatically installed via 
 - **Version handling**: Automatically handles numpy version conflicts (uninstalls old version first)
 - **Error handling**: Continues with other packages if one fails
 
-## Predefined Load Scripts
+## Source Configuration
 
-The `LoadScripts` object provides convenient shortcuts:
+All sources are defined in `sources_config.py` as Python dictionaries. The widget automatically loads from this file on startup. You can edit sources using the "Add Sources" button in the UI.
 
-- `LoadScripts.mrseq` - Load from mrseq GitHub repository scripts folder (includes dependencies: numpy, mrseq, ismrmrd)
-- `LoadScripts.mrseq_with_deps` - Same as above, explicitly includes dependencies
-- `LoadScripts.pypulseq_examples` - Load from pypulseq examples folder (includes pypulseq)
-- `LoadScripts.local_file(path, name, dependencies)` - Load from local file
-- `LoadScripts.github_raw(url, name, dependencies)` - Load from GitHub raw URL
+### Source Types
+
+- `local_file` - Load from a local Python file
+- `github_raw` - Load a single file from GitHub (raw URL)
+- `github_folder` - Load all Python files from a GitHub folder
+- `pyodide_module` - Load from an installed Python package module
 
 ## API
 
@@ -197,9 +223,24 @@ const explorer = new SequenceExplorer('explorer', {
     onlySeqPrefix: true,  // Only show seq_ functions
     pyodide: pyodide,     // Required for dependency installation
     sources: [
-        LoadScripts.local_file('mr0_rare_2d_seq.py', 'RARE 2D', ['pypulseq']),
-        LoadScripts.mrseq_with_deps,  // Automatically installs numpy, mrseq, ismrmrd
-        LoadScripts.pypulseq_examples,  // Automatically installs pypulseq
+        {
+            'name': 'RARE 2D',
+            'type': 'local_file',
+            'path': 'mr0_rare_2d_seq.py',
+            'dependencies': ['pypulseq']
+        },
+        {
+            'name': 'mrseq',
+            'type': 'pyodide_module',
+            'module': 'mrseq.scripts',
+            'dependencies': ['numpy>=2.0.0', 'pypulseq', {'name': 'mrseq', 'deps': False}, 'ismrmrd']
+        },
+        {
+            'name': 'pypulseq_examples',
+            'type': 'github_folder',
+            'url': 'https://github.com/imr-framework/pypulseq/tree/master/examples/scripts',
+            'dependencies': ['pypulseq']
+        }
         {
             type: 'github_raw',
             url: 'https://raw.githubusercontent.com/user/repo/main/custom_seq.py',

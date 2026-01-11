@@ -97,27 +97,33 @@
                 console.warn('Pyodide not available, using fallback parsing:', error);
             }
             
-            // Initialize sequence explorer
+            // Initialize sequence explorer with empty sources - will load from config file
             const explorer = new SequenceExplorer('seq-explorer-widget', {
                 onlySeqPrefix: false,
                 pyodide: pyodide,
-                sources: [
-                    // Local playground file
-                    LoadScripts.local_file('mr0_rare_2d_seq.py', 'RARE 2D (Playground)', ['pypulseq']),
-                    // Load mrseq from installed package (mrseq.tests.scripts)
-                    LoadScripts.mrseq,
-                    // Load pypulseq examples (includes pypulseq dependency)
-                    LoadScripts.pypulseq_examples
-                ],
+                sources: [], // Start empty, will load from sources_config.py
                 onSequenceSelect: (sequence) => {
                     console.log('Selected sequence:', sequence);
                     // Handle sequence selection
                 }
             });
             
+            // Load default sources from config file
+            fetch('sources_config.py')
+                .then(response => response.text())
+                .then(configCode => {
+                    explorer.loadSourcesFromConfig(configCode).catch(err => {
+                        console.error('Failed to load default sources:', err);
+                        explorer.showStatus('Failed to load default sources. Use "Add Sources" to configure.', 'error');
+                    });
+                })
+                .catch(err => {
+                    console.warn('Could not load sources_config.py, starting with empty sources:', err);
+                    explorer.showStatus('No default sources found. Use "Add Sources" to configure.', 'info');
+                });
+            
             // Make explorer available globally for testing
             window.seqExplorer = explorer;
-            window.LoadScripts = LoadScripts;
         });
     </script>
 </body>
