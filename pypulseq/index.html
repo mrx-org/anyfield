@@ -497,6 +497,25 @@
             <div class="grid">
                 <div class="panel">
                     <h2 class="section-title">
+                        <svg fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 12h6m-6 4h6m2 5H7a2 2 0 01-2-2V5a2 2 0 012-2h5.586a1 1 0 01.707.293l5.414 5.414a1 1 0 01.293.707V19a2 2 0 01-2 2z"></path></svg>
+                        Sequence Selector
+                    </h2>
+                    <div style="margin-bottom: 1rem;">
+                        <select id="sequence-selector" style="width: 100%; padding: 0.5rem; background: rgba(255, 255, 255, 0.08); border: 1px solid var(--border); border-radius: 4px; color: var(--text); font-size: 0.875rem; cursor: pointer;">
+                            <option value="mr0_rare_2d_seq.py">RARE 2D (mr0_rare_2d_seq.py)</option>
+                            <option value="write_gre.py">GRE (pypulseq example)</option>
+                            <option value="write_epi.py">EPI (pypulseq example)</option>
+                            <option value="write_epi_se.py">EPI SE (pypulseq example)</option>
+                            <option value="write_epi_se_rs.py">EPI SE RS (pypulseq example)</option>
+                            <option value="write_gre_label.py">GRE Label (pypulseq example)</option>
+                            <option value="write_haste.py">HASTE (pypulseq example)</option>
+                            <option value="write_tse.py">TSE (pypulseq example)</option>
+                            <option value="write_ute.py">UTE (pypulseq example)</option>
+                            <option value="mrseq_t1_inv_rec_gre_single_line">T1 Inversion Recovery GRE (mrseq)</option>
+                            <option value="mrseq_github_radial_flash">Radial FLASH (mrseq GitHub)</option>
+                        </select>
+                    </div>
+                    <h2 class="section-title" style="margin-top: 1.5rem;">
                         <svg fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 6V4m0 2a2 2 0 100 4m0-4a2 2 0 110 4m-6 8a2 2 0 100-4m0 4a2 2 0 110-4m0 4v2m0-6V4m6 6v10m6-2a2 2 0 100-4m0 4a2 2 0 110-4m0 4v2m0-6V4"></path></svg>
                         Parameters
                     </h2>
@@ -539,6 +558,8 @@
                         <span><strong>NumPy:</strong> <span id="numpy-version">loading...</span></span>
                         <span><strong>Matplotlib:</strong> <span id="matplotlib-version">loading...</span></span>
                         <span><strong>PyPulseq:</strong> <span id="pypulseq-version">loading...</span></span>
+                        <span><strong>mrseq:</strong> <span id="mrseq-version">loading...</span></span>
+                        <span><strong>ISMRMRD:</strong> <span id="ismrmrd-version">loading...</span></span>
                     </div>
                 </div>
             </div>
@@ -568,6 +589,8 @@
         let currentCode = ''; // Store the current Python code
         let defaultCode = ''; // Store the default/original Python code
         let codeEditor = null; // CodeMirror editor instance
+        let currentSequenceType = 'mr0_rare_2d_seq.py'; // Current selected sequence
+        let currentSequenceFunc = null; // For pypulseq example sequences
 
         const statusEl = document.getElementById('status');
         const loaderEl = document.getElementById('loader');
@@ -578,6 +601,7 @@
         const plotOutput = document.getElementById('plot-output');
         const plotMessage = document.getElementById('plot-message');
         const darkPlotCheckbox = document.getElementById('dark-plot-checkbox');
+        const sequenceSelector = document.getElementById('sequence-selector');
         const editCodeBtn = document.getElementById('edit-code-btn');
         const editorModal = document.getElementById('editor-modal');
         const saveCodeBtn = document.getElementById('save-code-btn');
@@ -682,13 +706,6 @@ finally:
                 // This is the standard way to direct plots to a specific element
                 document.pyodideMplTarget = plotOutput;
 
-                // Start fetching the script in parallel with Pyodide loading
-                // Add cache-busting to ensure we get the latest file during development
-                const scriptFetchPromise = fetch('mr0_rare_2d_seq.py?' + Date.now()).then(r => {
-                    if (!r.ok) throw new Error('Failed to fetch mr0_rare_2d_seq.py');
-                    return r.text();
-                });
-
                 log('Loading Pyodide runtime...');
                 pyodide = await loadPyodide({
                     stdout: (text) => log(text),
@@ -698,30 +715,41 @@ finally:
                 });
                 
                 statusEl.innerText = 'Installing packages...';
-                log('Installing numpy, matplotlib, micropip...');
-                // Load packages with caching enabled
-                await pyodide.loadPackage(['numpy', 'matplotlib', 'micropip'], { checkIntegrity: false });
+                log('Installing matplotlib, micropip...');
+                // Load packages with caching enabled (skip numpy, will install compatible version via micropip)
+                await pyodide.loadPackage(['matplotlib', 'micropip'], { checkIntegrity: false });
+                
+                const micropip = pyodide.pyimport("micropip");
+                
+                statusEl.innerText = 'Installing mrseq...';
+                log('Uninstalling existing numpy to install numpy 2.0...');
+                try {
+                    // Uninstall existing numpy 2.2.5 first
+                    await micropip.uninstall('numpy');
+                    log('Installing numpy 2.0.0 (mrseq should work with numpy 2.0)...');
+                    // Install numpy 2.0.0 - mrseq should work with it according to git
+                    await micropip.install('numpy>=2.0.0');
+                    log('Installing mrseq without dependencies...');
+                    // Install mrseq without dependency checks to bypass version requirement
+                    await pyodide.runPythonAsync(`
+import micropip
+# Install mrseq without dependencies to bypass version check
+await micropip.install('mrseq', deps=False)
+`);
+                    log('mrseq installed successfully (with numpy 2.0).');
+                } catch (e) {
+                    log(`mrseq install failed: ${e.message}`, 'warn');
+                }
                 
                 statusEl.innerText = 'Installing pypulseq...';
-                log('Installing pypulseq via micropip (this may take a minute)...');
-                const micropip = pyodide.pyimport("micropip");
-                await micropip.install('pypulseq');
+                log('Installing pypulseq and ismrmrd via micropip (this may take a minute)...');
+                await micropip.install(['pypulseq', 'ismrmrd']);
                 
-                // Wait for script fetch to complete (if not already done)
-                currentCode = await scriptFetchPromise;
-                defaultCode = currentCode; // Store the original code as default
-                
-                // Combine environment setup, script execution, and version checking
-                statusEl.innerText = 'Configuring environment...';
-                log('Executing sequence script...');
-                await executeCode(currentCode);
-                
-                // Get versions and configure matplotlib in one go
+                // Get versions and configure matplotlib
                 statusEl.innerText = 'Finalizing setup...';
                 const pyodideVersion = pyodide.version || 'unknown';
                 const themeCode = getMatplotlibThemeCode();
-                const [versions, paramsJson] = await Promise.all([
-                    pyodide.runPythonAsync(`
+                const versions = await pyodide.runPythonAsync(`
 import matplotlib
 import matplotlib.pyplot as plt
 import json
@@ -755,36 +783,38 @@ except:
     except:
         versions['pypulseq'] = 'unknown'
 
+try:
+    import mrseq
+    # Try different ways to get mrseq version
+    if hasattr(mrseq, '__version__'):
+        versions['mrseq'] = mrseq.__version__
+    elif hasattr(mrseq, 'version'):
+        versions['mrseq'] = mrseq.version
+    elif hasattr(mrseq, '__file__'):
+        # Try to read version from package metadata
+        import importlib.metadata
+        try:
+            versions['mrseq'] = importlib.metadata.version('mrseq')
+        except:
+            versions['mrseq'] = 'installed'
+    else:
+        versions['mrseq'] = 'installed'
+except Exception as e:
+    # If import fails, mrseq is not available
+    versions['mrseq'] = 'not installed'
+
+try:
+    import ismrmrd
+    versions['ismrmrd'] = ismrmrd.__version__
+except:
+    try:
+        import importlib.metadata
+        versions['ismrmrd'] = importlib.metadata.version('ismrmrd')
+    except:
+        versions['ismrmrd'] = 'unknown'
+
 json.dumps(versions)
-`),
-                    pyodide.runPythonAsync(`
-import inspect
-import json
-import numpy as np
-import __main__
-
-def get_params():
-    func = __main__.seq_RARE_2D
-    sig = inspect.signature(func)
-    params = []
-    for name, p in sig.parameters.items():
-        if name == 'system': continue
-        d = p.default
-        val = d
-        type_name = type(d).__name__
-        if isinstance(d, np.ndarray):
-            val = d.tolist()
-        elif isinstance(d, (tuple, list)):
-            val = list(d)
-        elif d is inspect._empty:
-            val = None
-            type_name = 'None'
-        params.append({'name': name, 'default': val, 'type': type_name})
-    return json.dumps(params)
-
-get_params()
-`)
-                ]);
+`);
                 
                 const versionData = JSON.parse(versions);
                 const pyodideVer = versionData.pyodide || 'unknown';
@@ -792,14 +822,9 @@ get_params()
                 document.getElementById('numpy-version').textContent = versionData.numpy || 'unknown';
                 document.getElementById('matplotlib-version').textContent = versionData.matplotlib || 'unknown';
                 document.getElementById('pypulseq-version').textContent = versionData.pypulseq || 'unknown';
+                document.getElementById('mrseq-version').textContent = versionData.mrseq || 'unknown';
+                document.getElementById('ismrmrd-version').textContent = versionData.ismrmrd || 'unknown';
                 document.getElementById('version-info').textContent = `Pyodide v${pyodideVer}`;
-                
-                seq_RARE_2D_params = JSON.parse(paramsJson);
-                renderControls(seq_RARE_2D_params);
-                
-                statusEl.innerText = 'Ready';
-                loaderEl.style.display = 'none';
-                runBtn.disabled = false;
                 
                 // Hide the status container once ready
                 statusContainer.style.display = 'none';
@@ -818,10 +843,10 @@ get_params()
                         lineWrapping: true
                     });
                 }
-                codeEditor.setValue(currentCode);
                 
-                log('Initialization complete. Running initial sequence...');
-                updateSequence();
+                // Load the default sequence
+                log('Initialization complete. Loading default sequence...');
+                await loadSequence('mr0_rare_2d_seq.py');
 
             } catch (err) {
                 statusEl.innerText = 'Initialization Error';
@@ -891,6 +916,272 @@ get_params()
             controlsEl.appendChild(table);
         }
 
+        async function loadSequence(sequenceType) {
+            if (!pyodide) {
+                log('Pyodide not initialized yet', 'error');
+                return;
+            }
+
+            currentSequenceType = sequenceType;
+            runBtn.disabled = true;
+            statusEl.innerText = 'Loading sequence...';
+            loaderEl.style.display = 'inline-block';
+
+            try {
+                if (sequenceType === 'mr0_rare_2d_seq.py') {
+                    // Load from file
+                    const response = await fetch('mr0_rare_2d_seq.py?' + Date.now());
+                    if (!response.ok) throw new Error('Failed to fetch mr0_rare_2d_seq.py');
+                    currentCode = await response.text();
+                    defaultCode = currentCode;
+                    
+                    log('Executing sequence script...');
+                    await executeCode(currentCode);
+                    
+                    // Get parameters
+                    statusEl.innerText = 'Analyzing function signature...';
+                    const paramsJson = await pyodide.runPythonAsync(`
+import inspect
+import json
+import numpy as np
+import __main__
+
+def get_params():
+    func = __main__.seq_RARE_2D
+    sig = inspect.signature(func)
+    params = []
+    for name, p in sig.parameters.items():
+        if name == 'system': continue
+        d = p.default
+        val = d
+        type_name = type(d).__name__
+        if isinstance(d, np.ndarray):
+            val = d.tolist()
+        elif isinstance(d, (tuple, list)):
+            val = list(d)
+        elif d is inspect._empty:
+            val = None
+            type_name = 'None'
+        params.append({'name': name, 'default': val, 'type': type_name})
+    return json.dumps(params)
+
+get_params()
+`);
+                    seq_RARE_2D_params = JSON.parse(paramsJson);
+                    currentSequenceFunc = null;
+                } else if (sequenceType === 'mrseq_t1_inv_rec_gre_single_line') {
+                    // Load from mrseq package
+                    log('Loading mrseq t1_inv_rec_gre_single_line sequence...');
+                    await pyodide.runPythonAsync(`
+import __main__
+from mrseq.scripts.t1_inv_rec_gre_single_line import main as create_seq
+# Store the function in __main__ for later use
+__main__.create_seq = create_seq
+`);
+                    
+                    // Generate code representation for the editor
+                    currentCode = `from mrseq.scripts.t1_inv_rec_gre_single_line import main as create_seq
+import pypulseq as pp
+
+# Create sequence
+seq = create_seq()
+
+# Check timing
+seq.check_timing()
+
+# Plot sequence
+seq.plot()
+`;
+                    defaultCode = currentCode;
+                    
+                    // Extract parameters from the function
+                    try {
+                        const paramsJson = await pyodide.runPythonAsync(`
+import inspect
+import json
+import numpy as np
+import __main__
+
+func = __main__.create_seq
+sig = inspect.signature(func)
+params = []
+for name, p in sig.parameters.items():
+    if name == 'system': continue
+    d = p.default
+    val = d
+    type_name = type(d).__name__
+    if isinstance(d, np.ndarray):
+        val = d.tolist()
+    elif isinstance(d, (tuple, list)):
+        val = list(d)
+    elif d is inspect._empty:
+        val = None
+        type_name = 'None'
+    params.append({'name': name, 'default': val, 'type': type_name})
+json.dumps(params)
+`);
+                        seq_RARE_2D_params = JSON.parse(paramsJson);
+                    } catch (e) {
+                        log('Could not extract parameters from mrseq function', 'warn');
+                        seq_RARE_2D_params = [];
+                    }
+                    
+                    currentSequenceFunc = 'create_seq';
+                } else if (sequenceType === 'mrseq_github_radial_flash') {
+                    // Fetch directly from GitHub main branch
+                    log('Fetching Radial FLASH from mrseq GitHub...');
+                    const url = 'https://raw.githubusercontent.com/PTB-MR/mrseq/main/src/mrseq/scripts/radial_flash.py';
+                    const response = await fetch(url);
+                    if (!response.ok) throw new Error('Failed to fetch radial_flash.py from GitHub');
+                    currentCode = await response.text();
+                    defaultCode = currentCode;
+
+                    log('Executing fetched script...');
+                    await pyodide.runPythonAsync(`
+import sys
+import __main__
+from types import ModuleType
+
+# Execute the code in a temporary module-like dict
+code = ${JSON.stringify(currentCode)}
+# We need to make sure imports like 'from mrseq.utils import ...' work
+# They should work if mrseq is installed, which it is.
+exec(code, __main__.__dict__)
+
+# Capture the main function as create_seq
+if hasattr(__main__, 'main'):
+    __main__.create_seq = __main__.main
+`);
+
+                    // Extract parameters
+                    try {
+                        const paramsJson = await pyodide.runPythonAsync(`
+import inspect, json, numpy as np, __main__
+func = __main__.create_seq
+sig = inspect.signature(func)
+params = []
+for name, p in sig.parameters.items():
+    if name in ['system', 'show_plots', 'test_report', 'timing_check']: continue
+    d = p.default
+    val = d
+    type_name = type(d).__name__
+    if isinstance(d, np.ndarray): val = d.tolist()
+    elif isinstance(d, (tuple, list)): val = list(d)
+    elif d is inspect._empty: val = None; type_name = 'None'
+    params.append({'name': name, 'default': val, 'type': type_name})
+json.dumps(params)
+`);
+                        seq_RARE_2D_params = JSON.parse(paramsJson);
+                    } catch (e) {
+                        log('Could not extract parameters from GitHub script', 'warn');
+                        seq_RARE_2D_params = [];
+                    }
+                    currentSequenceFunc = 'create_seq';
+                } else {
+                    // Load from pypulseq GitHub examples
+                    log(`Loading pypulseq example from GitHub: ${sequenceType}...`);
+                    const scriptName = sequenceType.replace('.py', '');
+                    const githubUrl = `https://raw.githubusercontent.com/imr-framework/pypulseq/master/examples/scripts/${sequenceType}`;
+                    
+                    const response = await fetch(githubUrl);
+                    if (!response.ok) throw new Error(`Failed to fetch ${sequenceType} from GitHub`);
+                    const scriptCode = await response.text();
+                    
+                    currentCode = scriptCode;
+                    defaultCode = scriptCode;
+                    
+                    log('Executing pypulseq example script...');
+                    // Execute the script and ensure __name__ is set to __main__ to trigger if __name__ == "__main__" blocks
+                    // Also temporarily disable plotting during execution
+                    await pyodide.runPythonAsync(`
+import sys
+import __main__
+import matplotlib.pyplot as plt
+import pypulseq as pp
+
+# Temporarily disable plotting during exec to prevent freezing
+_orig_plot, _orig_show = pp.Sequence.plot, plt.show
+pp.Sequence.plot = plt.show = lambda *args, **kwargs: None
+
+try:
+    # Set __name__ to __main__ so scripts that check __name__ == "__main__" will execute
+    __main__.__name__ = '__main__'
+    exec(${JSON.stringify(scriptCode)}, __main__.__dict__)
+    # If there's a main() function, call it
+    if hasattr(__main__, 'main'):
+        __main__.main()
+finally:
+    # Restore plotting functions
+    pp.Sequence.plot, plt.show = _orig_plot, _orig_show
+`);
+                    
+                    // Try to extract function name and parameters
+                    // Most pypulseq examples have a main function or create a sequence directly
+                    try {
+                        const paramsJson = await pyodide.runPythonAsync(`
+import inspect
+import json
+import numpy as np
+import __main__
+
+# Try to find the main sequence function
+func = None
+for name in ['write_${scriptName}', 'main', 'create_sequence']:
+    if hasattr(__main__, name):
+        func = getattr(__main__, name)
+        break
+
+if func:
+    sig = inspect.signature(func)
+    params = []
+    for name, p in sig.parameters.items():
+        if name == 'system': continue
+        d = p.default
+        val = d
+        type_name = type(d).__name__
+        if isinstance(d, np.ndarray):
+            val = d.tolist()
+        elif isinstance(d, (tuple, list)):
+            val = list(d)
+        elif d is inspect._empty:
+            val = None
+            type_name = 'None'
+        params.append({'name': name, 'default': val, 'type': type_name})
+    json.dumps(params)
+else:
+    json.dumps([])
+`);
+                        seq_RARE_2D_params = JSON.parse(paramsJson);
+                    } catch (e) {
+                        log('Could not extract parameters from example script', 'warn');
+                        seq_RARE_2D_params = [];
+                    }
+                    
+                    currentSequenceFunc = null; // Using code execution instead
+                }
+                
+                renderControls(seq_RARE_2D_params);
+                statusEl.innerText = 'Ready';
+                loaderEl.style.display = 'none';
+                runBtn.disabled = false;
+                
+                // Show edit button for all sequences (they're all code-based now)
+                editCodeBtn.style.display = 'inline-block';
+                
+                if (codeEditor) {
+                    codeEditor.setValue(currentCode);
+                }
+                
+                log(`Sequence loaded: ${sequenceType}`);
+                // Removed automatic updateSequence() call to allow parameter adjustment before generation
+            } catch (err) {
+                log(`Error loading sequence: ${err.message}`, 'error');
+                statusEl.innerText = 'Load Error';
+                loaderEl.style.display = 'none';
+                runBtn.disabled = false;
+            }
+        }
+
         async function updateSequence() {
             if (runBtn.disabled && statusEl.innerText === 'Generating sequence...') return;
 
@@ -899,20 +1190,7 @@ get_params()
             loaderEl.style.display = 'inline-block';
             
             try {
-                let pyArgs = [];
-                seq_RARE_2D_params.forEach(param => {
-                    const input = document.getElementById('input-' + param.name);
-                    if (!input) return;
-                    let val;
-                    if (param.type === 'bool') val = input.checked ? 'True' : 'False';
-                    else if (param.type === 'int' || param.type === 'float') val = input.value || '0';
-                    else if (param.type === 'list' || param.type === 'ndarray') val = `np.array(${input.value})`;
-                    else if (param.type === 'str') val = `"${input.value}"`;
-                    else val = input.value;
-                    pyArgs.push(`${param.name}=${val}`);
-                });
-
-                log(`Updating sequence...`);
+                log(`Updating sequence: ${currentSequenceType}...`);
                 
                 // Cleanup: Remove all existing plots and containers
                 plotOutput.innerHTML = '<div id="mpl-actual-target" class="mpl-figure-container"><p style="color: #6b7280; font-size: 0.875rem; text-align: center; margin-top: 2rem;">Generating plots...</p></div>';
@@ -924,7 +1202,27 @@ get_params()
                 window.pyodideMplTarget = container;
 
                 const themeCode = getMatplotlibThemeCode();
-                const pythonCode = `
+                let pythonCode;
+                
+                log(`Current sequence type: ${currentSequenceType}`);
+                
+                if (currentSequenceType === 'mr0_rare_2d_seq.py') {
+                    log('Using RARE 2D sequence with parameters');
+                    // Use parameter-based sequence
+                    let pyArgs = [];
+                    seq_RARE_2D_params.forEach(param => {
+                        const input = document.getElementById('input-' + param.name);
+                        if (!input) return;
+                        let val;
+                        if (param.type === 'bool') val = input.checked ? 'True' : 'False';
+                        else if (param.type === 'int' || param.type === 'float') val = input.value || '0';
+                        else if (param.type === 'list' || param.type === 'ndarray') val = `np.array(${input.value})`;
+                        else if (param.type === 'str') val = `"${input.value}"`;
+                        else val = input.value;
+                        pyArgs.push(`${param.name}=${val}`);
+                    });
+                    
+                    pythonCode = `
 import matplotlib.pyplot as plt
 import __main__
 plt.close('all')
@@ -939,7 +1237,183 @@ seq.plot(plot_now=False)
 plt.show()
 "SUCCESS"
 `;
-                const result = await pyodide.runPythonAsync(pythonCode);
+                } else if (currentSequenceType === 'mrseq_t1_inv_rec_gre_single_line' || currentSequenceType === 'mrseq_github_radial_flash') {
+                    log(`Using ${currentSequenceType} sequence`);
+                    // Use mrseq function with parameters if available
+                    let pyArgs = [];
+                    if (seq_RARE_2D_params && seq_RARE_2D_params.length > 0) {
+                        seq_RARE_2D_params.forEach(param => {
+                            const input = document.getElementById('input-' + param.name);
+                            if (!input) return;
+                            
+                            // Skip parameters we set explicitly to avoid "keyword argument repeated" error
+                            if (['show_plots', 'timing_check', 'test_report'].includes(param.name)) {
+                                return;
+                            }
+                            
+                            let val;
+                            if (param.type === 'bool') {
+                                val = input.checked ? 'True' : 'False';
+                                pyArgs.push(`${param.name}=${val}`);
+                            } else {
+                                const inputValue = input.value.trim();
+                                // Skip empty values - let Python use the default from function signature
+                                if (inputValue === '') {
+                                    return; // Skip this parameter, use default
+                                }
+                                
+                                if (param.type === 'int' || param.type === 'float') {
+                                    val = inputValue;
+                                } else if (param.type === 'list' || param.type === 'ndarray') {
+                                    val = `np.array(${inputValue})`;
+                                } else if (param.type === 'str') {
+                                    val = `"${inputValue}"`;
+                                } else {
+                                    val = inputValue;
+                                }
+                                pyArgs.push(`${param.name}=${val}`);
+                            }
+                        });
+                    }
+                    
+                    pythonCode = `
+import sys
+print("PYTHON: Starting mrseq execution...", flush=True)
+import matplotlib.pyplot as plt
+import __main__
+import numpy as np
+import traceback
+
+try:
+    plt.close('all')
+    # Set a slightly smaller default figure size
+    plt.rcParams['figure.figsize'] = [8, 4]
+    ${themeCode.split('\n').map(line => '    ' + line).join('\n')}
+    
+    print("PYTHON: Calling create_seq...", flush=True)
+    # Build arguments
+    kwargs = {
+        'show_plots': False,
+        'timing_check': False,
+        'test_report': False
+    }
+    # Add dynamic arguments
+    ${pyArgs.length > 0 ? pyArgs.map(arg => {
+        const parts = arg.split('=');
+        const key = parts[0].trim();
+        const val = parts.slice(1).join('=').trim();
+        return `kwargs['${key}'] = ${val}`;
+    }).join('\n    ') : ''}
+    
+    seq = __main__.create_seq(**kwargs)
+    print("PYTHON: Sequence created successfully", flush=True)
+    
+    # Store in __main__ for persistence
+    __main__.seq = seq
+    
+    # Check timing
+    print("PYTHON: Checking timing...", flush=True)
+    try:
+        seq.check_timing()
+        print("PYTHON: Timing check passed", flush=True)
+    except Exception as te:
+        print(f"PYTHON: Timing check warning: {te}", flush=True)
+
+    # Plotting - this is often the slow part
+    print("PYTHON: Generating plot...", flush=True)
+    seq.plot(plot_now=False)
+    print("PYTHON: Plot prepared, calling plt.show()...", flush=True)
+    plt.show()
+    print("PYTHON: SUCCESS", flush=True)
+    _final_res = "SUCCESS"
+except Exception as e:
+    print(f"PYTHON ERROR: {str(e)}", file=sys.stderr, flush=True)
+    traceback.print_exc()
+    _final_res = f"ERROR: {str(e)}"
+    raise
+_final_res
+`;
+                } else {
+                    log(`Re-executing pypulseq example: ${currentSequenceType}`);
+                    // Re-execute pypulseq example script to regenerate sequence
+                    // This ensures the sequence is created fresh each time
+                    pythonCode = `
+import matplotlib.pyplot as plt
+import __main__
+import sys
+import pypulseq as pp
+plt.close('all')
+# Set a slightly smaller default figure size (scaled down by ~10-15%)
+plt.rcParams['figure.figsize'] = [8, 4]
+${themeCode}
+# Clear any old sequence variables to avoid confusion
+if hasattr(__main__, 'seq'):
+    delattr(__main__, 'seq')
+
+# Temporarily disable plotting during exec to prevent freezing
+_orig_plot, _orig_show = pp.Sequence.plot, plt.show
+pp.Sequence.plot = plt.show = lambda *args, **kwargs: None
+
+try:
+    # Re-execute the script to create the sequence
+    # Set __name__ to __main__ so scripts that check __name__ == "__main__" will execute
+    __main__.__name__ = '__main__'
+    exec(${JSON.stringify(currentCode)}, __main__.__dict__)
+    # If there's a main() function, call it and capture the result if it returns a sequence
+    if hasattr(__main__, 'main'):
+        result = __main__.main()
+        # If main() returns a sequence, store it
+        if result and hasattr(result, 'plot') and hasattr(result, 'check_timing'):
+            __main__.seq = result
+finally:
+    # Restore plotting functions
+    pp.Sequence.plot, plt.show = _orig_plot, _orig_show
+
+# Get the sequence from __main__ (pypulseq examples typically create 'seq')
+seq = getattr(__main__, 'seq', None)
+if seq is None:
+    # Try to find sequence in globals (but exclude old RARE function)
+    # Make a copy of keys to avoid "dictionary changed size during iteration" error
+    # Wait a moment for any async operations to complete
+    import time
+    time.sleep(0.1)
+    
+    keys = list(__main__.__dict__.keys())
+    for key in keys:
+        if key in ['seq_RARE_2D', 'main', 'write_tse', 'write_gre', 'write_epi', 'write_haste', 'write_ute']:
+            continue  # Skip functions and old RARE function
+        try:
+            val = __main__.__dict__.get(key)
+            if val and hasattr(val, 'plot') and hasattr(val, 'check_timing'):
+                seq = val
+                print(f"Found sequence object: {key}")
+                break
+        except (KeyError, RuntimeError, AttributeError):
+            # Dictionary might have changed, skip this key
+            continue
+
+if seq is None:
+    # Last resort: check if there's a sequence in any variable that looks like a sequence
+    print("Available variables in __main__:", [k for k in __main__.__dict__.keys() if not k.startswith('_')])
+    raise ValueError("Could not find sequence object. The script may not have created a 'seq' variable.")
+# Prepare plot
+seq.plot(plot_now=False)
+# Display
+plt.show()
+"SUCCESS"
+`;
+                }
+                
+                // Wrap execution in a timeout to prevent hanging
+                log('Executing Python code...');
+                const executionPromise = pyodide.runPythonAsync(pythonCode);
+                const timeoutPromise = new Promise((_, reject) => {
+                    setTimeout(() => {
+                        reject(new Error('Execution timed out after 60 seconds. The sequence may be too complex or there may be an infinite loop.'));
+                    }, 60000); // 60 second timeout
+                });
+                
+                const result = await Promise.race([executionPromise, timeoutPromise]);
 
                 // Clear the "Generating plots..." message if any figure appeared
                 // or if the script finished
@@ -961,7 +1435,7 @@ plt.show()
                     }
                 }, 800);
 
-                if (result.startsWith('ERROR:')) {
+                if (result && typeof result === 'string' && result.startsWith('ERROR:')) {
                     log(result, 'error');
                 } else {
                     log(`Plots updated successfully.`);
@@ -1046,6 +1520,11 @@ get_params()
             if (e.target === editorModal) {
                 editorModal.classList.remove('active');
             }
+        });
+
+        // Sequence selector event listener
+        sequenceSelector.addEventListener('change', async (e) => {
+            await loadSequence(e.target.value);
         });
 
         runBtn.addEventListener('click', updateSequence);
