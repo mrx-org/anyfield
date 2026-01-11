@@ -1,0 +1,208 @@
+/* Sequence Explorer Widget Styles */
+.seq-explorer {
+    display: flex;
+    flex-direction: column;
+    height: 100%;
+}
+
+.seq-explorer-controls {
+    display: flex;
+    gap: 1rem;
+    margin-bottom: 1rem;
+    align-items: center;
+    flex-wrap: wrap;
+}
+
+.seq-explorer-controls label {
+    display: flex;
+    align-items: center;
+    gap: 0.5rem;
+    cursor: pointer;
+    font-size: 0.875rem;
+    color: var(--text);
+}
+
+.seq-explorer-controls input[type="checkbox"] {
+    cursor: pointer;
+    width: 1rem;
+    height: 1rem;
+}
+
+.seq-explorer-tree {
+    border: 1px solid var(--border);
+    border-radius: 8px;
+    background: rgba(255, 255, 255, 0.04);
+    overflow-y: auto;
+    max-height: 70vh;
+    padding: 0.5rem;
+}
+
+.seq-file-group {
+    margin-bottom: 0.75rem;
+}
+
+.seq-file-header {
+    font-weight: 600;
+    color: var(--accent);
+    padding: 0.5rem;
+    background: rgba(59, 130, 246, 0.1);
+    border-radius: 6px;
+    margin-bottom: 0.25rem;
+    cursor: pointer;
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    user-select: none;
+}
+
+.seq-file-header:hover {
+    background: rgba(59, 130, 246, 0.15);
+}
+
+.seq-file-header::before {
+    content: '▶';
+    margin-right: 0.5rem;
+    transition: transform 0.2s;
+    font-size: 0.7rem;
+}
+
+.seq-file-header.collapsed::before {
+    transform: rotate(-90deg);
+}
+
+.seq-file-functions {
+    margin-left: 1rem;
+    padding-left: 0.5rem;
+    border-left: 2px solid var(--border);
+}
+
+.seq-file-functions.collapsed {
+    display: none;
+}
+
+.seq-function-item {
+    padding: 0.4rem 0.5rem;
+    margin: 0.25rem 0;
+    border-radius: 4px;
+    cursor: pointer;
+    transition: background 0.2s;
+    color: var(--text);
+}
+
+.seq-function-item:hover {
+    background: rgba(255, 255, 255, 0.08);
+}
+
+.seq-function-item.selected {
+    background: rgba(59, 130, 246, 0.2);
+    border-left: 3px solid var(--accent);
+}
+
+.seq-function-name {
+    font-weight: 500;
+}
+
+.seq-function-doc {
+    font-size: 0.75rem;
+    color: var(--muted);
+    margin-top: 0.25rem;
+    font-style: italic;
+}
+
+.status-message {
+    padding: 0.75rem;
+    background: rgba(59, 130, 246, 0.1);
+    border-left: 4px solid var(--accent);
+    border-radius: 8px;
+    margin-bottom: 1rem;
+    font-size: 0.875rem;
+}
+
+.status-message.error {
+    background: rgba(239, 68, 68, 0.1);
+    border-left-color: #ef4444;
+}
+
+.status-message.success {
+    background: rgba(34, 197, 94, 0.1);
+    border-left-color: #22c55e;
+}
+
+.loading {
+    display: inline-block;
+    width: 1rem;
+    height: 1rem;
+    border: 2px solid var(--border);
+    border-top-color: var(--accent);
+    border-radius: 50%;
+    animation: spin 0.6s linear infinite;
+}
+
+@keyframes spin {
+    to { transform: rotate(360deg); }
+}
+
+/* Parameter controls */
+#seq-params-section h3 {
+    font-size: 0.9rem;
+    font-weight: 600;
+    color: var(--accent);
+    margin-bottom: 0.75rem;
+    text-transform: uppercase;
+    letter-spacing: 0.05em;
+}
+
+#seq-params-controls {
+    max-height: 40vh;
+    overflow-y: auto;
+    margin-bottom: 1rem;
+}
+
+#seq-params-controls table {
+    width: 100%;
+    border-collapse: collapse;
+}
+
+#seq-params-controls table td {
+    padding: 0.4rem 0.5rem;
+    border-bottom: 1px solid var(--border);
+}
+
+#seq-params-controls input[type="text"],
+#seq-params-controls input[type="number"] {
+    width: 100%;
+    padding: 0.3rem 0.5rem;
+    border: 1px solid var(--border);
+    border-radius: 4px;
+    background: rgba(255, 255, 255, 0.08);
+    color: var(--text);
+    font-size: 0.8rem;
+}
+
+#seq-params-controls input:focus {
+    outline: none;
+    border-color: var(--accent);
+    box-shadow: 0 0 0 2px rgba(59, 130, 246, 0.2);
+}
+
+#seq-execute-btn {
+    width: 100%;
+    padding: 0.5rem;
+    background: var(--accent);
+    color: white;
+    border: none;
+    border-radius: 4px;
+    cursor: pointer;
+    font-size: 0.875rem;
+    font-weight: 500;
+    transition: background 0.2s;
+}
+
+#seq-execute-btn:hover:not(:disabled) {
+    background: #2563eb;
+}
+
+#seq-execute-btn:disabled {
+    opacity: 0.6;
+    cursor: not-allowed;
+}

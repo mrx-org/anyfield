@@ -1,0 +1,124 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Sequence Explorer - Test</title>
+    <script src="https://cdn.jsdelivr.net/pyodide/v0.29.0/full/pyodide.js"></script>
+    <link rel="stylesheet" href="seq_explorer.css">
+    <style>
+        :root {
+            --bg: #0b1020;
+            --panel: #111a33;
+            --text: #e8ecff;
+            --muted: #a9b3da;
+            --border: rgba(255, 255, 255, 0.12);
+            --accent: #3b82f6;
+        }
+        * { box-sizing: border-box; margin: 0; padding: 0; }
+        html, body {
+            height: 100%;
+            margin: 0;
+            background: var(--bg);
+            color: var(--text);
+            font: 14px/1.4 system-ui, -apple-system, Segoe UI, Roboto, Helvetica, Arial;
+        }
+        body {
+            padding: 0.5rem;
+        }
+        .container {
+            max-width: 1400px;
+            margin: 0 auto;
+            background: var(--panel);
+            border-radius: 10px;
+            border: 1px solid var(--border);
+            overflow: hidden;
+        }
+        .header {
+            background: var(--panel);
+            color: var(--text);
+            padding: 0.75rem 1rem;
+            border-bottom: 1px solid var(--border);
+        }
+        .header h1 {
+            font-size: 1.5rem;
+            font-weight: bold;
+            margin-bottom: 0.25rem;
+            color: var(--accent);
+        }
+        .content {
+            padding: 1rem;
+        }
+        .panel {
+            background: var(--panel);
+            padding: 1rem;
+            border-radius: 10px;
+            border: 1px solid var(--border);
+            margin-bottom: 1rem;
+        }
+        .panel h2 {
+            font-size: 1.1rem;
+            font-weight: 600;
+            margin-bottom: 0.75rem;
+            color: var(--accent);
+            text-transform: uppercase;
+            letter-spacing: 0.05em;
+            font-size: 14px;
+        }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <div class="header">
+            <h1>Sequence Explorer - Test</h1>
+            <p>Modular sequence/protocol explorer widget</p>
+        </div>
+        <div class="content">
+            <div id="seq-explorer-widget" class="seq-explorer"></div>
+        </div>
+    </div>
+
+    <script src="seq_explorer.js"></script>
+    <script>
+        // Example usage - the SequenceExplorer class is loaded from seq_explorer.js
+        
+        // Initialize when page loads
+        window.addEventListener('DOMContentLoaded', async () => {
+            // Initialize Pyodide (optional, for better parsing and dependency installation)
+            let pyodide = null;
+            try {
+                pyodide = await loadPyodide({
+                    indexURL: "https://cdn.jsdelivr.net/pyodide/v0.29.0/full/"
+                });
+                // Load micropip for dependency installation
+                await pyodide.loadPackage('micropip');
+                console.log('Pyodide and micropip loaded');
+            } catch (error) {
+                console.warn('Pyodide not available, using fallback parsing:', error);
+            }
+            
+            // Initialize sequence explorer
+            const explorer = new SequenceExplorer('seq-explorer-widget', {
+                onlySeqPrefix: false,
+                pyodide: pyodide,
+                sources: [
+                    // Local playground file
+                    LoadScripts.local_file('mr0_rare_2d_seq.py', 'RARE 2D (Playground)', ['pypulseq']),
+                    // Load mrseq from installed package (mrseq.tests.scripts)
+                    LoadScripts.mrseq,
+                    // Load pypulseq examples (includes pypulseq dependency)
+                    LoadScripts.pypulseq_examples
+                ],
+                onSequenceSelect: (sequence) => {
+                    console.log('Selected sequence:', sequence);
+                    // Handle sequence selection
+                }
+            });
+            
+            // Make explorer available globally for testing
+            window.seqExplorer = explorer;
+            window.LoadScripts = LoadScripts;
+        });
+    </script>
+</body>
+</html>
