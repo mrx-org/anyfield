@@ -5,74 +5,21 @@
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>Sequence Explorer - Test</title>
     <script src="https://cdn.jsdelivr.net/pyodide/v0.29.0/full/pyodide.js"></script>
+    <!-- CodeMirror -->
+    <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/codemirror/5.65.2/codemirror.min.css">
+    <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/codemirror/5.65.2/theme/monokai.min.css">
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/codemirror/5.65.2/codemirror.min.js"></script>
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/codemirror/5.65.2/mode/python/python.min.js"></script>
     <link rel="stylesheet" href="seq_explorer.css">
-    <style>
-        :root {
-            --bg: #0b1020;
-            --panel: #111a33;
-            --text: #e8ecff;
-            --muted: #a9b3da;
-            --border: rgba(255, 255, 255, 0.12);
-            --accent: #3b82f6;
-        }
-        * { box-sizing: border-box; margin: 0; padding: 0; }
-        html, body {
-            height: 100%;
-            margin: 0;
-            background: var(--bg);
-            color: var(--text);
-            font: 14px/1.4 system-ui, -apple-system, Segoe UI, Roboto, Helvetica, Arial;
-        }
-        body {
-            padding: 0.5rem;
-        }
-        .container {
-            max-width: 1400px;
-            margin: 0 auto;
-            background: var(--panel);
-            border-radius: 10px;
-            border: 1px solid var(--border);
-            overflow: hidden;
-        }
-        .header {
-            background: var(--panel);
-            color: var(--text);
-            padding: 0.75rem 1rem;
-            border-bottom: 1px solid var(--border);
-        }
-        .header h1 {
-            font-size: 1.5rem;
-            font-weight: bold;
-            margin-bottom: 0.25rem;
-            color: var(--accent);
-        }
-        .content {
-            padding: 1rem;
-        }
-        .panel {
-            background: var(--panel);
-            padding: 1rem;
-            border-radius: 10px;
-            border: 1px solid var(--border);
-            margin-bottom: 1rem;
-        }
-        .panel h2 {
-            font-size: 1.1rem;
-            font-weight: 600;
-            margin-bottom: 0.75rem;
-            color: var(--accent);
-            text-transform: uppercase;
-            letter-spacing: 0.05em;
-            font-size: 14px;
-        }
-    </style>
 </head>
 <body>
+    <!-- Subtle startup loader -->
+    <div id="startup-loader" class="startup-loader">
+        <div class="loader-spinner"></div>
+        <div class="loader-text">Installing No-Field Scanner</div>
+    </div>
+
     <div class="container">
-        <div class="header">
-            <h1>Sequence Explorer - Test</h1>
-            <p>Modular sequence/protocol explorer widget</p>
-        </div>
         <div class="content">
             <div id="seq-explorer-widget" class="seq-explorer"></div>
         </div>
@@ -84,21 +31,64 @@
         
         // Initialize when page loads
         window.addEventListener('DOMContentLoaded', async () => {
+            const loader = document.getElementById('startup-loader');
+            
+            // Show loader
+            if (loader) {
+                loader.classList.add('active');
+            }
+            
             // Initialize Pyodide (optional, for better parsing and dependency installation)
             let pyodide = null;
+            let explorer = null; // Will be set after creation
+            
+            // Create log handlers that will use explorer once it's created
+            const logHandlers = {
+                stdout: (text) => {
+                    if (explorer) explorer.log(text, 'info');
+                    else console.log(text);
+                },
+                stderr: (text) => {
+                    if (explorer) explorer.log(text, 'error');
+                    else console.error(text);
+                }
+            };
+            
             try {
+                console.log('Loading Pyodide runtime...');
+                if (loader) loader.querySelector('.loader-text').textContent = 'Installing No-Field Scanner';
                 pyodide = await loadPyodide({
-                    indexURL: "https://cdn.jsdelivr.net/pyodide/v0.29.0/full/"
+                    indexURL: "https://cdn.jsdelivr.net/pyodide/v0.29.0/full/",
+                    stdout: logHandlers.stdout,
+                    stderr: logHandlers.stderr
                 });
-                // Load micropip for dependency installation
-                await pyodide.loadPackage('micropip');
-                console.log('Pyodide and micropip loaded');
+                
+                // Load matplotlib and micropip for dependency installation
+                console.log('Installing matplotlib, micropip...');
+                if (loader) loader.querySelector('.loader-text').textContent = 'Start Rotating Spins';
+                await pyodide.loadPackage(['matplotlib', 'micropip'], { checkIntegrity: false });
+                
+                const micropip = pyodide.pyimport("micropip");
+                
+                // Install pypulseq (required for optimized plot function)
+                console.log('Installing pypulseq...');
+                if (loader) loader.querySelector('.loader-text').textContent = 'Connecting to Freiburg';
+                await micropip.install(['pypulseq']);
+                
+                // Configure matplotlib
+                await pyodide.runPythonAsync(`
+import matplotlib.pyplot as plt
+plt.ion()
+print(f"Matplotlib backend: {plt.get_backend()}")
+`);
+                
+                console.log('Pyodide, matplotlib, micropip, and pypulseq loaded');
             } catch (error) {
                 console.warn('Pyodide not available, using fallback parsing:', error);
             }
             
             // Initialize sequence explorer with empty sources - will load from config file
-            const explorer = new SequenceExplorer('seq-explorer-widget', {
+            explorer = new SequenceExplorer('seq-explorer-widget', {
                 onlySeqPrefix: false,
                 pyodide: pyodide,
                 sources: [], // Start empty, will load from sources_config.py
@@ -108,18 +98,70 @@
                 }
             });
             
+            // Log initialization messages
+            if (pyodide) {
+                explorer.log('Pyodide runtime loaded', 'info');
+                explorer.log('Packages installed: matplotlib, micropip, pypulseq', 'info');
+            }
+            
+            // Install optimized plot function if Pyodide is available
+            if (pyodide) {
+                try {
+                    if (loader) loader.querySelector('.loader-text').textContent = 'Connecting MR-zero';
+                    explorer.log('Installing optimized plot function...', 'info');
+                    await explorer.installOptimizedPlotFunction();
+                    explorer.log('Optimized plot function installed', 'success');
+                    
+                    // Detect and display versions
+                    await explorer.detectVersions();
+                    explorer.log('Version detection complete', 'info');
+                } catch (error) {
+                    console.warn('Failed to install optimized plot function:', error);
+                    explorer.log(`Failed to install optimized plot function: ${error.message}`, 'error');
+                }
+            }
+            
             // Load default sources from config file
+            if (loader) loader.querySelector('.loader-text').textContent = 'Loading Sequences...';
+            explorer.log('Loading sources from config...', 'info');
             fetch('sources_config.py')
                 .then(response => response.text())
                 .then(configCode => {
-                    explorer.loadSourcesFromConfig(configCode).catch(err => {
+                    explorer.loadSourcesFromConfig(configCode).then(() => {
+                        explorer.log('Sources loaded successfully', 'success');
+                    }).catch(err => {
                         console.error('Failed to load default sources:', err);
                         explorer.showStatus('Failed to load default sources. Use "Add Sources" to configure.', 'error');
+                        explorer.log(`Failed to load sources: ${err.message}`, 'error');
+                    }).finally(() => {
+                        // Show ready message before hiding loader
+                        if (loader) {
+                            loader.querySelector('.loader-text').textContent = 'Ready for scanning!';
+                            setTimeout(() => {
+                                loader.classList.remove('active');
+                                loader.classList.add('hidden');
+                                setTimeout(() => {
+                                    loader.style.display = 'none';
+                                }, 500);
+                            }, 800);
+                        }
                     });
                 })
                 .catch(err => {
                     console.warn('Could not load sources_config.py, starting with empty sources:', err);
                     explorer.showStatus('No default sources found. Use "Add Sources" to configure.', 'info');
+                    explorer.log('No sources_config.py found, starting with empty sources', 'warn');
+                    // Show ready message even if sources fail to load
+                    if (loader) {
+                        loader.querySelector('.loader-text').textContent = 'Ready for scanning!';
+                        setTimeout(() => {
+                            loader.classList.remove('active');
+                            loader.classList.add('hidden');
+                            setTimeout(() => {
+                                loader.style.display = 'none';
+                            }, 500);
+                        }, 800);
+                    }
                 });
             
             // Make explorer available globally for testing

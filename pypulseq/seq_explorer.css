@@ -1,5 +1,84 @@
+:root {
+    --bg: #0b1020;
+    --panel: #111a33;
+    --text: #e8ecff;
+    --muted: #a9b3da;
+    --border: rgba(255, 255, 255, 0.12);
+    --accent: #3b82f6;
+}
+
+* { 
+    box-sizing: border-box; 
+    margin: 0; 
+    padding: 0; 
+}
+
+html, body {
+    margin: 0;
+    background: var(--bg);
+    color: var(--text);
+    font: 14px/1.4 system-ui, -apple-system, Segoe UI, Roboto, Helvetica, Arial;
+    overflow-y: auto;
+}
+
+body {
+    padding: 0.5rem;
+    min-height: 100vh;
+}
+
+.container {
+    max-width: 1400px;
+    margin: 0 auto;
+    background: var(--panel);
+    border-radius: 10px;
+    border: 1px solid var(--border);
+    overflow: visible;
+}
+
+.content {
+    padding: 1rem;
+}
+
+.panel {
+    background: var(--panel);
+    padding: 1rem;
+    border-radius: 10px;
+    border: 1px solid var(--border);
+    margin-bottom: 1rem;
+}
+
+.panel h2 {
+    font-size: 1.1rem;
+    font-weight: 600;
+    margin-bottom: 0.75rem;
+    color: var(--accent);
+    text-transform: uppercase;
+    letter-spacing: 0.05em;
+    font-size: 14px;
+}
+
 /* Sequence Explorer Widget Styles */
 .seq-explorer {
+    display: flex;
+    flex-direction: column;
+}
+
+.section-title {
+    font-size: 0.9rem;
+    font-weight: 600;
+    color: var(--accent);
+    text-transform: uppercase;
+    letter-spacing: 0.05em;
+    margin: 1rem 0 0.5rem 0;
+    display: flex;
+    align-items: center;
+}
+
+#seq-explorer-section {
+    border: 1px solid var(--border);
+    border-radius: 8px;
+    background: rgba(255, 255, 255, 0.04);
+    padding: 1rem;
     display: flex;
     flex-direction: column;
     height: 100%;
@@ -11,6 +90,8 @@
     margin-bottom: 1rem;
     align-items: center;
     flex-wrap: wrap;
+    padding-top: 0.5rem;
+    border-top: 1px solid var(--border);
 }
 
 .seq-explorer-controls label {
@@ -28,20 +109,46 @@
     height: 1rem;
 }
 
+.seq-explorer-panes {
+    display: flex;
+    gap: 1rem;
+    min-height: 500px;
+}
+
+.seq-explorer-left-pane {
+    width: 40%;
+    display: flex;
+    flex-direction: column;
+}
+
+.seq-explorer-right-pane {
+    width: 60%;
+    display: flex;
+    flex-direction: column;
+}
+
 .seq-explorer-tree {
+    overflow-y: auto;
+    flex: 1;
+    padding: 0.5rem 0;
+    min-height: 400px;
+}
+
+#seq-params-section {
     border: 1px solid var(--border);
     border-radius: 8px;
     background: rgba(255, 255, 255, 0.04);
-    overflow-y: auto;
-    max-height: 70vh;
-    padding: 0.5rem;
+    padding: 1rem;
+    display: flex;
+    flex-direction: column;
+    height: 100%;
 }
 
-.seq-file-group {
+.seq-source-group {
     margin-bottom: 0.75rem;
 }
 
-.seq-file-header {
+.seq-source-header {
     font-weight: 600;
     color: var(--accent);
     padding: 0.5rem;
@@ -55,28 +162,28 @@
     user-select: none;
 }
 
-.seq-file-header:hover {
+.seq-source-header:hover {
     background: rgba(59, 130, 246, 0.15);
 }
 
-.seq-file-header::before {
+.seq-source-header::before {
     content: '▶';
     margin-right: 0.5rem;
     transition: transform 0.2s;
     font-size: 0.7rem;
 }
 
-.seq-file-header.collapsed::before {
+.seq-source-header.collapsed::before {
     transform: rotate(-90deg);
 }
 
-.seq-file-functions {
+.seq-source-items {
     margin-left: 1rem;
     padding-left: 0.5rem;
     border-left: 2px solid var(--border);
 }
 
-.seq-file-functions.collapsed {
+.seq-source-items.collapsed {
     display: none;
 }
 
@@ -100,6 +207,11 @@
 
 .seq-function-name {
     font-weight: 500;
+}
+
+.seq-file-function-name {
+    font-weight: 500;
+    font-size: 0.875rem;
 }
 
 .seq-function-doc {
@@ -138,6 +250,77 @@
     animation: spin 0.6s linear infinite;
 }
 
+/* Subtle loading animation */
+.startup-loader {
+    position: fixed;
+    top: 30%;
+    left: 50%;
+    transform: translate(-50%, -50%);
+    z-index: 9999;
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    gap: 1rem;
+    opacity: 0;
+    transition: opacity 0.3s ease;
+    pointer-events: none;
+}
+.startup-loader.active {
+    opacity: 1;
+}
+.startup-loader.hidden {
+    opacity: 0;
+    transition: opacity 0.5s ease;
+}
+.loader-spinner {
+    width: 40px;
+    height: 40px;
+    border: 3px solid rgba(59, 130, 246, 0.2);
+    border-top-color: var(--accent);
+    border-radius: 50%;
+    animation: spin 1s linear infinite;
+}
+.loader-text {
+    color: var(--muted);
+    font-size: 0.875rem;
+    text-align: center;
+}
+
+/* Console and versions styling */
+.console {
+    padding: 0.75rem;
+    background: #111827;
+    color: #4ade80;
+    font-family: monospace;
+    font-size: 0.7rem;
+    border-radius: 0.375rem;
+    overflow-x: auto;
+    white-space: pre-wrap;
+    height: 10rem;
+    overflow-y: auto;
+    border: 1px solid #1f2937;
+}
+.console .timestamp { color: var(--muted); }
+.console .error { color: #f87171; }
+.console .warn { color: #fbbf24; }
+.console .info { color: #4ade80; }
+.versions {
+    padding: 0.5rem 1rem;
+    background: rgba(255, 255, 255, 0.04);
+    border-top: 1px solid var(--border);
+    font-size: 0.7rem;
+    color: var(--muted);
+}
+.versions span {
+    margin-right: 0.75rem;
+}
+.console-section {
+    display: none;
+}
+.console-section.visible {
+    display: block;
+}
+
 @keyframes spin {
     to { transform: rotate(360deg); }
 }
@@ -153,9 +336,10 @@
 }
 
 #seq-params-controls {
-    max-height: 40vh;
+    flex: 1;
     overflow-y: auto;
     margin-bottom: 1rem;
+    min-height: 0;
 }
 
 #seq-params-controls table {
@@ -186,8 +370,7 @@
 }
 
 #seq-execute-btn {
-    width: 100%;
-    padding: 0.5rem;
+    padding: 0.4rem 0.32rem;
     background: var(--accent);
     color: white;
     border: none;
@@ -205,4 +388,198 @@
 #seq-execute-btn:disabled {
     opacity: 0.6;
     cursor: not-allowed;
+}
+
+/* Code Editor Modal */
+.seq-editor-modal {
+    position: fixed;
+    top: 0;
+    left: 0;
+    width: 100%;
+    height: 100%;
+    background: rgba(0, 0, 0, 0.7);
+    z-index: 10000;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+}
+
+.seq-editor-container {
+    background: var(--bg, #1e1e1e);
+    border: 1px solid var(--border, #333);
+    border-radius: 8px;
+    padding: 0;
+    max-width: 90vw;
+    max-height: 90vh;
+    width: 1000px;
+    height: 85vh;
+    display: flex;
+    flex-direction: column;
+    box-shadow: 0 4px 20px rgba(0, 0, 0, 0.5);
+}
+
+.seq-editor-header {
+    padding: 1rem;
+    border-bottom: 1px solid var(--border, #333);
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+}
+
+.seq-editor-header h2 {
+    margin: 0;
+    color: var(--accent, #4a9eff);
+    font-size: 1.2rem;
+}
+
+.seq-editor-body {
+    flex: 1;
+    position: relative;
+    overflow: hidden;
+}
+
+.seq-editor-body .CodeMirror {
+    height: 100%;
+    font-size: 14px;
+}
+
+/* Plot output container */
+.seq-plot-container {
+    width: 100%;
+    margin-bottom: 1rem;
+    min-height: 400px;
+    max-height: 80vh;
+    overflow-y: auto;
+    border: 1px solid var(--border);
+    border-radius: 8px;
+    background: rgba(255, 255, 255, 0.04);
+    padding: 0.5rem;
+}
+
+.mpl-figure-container {
+    display: flex;
+    flex-direction: column;
+    gap: 0.5rem;
+    width: 100%;
+    min-height: 0;
+    padding: 0.25rem;
+}
+
+.mpl-figure-container:empty {
+    min-height: 0;
+    padding: 0;
+    border: none;
+    background: transparent;
+}
+
+/* Style the figure containers generated by matplotlib */
+.mpl-figure-container > div {
+    border: 1px solid var(--border) !important;
+    border-radius: 10px !important;
+    padding: 0 !important;
+    background: var(--panel) !important;
+    box-shadow: 0 2px 4px -1px rgba(0, 0, 0, 0.3) !important;
+    position: relative !important;
+    display: inline-block !important;
+    width: fit-content !important;
+    max-width: 100% !important;
+    margin: 0 0 0.5rem 0 !important;
+    overflow: hidden;
+}
+
+#seq-plot-output canvas {
+    display: block;
+    max-width: 100%;
+    height: auto !important;
+    border-radius: 0;
+}
+
+#seq-plot-output * {
+    visibility: visible !important;
+    pointer-events: auto !important;
+}
+
+/* Hide the figure titles and title bars */
+#seq-plot-output .ui-dialog-titlebar {
+    display: none !important;
+}
+
+/* Scale down the entire toolbar area and its contents */
+#seq-plot-output .mpl-toolbar, 
+#seq-plot-output div[id$="top"] {
+    display: flex !important;
+    flex-wrap: wrap;
+    gap: 3px;
+    margin-bottom: 0;
+    background: rgba(255, 255, 255, 0.06);
+    padding: 3px;
+    border-bottom: 1px solid var(--border);
+    border-radius: 0;
+    min-height: 24px;
+}
+
+#seq-plot-output .mpl-toolbar button,
+#seq-plot-output div[id$="top"] button,
+#seq-plot-output .mpl-widget {
+    padding: 2px 6px;
+    background: var(--accent);
+    border: 1px solid var(--border);
+    border-radius: 4px;
+    cursor: pointer;
+    font-size: 10px;
+    line-height: 1.2;
+    color: var(--text);
+    transition: all 0.2s ease;
+    opacity: 1;
+}
+
+#seq-plot-output .mpl-toolbar button:hover,
+#seq-plot-output div[id$="top"] button:hover,
+#seq-plot-output .mpl-widget:hover {
+    background: rgba(59, 130, 246, 0.2);
+    border-color: var(--accent);
+    color: white;
+}
+
+#seq-plot-output .mpl-toolbar button:active,
+#seq-plot-output div[id$="top"] button:active,
+#seq-plot-output .mpl-widget:active,
+#seq-plot-output .mpl-toolbar button.mpl-active,
+#seq-plot-output div[id$="top"] button.mpl-active,
+#seq-plot-output .mpl-widget.mpl-active {
+    background: var(--accent);
+    border-color: var(--accent);
+    color: white;
+}
+
+/* Style select dropdowns if they appear in the toolbar */
+#seq-plot-output .mpl-toolbar select,
+#seq-plot-output div[id$="top"] select {
+    font-size: 10px !important;
+    padding: 0 3px !important;
+    height: 20px !important;
+    background: rgba(255, 255, 255, 0.1);
+    color: var(--text);
+    border: 1px solid var(--border);
+}
+
+/* Handle any images/icons in the toolbar */
+#seq-plot-output .mpl-toolbar img,
+#seq-plot-output div[id$="top"] img {
+    width: 15px !important;
+    height: 15px !important;
+}
+
+/* Tighten up the coordinate display area */
+#seq-plot-output div[id$="message"] {
+    font-size: 10px !important;
+    padding: 2px 6px !important;
+    min-height: 1rem !important;
+    background: rgba(255, 255, 255, 0.04);
+    border-top: 1px solid var(--border);
+    color: var(--text);
+}
+
+#seq-plot-output div[id$="top"] button:hover {
+    background: rgba(255, 255, 255, 0.15);
 }

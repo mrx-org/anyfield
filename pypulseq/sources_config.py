@@ -18,12 +18,12 @@ sources = [
     },
     {
         'name': 'RARE 2D (Playground)',
-        'type': 'local_file',
-        'path': 'mr0_rare_2d_seq.py',
+        'type': 'built-in',
+        'path': 'built-in-seq/mr0_rare_2d_seq.py',
         'dependencies': ['pypulseq']
     },
     {
-        'name': 'MRzero EPI 2D (Notebook)',
+        'name': 'MRzero',
         'type': 'remote_file',
         'url': 'https://raw.githubusercontent.com/MRsources/MRzero-Core/refs/heads/main/documentation/playground_mr0/mr0_EPI_2D_seq.ipynb',
         'description': 'EPI 2D sequence from MRzero-Core documentation',
