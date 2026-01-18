@@ -244,29 +244,31 @@ def seq_plot(
 
 def patch_pypulseq():
     import __main__
+    import sys
     __main__.seq_plot = seq_plot
+    
+    # Store patch function in sys.modules so it's easy to find
+    sys._pp_patch_func = patch_pypulseq
+    
     import pypulseq as pp
     
     # Try all common Sequence locations
+    for target in [pp, 
+                   sys.modules.get('pypulseq.sequence.sequence'), 
+                   sys.modules.get('pypulseq.Sequence.Sequence')]:
+        if target and hasattr(target, 'Sequence'):
+            S = getattr(target, 'Sequence')
+            if hasattr(S, 'plot'):
+                if not hasattr(S, '_orig_plot'):
+                    S._orig_plot = S.plot
+                S.plot = seq_plot
+    
+    # Also patch pp.Sequence directly if it exists
     try:
-        if hasattr(pp.Sequence, 'plot'):
+        if hasattr(pp, 'Sequence'):
             if not hasattr(pp.Sequence, '_orig_plot'):
                 pp.Sequence._orig_plot = pp.Sequence.plot
             pp.Sequence.plot = seq_plot
     except: pass
 
-    try:
-        from pypulseq.sequence.sequence import Sequence
-        if not hasattr(Sequence, '_orig_plot'):
-            Sequence._orig_plot = Sequence.plot
-        Sequence.plot = seq_plot
-    except: pass
-
-    try:
-        from pypulseq.Sequence.Sequence import Sequence
-        if not hasattr(Sequence, '_orig_plot'):
-            Sequence._orig_plot = Sequence.plot
-        Sequence.plot = seq_plot
-    except: pass
-    
     print("Optimized seq_plot patched into Sequence.plot()")

@@ -25,160 +25,141 @@
         </div>
     </div>
 
-    <script src="seq_explorer.js"></script>
-    <script>
+    <script type="module">
+        import { SequenceExplorer } from './seq_explorer.js';
+        
         // Example usage - the SequenceExplorer class is loaded from seq_explorer.js
         
         // Initialize when page loads
-        window.addEventListener('DOMContentLoaded', async () => {
-            const loader = document.getElementById('startup-loader');
-            
-            // Show loader
-            if (loader) {
-                loader.classList.add('active');
+        const loader = document.getElementById('startup-loader');
+        
+        // Show loader
+        if (loader) {
+            loader.classList.add('active');
+        }
+        
+        // Initialize Pyodide (optional, for better parsing and dependency installation)
+        let pyodide = null;
+        let explorer = null; // Will be set after creation
+        
+        // Create log handlers that will use explorer once it's created
+        const logHandlers = {
+            stdout: (text) => {
+                if (explorer) explorer.log(text, 'info');
+                else console.log(text);
+            },
+            stderr: (text) => {
+                if (explorer) explorer.log(text, 'error');
+                else console.error(text);
             }
+        };
+        
+        try {
+            console.log('Loading Pyodide runtime...');
+            if (loader) loader.querySelector('.loader-text').textContent = 'Installing No-Field Scanner';
+            pyodide = await loadPyodide({
+                indexURL: "https://cdn.jsdelivr.net/pyodide/v0.29.0/full/",
+                stdout: logHandlers.stdout,
+                stderr: logHandlers.stderr
+            });
             
-            // Initialize Pyodide (optional, for better parsing and dependency installation)
-            let pyodide = null;
-            let explorer = null; // Will be set after creation
+            // Load matplotlib and micropip for dependency installation
+            console.log('Installing matplotlib, micropip...');
+            if (loader) loader.querySelector('.loader-text').textContent = 'Start Rotating Spins';
+            await pyodide.loadPackage(['matplotlib', 'micropip'], { checkIntegrity: false });
             
-            // Create log handlers that will use explorer once it's created
-            const logHandlers = {
-                stdout: (text) => {
-                    if (explorer) explorer.log(text, 'info');
-                    else console.log(text);
-                },
-                stderr: (text) => {
-                    if (explorer) explorer.log(text, 'error');
-                    else console.error(text);
-                }
-            };
+            const micropip = pyodide.pyimport("micropip");
             
-            try {
-                console.log('Loading Pyodide runtime...');
-                if (loader) loader.querySelector('.loader-text').textContent = 'Installing No-Field Scanner';
-                pyodide = await loadPyodide({
-                    indexURL: "https://cdn.jsdelivr.net/pyodide/v0.29.0/full/",
-                    stdout: logHandlers.stdout,
-                    stderr: logHandlers.stderr
+            // Install pypulseq (required for optimized plot function)
+            console.log('Installing pypulseq...');
+            if (loader) {
+                const cities = ['Freiburg', 'New York', 'Berlin', 'Erlangen'];
+                const loaderText = loader.querySelector('.loader-text');
+                loaderText.textContent = 'Connecting Freiburg';
+                
+                // Progressively add cities every 1 second
+                cities.slice(1).forEach((city, index) => {
+                    setTimeout(() => {
+                        const currentCities = cities.slice(0, index + 2);
+                        loaderText.textContent = 'Connecting ' + currentCities.join(', ');
+                    }, (index + 1) * 1000);
                 });
-                
-                // Load matplotlib and micropip for dependency installation
-                console.log('Installing matplotlib, micropip...');
-                if (loader) loader.querySelector('.loader-text').textContent = 'Start Rotating Spins';
-                await pyodide.loadPackage(['matplotlib', 'micropip'], { checkIntegrity: false });
-                
-                const micropip = pyodide.pyimport("micropip");
-                
-                // Install pypulseq (required for optimized plot function)
-                console.log('Installing pypulseq...');
-                if (loader) {
-                    const cities = ['Freiburg', 'New York', 'Berlin', 'Erlangen'];
-                    const loaderText = loader.querySelector('.loader-text');
-                    loaderText.textContent = 'Connecting Freiburg';
-                    
-                    // Progressively add cities every 1 second
-                    cities.slice(1).forEach((city, index) => {
-                        setTimeout(() => {
-                            const currentCities = cities.slice(0, index + 2);
-                            loaderText.textContent = 'Connecting ' + currentCities.join(', ');
-                        }, (index + 1) * 1000);
-                    });
-                }
-                await micropip.install(['pypulseq']);
-                
-                // Configure matplotlib
-                await pyodide.runPythonAsync(`
+            }
+            await micropip.install(['pypulseq']);
+            
+            // Configure matplotlib
+            await pyodide.runPythonAsync(`
 import matplotlib.pyplot as plt
 plt.ion()
 print(f"Matplotlib backend: {plt.get_backend()}")
 `);
-                
-                console.log('Pyodide, matplotlib, micropip, and pypulseq loaded');
-            } catch (error) {
-                console.warn('Pyodide not available, using fallback parsing:', error);
+            
+            console.log('Pyodide, matplotlib, micropip, and pypulseq loaded');
+        } catch (error) {
+            console.warn('Pyodide not available, using fallback parsing:', error);
+        }
+        
+        // Initialize sequence explorer with empty sources - will load from config file
+        explorer = new SequenceExplorer('seq-explorer-widget', {
+            onlySeqPrefix: false,
+            pyodide: pyodide,
+            sources: [], // Start empty, will load from sources_config.py
+            onSequenceSelect: (sequence) => {
+                console.log('Selected sequence:', sequence);
+                // Handle sequence selection
             }
-            
-            // Initialize sequence explorer with empty sources - will load from config file
-            explorer = new SequenceExplorer('seq-explorer-widget', {
-                onlySeqPrefix: false,
-                pyodide: pyodide,
-                sources: [], // Start empty, will load from sources_config.py
-                onSequenceSelect: (sequence) => {
-                    console.log('Selected sequence:', sequence);
-                    // Handle sequence selection
-                }
-            });
-            
-            // Log initialization messages
-            if (pyodide) {
-                explorer.log('Pyodide runtime loaded', 'info');
-                explorer.log('Packages installed: matplotlib, micropip, pypulseq', 'info');
-            }
-            
-            // Install optimized plot function if Pyodide is available
-            if (pyodide) {
-                try {
-                    if (loader) loader.querySelector('.loader-text').textContent = 'Connecting MR-zero';
-                    explorer.log('Installing optimized plot function...', 'info');
-                    await explorer.installOptimizedPlotFunction();
-                    explorer.log('Optimized plot function installed', 'success');
-                    
-                    // Detect and display versions
-                    await explorer.detectVersions();
-                    explorer.log('Version detection complete', 'info');
-                } catch (error) {
-                    console.warn('Failed to install optimized plot function:', error);
-                    explorer.log(`Failed to install optimized plot function: ${error.message}`, 'error');
-                }
-            }
-            
-            // Load default sources from config file
-            if (loader) loader.querySelector('.loader-text').textContent = 'Loading Sequences...';
-            explorer.log('Loading sources from config...', 'info');
-            fetch('sources_config.py')
-                .then(response => response.text())
-                .then(configCode => {
-                    explorer.loadSourcesFromConfig(configCode).then(() => {
-                        explorer.log('Sources loaded successfully', 'success');
-                    }).catch(err => {
-                        console.error('Failed to load default sources:', err);
-                        explorer.showStatus('Failed to load default sources. Use "Add Sources" to configure.', 'error');
-                        explorer.log(`Failed to load sources: ${err.message}`, 'error');
-                    }).finally(() => {
-                        // Show ready message before hiding loader
-                        if (loader) {
-                            loader.querySelector('.loader-text').textContent = 'Ready for scanning!';
-                            setTimeout(() => {
-                                loader.classList.remove('active');
-                                loader.classList.add('hidden');
-                                setTimeout(() => {
-                                    loader.style.display = 'none';
-                                }, 500);
-                            }, 800);
-                        }
-                    });
-                })
-                .catch(err => {
-                    console.warn('Could not load sources_config.py, starting with empty sources:', err);
-                    explorer.showStatus('No default sources found. Use "Add Sources" to configure.', 'info');
-                    explorer.log('No sources_config.py found, starting with empty sources', 'warn');
-                    // Show ready message even if sources fail to load
-                    if (loader) {
-                        loader.querySelector('.loader-text').textContent = 'Ready for scanning!';
-                        setTimeout(() => {
-                            loader.classList.remove('active');
-                            loader.classList.add('hidden');
-                            setTimeout(() => {
-                                loader.style.display = 'none';
-                            }, 500);
-                        }, 800);
-                    }
-                });
-            
-            // Make explorer available globally for testing
-            window.seqExplorer = explorer;
         });
+        
+        // Log initialization messages
+        if (pyodide) {
+            explorer.log('Pyodide runtime loaded', 'info');
+            explorer.log('Packages installed: matplotlib, micropip, pypulseq', 'info');
+        }
+        
+        // Install optimized plot function if Pyodide is available
+        if (pyodide) {
+            try {
+                if (loader) loader.querySelector('.loader-text').textContent = 'Connecting MR-zero';
+                explorer.log('Installing optimized plot function...', 'info');
+                await explorer.installOptimizedPlotFunction();
+                explorer.log('Optimized plot function installed', 'success');
+                
+                // Detect and display versions
+                await explorer.detectVersions();
+                explorer.log('Version detection complete', 'info');
+            } catch (error) {
+                console.warn('Failed to install optimized plot function:', error);
+                explorer.log(`Failed to install optimized plot function: ${error.message}`, 'error');
+            }
+        }
+        
+        // Load default sources
+        if (loader) loader.querySelector('.loader-text').textContent = 'Loading Sequences...';
+        explorer.log('Loading sources from config...', 'info');
+        
+        try {
+            await explorer.loadDefaultSources();
+            explorer.log('Sources loaded successfully', 'success');
+        } catch (err) {
+            console.warn('Failed to load default sources:', err);
+            explorer.showStatus('Failed to load default sources. Use "Add Sources" to configure.', 'warn');
+            explorer.log(`Failed to load sources: ${err.message}`, 'error');
+        } finally {
+            // Show ready message before hiding loader
+            if (loader) {
+                loader.querySelector('.loader-text').textContent = 'Ready for scanning!';
+                setTimeout(() => {
+                    loader.classList.remove('active');
+                    loader.classList.add('hidden');
+                    setTimeout(() => {
+                        loader.style.display = 'none';
+                    }, 500);
+                }, 800);
+            }
+        }
+        
+        // Make explorer available globally for testing
+        window.seqExplorer = explorer;
     </script>
 </body>
 </html>

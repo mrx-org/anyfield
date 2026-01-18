@@ -1,0 +1,244 @@
+:root {
+  --bg: #0b1020;
+  --panel: #111a33;
+  --text: #e8ecff;
+  --muted: #a9b3da;
+  --border: rgba(255, 255, 255, 0.12);
+  --accent: #3b82f6;
+}
+
+.niivue-app {
+  height: 100%;
+  margin: 0;
+  background: var(--bg);
+  color: var(--text);
+  font: 14px/1.4 system-ui, -apple-system, Segoe UI, Roboto, Helvetica,
+    Arial, "Apple Color Emoji", "Segoe UI Emoji";
+}
+
+.niivue-app .layout {
+  height: 100%;
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  padding: 12px;
+  box-sizing: border-box;
+}
+
+.niivue-app .viewer {
+  flex: 1;
+  position: relative;
+  background: #000;
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  overflow: hidden;
+  min-height: 400px;
+}
+
+.niivue-app .options-grid {
+  display: grid;
+  grid-template-columns: repeat(4, 1fr);
+  gap: 12px;
+  height: auto;
+}
+
+.niivue-app .panel {
+  background: var(--panel);
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  padding: 12px;
+  overflow: auto;
+}
+
+.niivue-app .panel h1 {
+  font-size: 14px;
+  margin: 0 0 10px;
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+  color: var(--accent);
+}
+
+.niivue-app .row {
+  display: grid;
+  gap: 8px;
+  margin-bottom: 12px;
+}
+
+.niivue-app .btn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  border: 1px solid var(--border);
+  background: rgba(255, 255, 255, 0.06);
+  color: var(--text);
+  border-radius: 8px;
+  padding: 8px 10px;
+  cursor: pointer;
+  font-size: 12px;
+}
+
+.niivue-app .btn.primary {
+  background: var(--accent);
+  border-color: rgba(0, 0, 0, 0.15);
+}
+
+.niivue-app .btn:disabled {
+  opacity: 0.6;
+  cursor: not-allowed;
+}
+
+.niivue-app .kv {
+  margin-top: 8px;
+  color: var(--muted);
+  display: grid;
+  gap: 4px;
+  font-size: 11px;
+}
+
+.niivue-app .stateBox {
+  margin-top: 10px;
+  padding: 8px;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  background: rgba(255, 255, 255, 0.04);
+  display: grid;
+  gap: 4px;
+  color: var(--muted);
+  font-size: 11px;
+}
+
+.niivue-app .stateRow {
+  display: grid;
+  grid-template-columns: 90px 1fr;
+  gap: 6px;
+  align-items: baseline;
+}
+
+.niivue-app .stateKey {
+  color: var(--text);
+  opacity: 0.8;
+}
+
+.niivue-app .stateVal {
+  font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas,
+    "Liberation Mono", "Courier New", monospace;
+  font-variant-numeric: tabular-nums;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.niivue-app .stateVal.auto-wrap {
+  white-space: normal;
+  overflow: visible;
+  text-overflow: clip;
+  word-break: break-all;
+}
+
+.niivue-app canvas {
+  width: 100%;
+  height: 100%;
+  display: block;
+}
+
+.niivue-app .status {
+  position: absolute;
+  left: 10px;
+  bottom: 10px;
+  padding: 6px 8px;
+  background: rgba(0, 0, 0, 0.55);
+  border: 1px solid rgba(255, 255, 255, 0.12);
+  border-radius: 8px;
+  color: #fff;
+  font-size: 12px;
+  pointer-events: none;
+  max-width: 80%;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.niivue-app .hint {
+  margin-top: 10px;
+  color: var(--text);
+  opacity: 0.95;
+  font-size: 14px;
+  line-height: 1.5;
+  background: rgba(255, 255, 255, 0.07);
+  padding: 10px;
+  border-radius: 6px;
+  border: 1px solid var(--border);
+}
+
+.niivue-app .toggle {
+  display: flex;
+  gap: 8px;
+  align-items: center;
+  color: var(--muted);
+  font-size: 12px;
+  user-select: none;
+}
+
+.niivue-app .toggle input {
+  transform: translateY(0.5px);
+}
+
+.niivue-app .sliderGroup {
+  display: grid;
+  gap: 8px;
+  padding: 10px;
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  background: rgba(255, 255, 255, 0.04);
+}
+
+.niivue-app .sliderRow {
+  display: grid;
+  grid-template-columns: 1fr auto;
+  align-items: center;
+  gap: 10px;
+  color: var(--muted);
+  font-size: 12px;
+}
+
+.niivue-app .sliderRow input[type="range"] {
+  width: 60px;
+}
+
+.niivue-app .num-input {
+  background: rgba(255, 255, 255, 0.08);
+  border: 1px solid var(--border);
+  color: var(--text);
+  border-radius: 4px;
+  padding: 2px 4px;
+  width: 45px;
+  font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace;
+  font-size: 11px;
+  text-align: right;
+}
+
+.niivue-app .num-input::-webkit-inner-spin-button, 
+.niivue-app .num-input::-webkit-outer-spin-button { 
+  -webkit-appearance: none; 
+  margin: 0; 
+}
+
+.niivue-app .num-input {
+  -moz-appearance: textfield;
+}
+
+.niivue-app .input-sync {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.niivue-app .mono {
+  font-variant-numeric: tabular-nums;
+  font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas,
+    "Liberation Mono", "Courier New", monospace;
+}
+
+.niivue-app input[type="file"] {
+  width: 100%;
+}

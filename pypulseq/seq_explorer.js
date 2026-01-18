@@ -10,7 +10,7 @@
  *   });
  */
 
-class SequenceExplorer {
+export class SequenceExplorer {
     constructor(containerId, config = {}) {
         this.container = typeof containerId === 'string' 
             ? document.getElementById(containerId) 
@@ -20,8 +20,13 @@ class SequenceExplorer {
             throw new Error(`Container not found: ${containerId}`);
         }
         
+        // Determine base path from the module URL
+        const moduleUrl = import.meta.url;
+        const defaultBasePath = moduleUrl.substring(0, moduleUrl.lastIndexOf('/') + 1);
+        
         // Configuration
         this.config = {
+            basePath: config.basePath !== undefined ? config.basePath : defaultBasePath,
             onlySeqPrefix: config.onlySeqPrefix !== undefined ? config.onlySeqPrefix : false,
             sources: config.sources || [],
             onSequenceSelect: config.onSequenceSelect || null,
@@ -44,6 +49,15 @@ class SequenceExplorer {
         if (this.config.sources.length > 0) {
             this.loadSequences();
         }
+    }
+    
+    resolvePath(path) {
+        // If it's a full URL or absolute path, return it as is
+        if (path.includes('://') || path.startsWith('/')) {
+            return path;
+        }
+        // Otherwise, prefix with basePath
+        return this.config.basePath + path;
     }
     
     render() {
@@ -276,7 +290,7 @@ plt.rcParams['figure.figsize'] = [8, 3.5]  # Keep figure size setting`;
         
         try {
             // Load and execute the standalone plot utils file
-            const response = await fetch('seq_plot_utils.py?' + Date.now());
+            const response = await fetch(this.resolvePath('seq_plot_utils.py?') + Date.now());
             const plotUtilsCode = await response.text();
             
             await pyodide.runPythonAsync(plotUtilsCode);
@@ -631,7 +645,7 @@ else:
         }
         
         // Regular file loading
-        const response = await fetch(source.path);
+        const response = await fetch(this.resolvePath(source.path));
         if (!response.ok) throw new Error(`Failed to fetch ${source.path}`);
         const code = await response.text();
         await this.parseFile(source.name || source.path, code, source);
@@ -1236,7 +1250,7 @@ json.dumps(functions)
                 let code = fileData?.code;
                 if (!code) {
                     if (source.type === 'local_file' || source.type === 'built-in') {
-                        code = await (await fetch(source.path)).text();
+                        code = await (await fetch(this.resolvePath(source.path))).text();
                     } else if (source.type === 'github_raw' || source.type === 'remote_file') {
                         // For remote_file, convert GitHub blob URLs to raw if needed
                         let fetchUrl = source.url;
@@ -1711,8 +1725,10 @@ json.dumps(_result)
             
             // Create container if it doesn't exist
             if (!plotContainer && plotOutput) {
-                plotOutput.innerHTML = '<div id="seq-mpl-actual-target" class="mpl-figure-container"></div>';
-                plotContainer = this.container.querySelector('#seq-mpl-actual-target');
+                plotContainer = document.createElement('div');
+                plotContainer.id = 'seq-mpl-actual-target';
+                plotContainer.className = 'mpl-figure-container';
+                plotOutput.appendChild(plotContainer);
             }
             
             // Clear the container
@@ -1786,7 +1802,7 @@ json.dumps(_result)
                 let code = fileData?.code;
                 if (!code) {
                     if (source.type === 'local_file' || source.type === 'built-in') {
-                        code = await (await fetch(source.path)).text();
+                        code = await (await fetch(this.resolvePath(source.path))).text();
                     } else if (source.type === 'github_raw' || source.type === 'remote_file') {
                         let fetchUrl = source.url;
                         if (source.type === 'remote_file' && source.url.includes('github.com') && source.url.includes('/blob/')) {
@@ -1834,6 +1850,10 @@ finally:
 # Get sequence from SourceManager._last_sequence (stored by execute_function)
 seq = getattr(SourceManager, '_last_sequence', None)
 
+# Ensure pypulseq is patched (SourceManager re-imports may have lost it)
+if hasattr(sys, '_pp_patch_func'):
+    sys._pp_patch_func()
+
 # Plot if sequence found
 if seq is not None:
     plt.close('all')
@@ -1878,6 +1898,10 @@ finally:
 
 # Get sequence from SourceManager._last_sequence (stored by execute_function)
 seq = getattr(SourceManager, '_last_sequence', None)
+
+# Ensure pypulseq is patched (SourceManager re-imports may have lost it)
+if hasattr(sys, '_pp_patch_func'):
+    sys._pp_patch_func()
 
 # Plot if sequence found
 if seq is not None:
@@ -2143,6 +2167,10 @@ finally:
 # Get sequence from SourceManager._last_sequence (stored by execute_function)
 seq = getattr(SourceManager, '_last_sequence', None)
 
+# Ensure pypulseq is patched (SourceManager re-imports may have lost it)
+if hasattr(sys, '_pp_patch_func'):
+    sys._pp_patch_func()
+
 # Plot if sequence found
 if seq is not None:
     plt.close('all')
@@ -2187,6 +2215,10 @@ finally:
 
 # Get sequence from SourceManager._last_sequence (stored by execute_function)
 seq = getattr(SourceManager, '_last_sequence', None)
+
+# Ensure pypulseq is patched (SourceManager re-imports may have lost it)
+if hasattr(sys, '_pp_patch_func'):
+    sys._pp_patch_func()
 
 # Plot if sequence found
 if seq is not None:
@@ -2281,7 +2313,7 @@ sources = ${sourcesJson.replace(/"([^"]+)":/g, "'$1':").replace(/true/g, 'True')
         } else {
             // If no sources in memory, try to load from file
             try {
-                const response = await fetch('sources_config.py?' + Date.now()); // Add cache bust
+                const response = await fetch(this.resolvePath('sources_config.py?') + Date.now()); // Add cache bust
                 if (response.ok) {
                     currentConfig = await response.text();
                     console.log('Loaded sources_config.py from file');
@@ -2459,7 +2491,7 @@ sources = ${sourcesJson.replace(/"([^"]+)":/g, "'$1':").replace(/true/g, 'True')
     async getDefaultSourcesConfig() {
         // Try to load from sources_config.py file
         try {
-            const response = await fetch('sources_config.py');
+            const response = await fetch(this.resolvePath('sources_config.py'));
             if (response.ok) {
                 return await response.text();
             }
@@ -2500,7 +2532,7 @@ sources = [
         // Try to fetch and execute it
         let sourceManagerCode = null;
         try {
-            const response = await fetch('seq_source_manager.py?' + Date.now()); // Cache bust
+            const response = await fetch(this.resolvePath('seq_source_manager.py?') + Date.now()); // Cache bust
             if (response.ok) {
                 sourceManagerCode = await response.text();
             }
@@ -2525,6 +2557,11 @@ sys.modules['seq_source_manager'] = seq_source_manager
 # Execute the code in the module's namespace so classes are defined there
 exec(${JSON.stringify(sourceManagerCode)}, seq_source_manager.__dict__)
 `);
+    }
+    
+    async loadDefaultSources() {
+        const configCode = await this.getDefaultSourcesConfig();
+        await this.loadSourcesFromConfig(configCode);
     }
     
     async loadSourcesFromConfig(configCode) {
@@ -2594,7 +2631,7 @@ _result if _result else json.dumps({'error': 'No result returned from Python cod
     async getDefaultSourcesConfig() {
         // Try to load from sources_config.py file
         try {
-            const response = await fetch('sources_config.py');
+            const response = await fetch(this.resolvePath('sources_config.py'));
             if (response.ok) {
                 return await response.text();
             }
