@@ -111,7 +111,7 @@ body {
 
 .seq-explorer-panes {
     display: flex;
-    gap: 1rem;
+    gap: 0.5rem;
     min-height: 500px;
 }
 
@@ -331,7 +331,6 @@ body {
     font-weight: 600;
     color: var(--accent);
     margin-bottom: 0.75rem;
-    text-transform: uppercase;
     letter-spacing: 0.05em;
 }
 
@@ -345,22 +344,45 @@ body {
 #seq-params-controls table {
     width: 100%;
     border-collapse: collapse;
+    border-spacing: 0;
 }
 
 #seq-params-controls table td {
-    padding: 0.4rem 0.5rem;
-    border-bottom: 1px solid var(--border);
+    padding: 0.05rem 0.25rem;
+    vertical-align: middle;
+    line-height: 1.2;
+}
+
+#seq-params-controls table td:first-child {
+    font-size: 0.8rem;
+    font-weight: bold;
+    color: var(--muted);
+    letter-spacing: 0.05em;
+    width: 100px;
+}
+
+#seq-params-controls table td:nth-child(2) {
+    width: auto;
+    min-width: 100px;
+}
+
+#seq-params-controls table td:last-child {
+    width: 60px;
+    text-align: right;
 }
 
 #seq-params-controls input[type="text"],
 #seq-params-controls input[type="number"] {
     width: 100%;
-    padding: 0.3rem 0.5rem;
+    min-width: 100px;
+    padding: 0.1rem 0.3rem;
     border: 1px solid var(--border);
     border-radius: 4px;
+    font-size: 0.8rem;
     background: rgba(255, 255, 255, 0.08);
     color: var(--text);
-    font-size: 0.8rem;
+    line-height: 1.2;
+    height: auto;
 }
 
 #seq-params-controls input:focus {
@@ -582,4 +604,117 @@ body {
 
 #seq-plot-output div[id$="top"] button:hover {
     background: rgba(255, 255, 255, 0.15);
+}
+
+/* Popup plot container - same styling as regular plot output */
+#seq-popup-plot-container * {
+    visibility: visible !important;
+    pointer-events: auto !important;
+}
+
+/* Hide the figure titles and title bars in popup */
+#seq-popup-plot-container .ui-dialog-titlebar {
+    display: none !important;
+}
+
+/* Scale down the entire toolbar area and its contents in popup */
+#seq-popup-plot-container .mpl-toolbar, 
+#seq-popup-plot-container div[id$="top"] {
+    display: flex !important;
+    flex-wrap: wrap;
+    gap: 3px;
+    margin-bottom: 0;
+    background: rgba(255, 255, 255, 0.06);
+    padding: 3px;
+    border-bottom: 1px solid var(--border);
+    border-radius: 0;
+    min-height: 24px;
+}
+
+#seq-popup-plot-container .mpl-toolbar button,
+#seq-popup-plot-container div[id$="top"] button,
+#seq-popup-plot-container .mpl-widget {
+    padding: 2px 6px;
+    background: var(--accent);
+    border: 1px solid var(--border);
+    border-radius: 4px;
+    cursor: pointer;
+    font-size: 10px;
+    line-height: 1.2;
+    color: var(--text);
+    transition: all 0.2s ease;
+    opacity: 1;
+}
+
+#seq-popup-plot-container .mpl-toolbar button:hover,
+#seq-popup-plot-container div[id$="top"] button:hover,
+#seq-popup-plot-container .mpl-widget:hover {
+    background: rgba(59, 130, 246, 0.2);
+    border-color: var(--accent);
+    color: white;
+}
+
+#seq-popup-plot-container .mpl-toolbar button:active,
+#seq-popup-plot-container div[id$="top"] button:active,
+#seq-popup-plot-container .mpl-widget:active,
+#seq-popup-plot-container .mpl-toolbar button.mpl-active,
+#seq-popup-plot-container div[id$="top"] button.mpl-active,
+#seq-popup-plot-container .mpl-widget.mpl-active {
+    background: var(--accent);
+    border-color: var(--accent);
+    color: white;
+}
+
+/* Style select dropdowns if they appear in the toolbar in popup */
+#seq-popup-plot-container .mpl-toolbar select,
+#seq-popup-plot-container div[id$="top"] select {
+    font-size: 10px !important;
+    padding: 0 3px !important;
+    height: 20px !important;
+    background: rgba(255, 255, 255, 0.1);
+    color: var(--text);
+    border: 1px solid var(--border);
+}
+
+/* Handle any images/icons in the toolbar in popup */
+#seq-popup-plot-container .mpl-toolbar img,
+#seq-popup-plot-container div[id$="top"] img {
+    width: 15px !important;
+    height: 15px !important;
+}
+
+/* Tighten up the coordinate display area in popup */
+#seq-popup-plot-container div[id$="message"] {
+    font-size: 10px !important;
+    padding: 2px 6px !important;
+    min-height: 1rem !important;
+    background: rgba(255, 255, 255, 0.04);
+    border-top: 1px solid var(--border);
+    color: var(--text);
+}
+
+#seq-popup-plot-container div[id$="top"] button:hover {
+    background: rgba(255, 255, 255, 0.15);
+}
+
+/* Style figure containers in popup */
+#seq-popup-plot-container .mpl-figure-container > div {
+    border: 1px solid var(--border) !important;
+    border-radius: 10px !important;
+    padding: 0 !important;
+    background: var(--panel) !important;
+    box-shadow: 0 2px 4px -1px rgba(0, 0, 0, 0.3) !important;
+    position: relative !important;
+    display: inline-block !important;
+    width: fit-content !important;
+    max-width: 100% !important;
+    margin: 0 0 0.5rem 0 !important;
+    overflow: hidden;
+}
+
+#seq-popup-plot-container canvas {
+    display: block;
+    max-width: 100%;
+    height: auto !important;
+    border-radius: 0;
 }

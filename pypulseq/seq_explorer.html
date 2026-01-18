@@ -72,7 +72,19 @@
                 
                 // Install pypulseq (required for optimized plot function)
                 console.log('Installing pypulseq...');
-                if (loader) loader.querySelector('.loader-text').textContent = 'Connecting to Freiburg';
+                if (loader) {
+                    const cities = ['Freiburg', 'New York', 'Berlin', 'Erlangen'];
+                    const loaderText = loader.querySelector('.loader-text');
+                    loaderText.textContent = 'Connecting Freiburg';
+                    
+                    // Progressively add cities every 1 second
+                    cities.slice(1).forEach((city, index) => {
+                        setTimeout(() => {
+                            const currentCities = cities.slice(0, index + 2);
+                            loaderText.textContent = 'Connecting ' + currentCities.join(', ');
+                        }, (index + 1) * 1000);
+                    });
+                }
                 await micropip.install(['pypulseq']);
                 
                 // Configure matplotlib

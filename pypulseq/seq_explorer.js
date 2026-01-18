@@ -103,6 +103,7 @@ class SequenceExplorer {
                             <div style="display: flex; gap: 0.5rem; align-items: center;">
                                 <button id="seq-edit-btn" style="padding: 0.4rem 0.32rem; background: rgba(255, 255, 255, 0.1); color: var(--text, #ddd); border: 1px solid var(--border, #333); border-radius: 4px; cursor: pointer; font-size: 0.875rem; font-weight: 500;">edit seq</button>
                                 <button id="seq-execute-btn" style="padding: 0.4rem 0.32rem; background: var(--accent); color: white; border: none; border-radius: 4px; cursor: pointer; font-size: 0.875rem; font-weight: 500;">plot seq</button>
+                                <button id="seq-pop-btn" style="padding: 0.4rem 0.32rem; background: rgba(255, 255, 255, 0.1); color: var(--text, #ddd); border: 1px solid var(--border, #333); border-radius: 4px; cursor: pointer; font-size: 0.875rem; font-weight: 500;">pop seq</button>
                             </div>
                         </div>
                         <div style="display: flex; align-items: center; justify-content: space-between; margin-bottom: 0.75rem; padding-top: 0.5rem; border-top: 1px solid var(--border);">
@@ -174,6 +175,13 @@ class SequenceExplorer {
         if (executeBtn) {
             executeBtn.addEventListener('click', () => {
                 this.executeFunction();
+            });
+        }
+        
+        const popBtn = this.container.querySelector('#seq-pop-btn');
+        if (popBtn) {
+            popBtn.addEventListener('click', () => {
+                this.executeFunctionInPopup();
             });
         }
         
@@ -1174,12 +1182,16 @@ json.dumps(functions)
         const paramsControls = this.container.querySelector('#seq-params-controls');
         const executeBtn = this.container.querySelector('#seq-execute-btn');
         const editBtn = this.container.querySelector('#seq-edit-btn');
+        const popBtn = this.container.querySelector('#seq-pop-btn');
         
         if (!paramsSection || !paramsControls || !executeBtn) return;
         
-        // Enable/disable edit button based on selection
+        // Enable/disable edit and pop buttons based on selection
         if (editBtn) {
             editBtn.disabled = !sequence;
+        }
+        if (popBtn) {
+            popBtn.disabled = !sequence;
         }
         
         // Show loading state
@@ -1908,6 +1920,298 @@ result
         } finally {
             executeBtn.disabled = false;
             executeBtn.textContent = 'plot seq';
+        }
+    }
+    
+    async executeFunctionInPopup() {
+        if (!this.selectedSequence || !this.config.pyodide) {
+            console.warn('No function selected or Pyodide not available');
+            return;
+        }
+        
+        const { fileName, functionName, source } = this.selectedSequence;
+        
+        // Create modal similar to editor modal
+        const modal = document.createElement('div');
+        modal.className = 'seq-editor-modal';
+        modal.style.cssText = `
+            position: fixed;
+            top: 0;
+            left: 0;
+            width: 100%;
+            height: 100%;
+            background: rgba(0, 0, 0, 0.7);
+            z-index: 10000;
+            display: flex;
+            justify-content: center;
+            align-items: center;
+        `;
+        
+        const modalContent = document.createElement('div');
+        modalContent.className = 'seq-editor-container';
+        modalContent.style.cssText = `
+            background: var(--panel, #111a33);
+            border-radius: 10px;
+            width: 90%;
+            max-width: 1200px;
+            height: 85%;
+            display: flex;
+            flex-direction: column;
+            box-shadow: 0 10px 25px rgba(0, 0, 0, 0.5);
+            border: 1px solid var(--border, rgba(255, 255, 255, 0.12));
+        `;
+        
+        const header = document.createElement('div');
+        header.className = 'seq-editor-header';
+        header.style.cssText = `
+            padding: 1rem;
+            background: var(--panel, #111a33);
+            color: var(--text, #e8ecff);
+            border-radius: 10px 10px 0 0;
+            border-bottom: 1px solid var(--border, rgba(255, 255, 255, 0.12));
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+        `;
+        
+        const title = document.createElement('h2');
+        title.textContent = `Sequence Plot: ${fileName}:${functionName}`;
+        title.style.cssText = 'margin: 0; font-size: 1.1rem;';
+        header.appendChild(title);
+        
+        const closeBtn = document.createElement('button');
+        closeBtn.textContent = 'Close';
+        closeBtn.style.cssText = 'padding: 0.4rem 0.8rem; background: #555; color: white; border: none; border-radius: 4px; cursor: pointer; font-size: 0.875rem;';
+        closeBtn.onclick = () => {
+            // Clean up matplotlib target
+            document.pyodideMplTarget = this.container.querySelector('#seq-plot-output');
+            window.pyodideMplTarget = this.container.querySelector('#seq-plot-output');
+            modal.remove();
+        };
+        header.appendChild(closeBtn);
+        
+        const plotContainer = document.createElement('div');
+        plotContainer.id = 'seq-popup-plot-container';
+        plotContainer.style.cssText = `
+            flex: 1;
+            overflow: auto;
+            padding: 1rem;
+            background: var(--bg, #0b1020);
+        `;
+        
+        // Create matplotlib target container (same structure as regular plot output)
+        const mplTarget = document.createElement('div');
+        mplTarget.id = 'seq-popup-mpl-target';
+        mplTarget.className = 'mpl-figure-container';
+        mplTarget.style.cssText = `
+            display: flex;
+            flex-direction: column;
+            gap: 0.5rem;
+            width: 100%;
+            min-height: 0;
+            padding: 0.25rem;
+        `;
+        plotContainer.appendChild(mplTarget);
+        
+        modalContent.appendChild(header);
+        modalContent.appendChild(plotContainer);
+        modal.appendChild(modalContent);
+        document.body.appendChild(modal);
+        
+        // Close modal when clicking outside
+        modal.addEventListener('click', (e) => {
+            if (e.target === modal) {
+                document.pyodideMplTarget = this.container.querySelector('#seq-plot-output');
+                window.pyodideMplTarget = this.container.querySelector('#seq-plot-output');
+                modal.remove();
+            }
+        });
+        
+        // Set matplotlib target to modal container
+        document.pyodideMplTarget = mplTarget;
+        window.pyodideMplTarget = mplTarget;
+        
+        try {
+            const pyodide = this.config.pyodide;
+            const plotSpeed = this.container.querySelector('#seq-plot-speed-selector')?.value || 'faster';
+            const darkPlot = this.container.querySelector('#seq-dark-plot-checkbox')?.checked ?? true;
+            
+            // Get theme code
+            const themeCode = darkPlot ? `
+plt.rcParams.update({
+    'figure.figsize': [10, 5],
+    'figure.facecolor': '#111a33',
+    'axes.facecolor': '#111a33',
+    'axes.edgecolor': (1.0, 1.0, 1.0, 0.12),
+    'axes.labelcolor': '#e8ecff',
+    'text.color': '#e8ecff',
+    'xtick.color': '#a9b3da',
+    'ytick.color': '#a9b3da',
+    'grid.color': (1.0, 1.0, 1.0, 0.12),
+    'figure.edgecolor': '#111a33',
+    'savefig.facecolor': '#111a33',
+    'savefig.edgecolor': '#111a33'
+})` : `
+plt.rcdefaults()
+plt.rcParams['figure.figsize'] = [10, 5]`;
+            
+            // Build args dict from parameters
+            const argsDict = {};
+            const paramsControls = this.container.querySelector('#seq-params-controls');
+            if (paramsControls) {
+                const inputs = paramsControls.querySelectorAll('input, select');
+                inputs.forEach(input => {
+                    const paramName = input.id.replace('input-', '');
+                    if (!paramName) return;
+                    
+                    const param = this.selectedSequence.params?.find(p => p.name === paramName);
+                    if (!param) return;
+                    
+                    let valExpr;
+                    if (param.type === 'bool') {
+                        valExpr = input.checked ? 'True' : 'False';
+                    } else {
+                        const inputValue = input.value.trim();
+                        if (inputValue === '') {
+                            return; // Skip empty values, use default
+                        }
+                        
+                        if (param.type === 'int' || param.type === 'float') {
+                            valExpr = inputValue;
+                        } else if (param.type === 'list' || param.type === 'ndarray') {
+                            valExpr = `np.array(${inputValue})`;
+                        } else if (param.type === 'str') {
+                            valExpr = `"${inputValue}"`;
+                        } else {
+                            valExpr = inputValue;
+                        }
+                    }
+                    argsDict[paramName] = valExpr;
+                });
+            }
+            
+            // Get code
+            const fileData = this.sequences[fileName];
+            const code = fileData?.code;
+            
+            let result;
+            if (source.type === 'local_file' || source.type === 'built-in' || source.type === 'github_raw' || source.type === 'remote_file' || source.type === 'github_folder') {
+                result = await pyodide.runPythonAsync(`
+import json
+import sys
+import matplotlib.pyplot as plt
+import __main__
+import pypulseq as pp
+from seq_source_manager import SourceManager
+
+# Configure matplotlib
+plt.close('all')
+plt.ion()
+${themeCode}
+
+# Temporarily disable plotting during code execution to prevent hanging
+_orig_plot, _orig_show = pp.Sequence.plot, plt.show
+pp.Sequence.plot = plt.show = lambda *args, **kwargs: None
+
+try:
+    # Execute the function
+    manager = SourceManager()
+    result = manager.execute_function(
+        module_path=None,
+        function_name='${functionName}',
+        code=${JSON.stringify(code)},
+        args_dict=${JSON.stringify(argsDict)}
+    )
+finally:
+    # Restore plotting functions
+    pp.Sequence.plot, plt.show = _orig_plot, _orig_show
+
+# Get sequence from SourceManager._last_sequence (stored by execute_function)
+seq = getattr(SourceManager, '_last_sequence', None)
+
+# Plot if sequence found
+if seq is not None:
+    plt.close('all')
+    seq.plot(plot_now=False, plot_speed="${plotSpeed}")
+    plt.show()
+else:
+    print("No sequence found")
+
+result
+`);
+            } else if (source.type === 'pyodide_module') {
+                const modulePath = source.fullModulePath || source.module;
+                result = await pyodide.runPythonAsync(`
+import json
+import sys
+import matplotlib.pyplot as plt
+import __main__
+import pypulseq as pp
+from seq_source_manager import SourceManager
+
+# Configure matplotlib
+plt.close('all')
+plt.ion()
+${themeCode}
+
+# Temporarily disable plotting during code execution to prevent hanging
+_orig_plot, _orig_show = pp.Sequence.plot, plt.show
+pp.Sequence.plot = plt.show = lambda *args, **kwargs: None
+
+try:
+    # Execute the function
+    manager = SourceManager()
+    result = manager.execute_function(
+        module_path='${modulePath}',
+        function_name='${functionName}',
+        code=None,
+        args_dict=${JSON.stringify(argsDict)}
+    )
+finally:
+    # Restore plotting functions
+    pp.Sequence.plot, plt.show = _orig_plot, _orig_show
+
+# Get sequence from SourceManager._last_sequence (stored by execute_function)
+seq = getattr(SourceManager, '_last_sequence', None)
+
+# Plot if sequence found
+if seq is not None:
+    plt.close('all')
+    seq.plot(plot_now=False, plot_speed="${plotSpeed}")
+    plt.show()
+else:
+    print("No sequence found")
+
+result
+`);
+            } else {
+                throw new Error(`Cannot execute function for source type: ${source.type}`);
+            }
+            
+            // Final sweep for any matplotlib figures
+            setTimeout(() => {
+                document.querySelectorAll('div.ui-dialog, div[id^="matplotlib_"], div:has(> canvas)').forEach(el => {
+                    if (!mplTarget.contains(el) && el !== mplTarget) {
+                        mplTarget.appendChild(el);
+                    }
+                });
+            }, 800);
+            
+        } catch (error) {
+            console.error('Error executing function in popup:', error);
+            let errorMsg = error.message || String(error);
+            const assertMatch = errorMsg.match(/AssertionError: ([^\n]+)/);
+            const runtimeMatch = errorMsg.match(/RuntimeError: Error executing function '[^']+': ([^\n]+)/);
+            if (runtimeMatch) {
+                errorMsg = runtimeMatch[1];
+            } else if (assertMatch) {
+                errorMsg = assertMatch[1];
+            }
+            
+            const errorDiv = document.createElement('div');
+            errorDiv.style.cssText = 'padding: 1rem; background: rgba(239, 68, 68, 0.15); border: 1px solid rgba(239, 68, 68, 0.5); border-radius: 4px; color: #ef4444; margin: 1rem;';
+            errorDiv.textContent = `Error: ${errorMsg}`;
+            plotContainer.appendChild(errorDiv);
         }
     }
     
