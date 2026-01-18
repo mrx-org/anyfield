@@ -1077,15 +1077,21 @@ json.dumps(functions)
                 }
             }
             
+            // Get stored collapse state (default to collapsed if not set)
+            const collapseStateKey = `seq-tree-collapse-${sourceName}`;
+            const storedState = localStorage.getItem(collapseStateKey);
+            const isCollapsed = storedState === null || storedState === 'collapsed';
+            const collapsedClass = isCollapsed ? 'collapsed' : '';
+            
             html += `
                 <div class="seq-source-group">
-                    <div class="seq-source-header" data-source="${sourceName}">
+                    <div class="seq-source-header ${collapsedClass}" data-source="${sourceName}">
                         <div style="display: flex; align-items: center; gap: 0.5rem; flex: 1;">
                             <span style="font-weight: 600;">${sourceName}</span>
                             ${typeInfo ? `<span style="font-size: 0.7rem; color: var(--muted); font-style: italic;">${typeInfo}</span>` : ''}
                         </div>
                     </div>
-                    <div class="seq-source-items" data-source="${sourceName}">
+                    <div class="seq-source-items ${collapsedClass}" data-source="${sourceName}">
                         ${files.map(({ fileName, functions, source }) => {
                             // For user-edited files, use displayName if available
                             let displayFileName = fileName;
@@ -1137,8 +1143,16 @@ json.dumps(functions)
             header.addEventListener('click', () => {
                 const sourceName = header.dataset.source;
                 const itemsEl = treeEl.querySelector(`.seq-source-items[data-source="${sourceName}"]`);
+                const isCollapsed = header.classList.contains('collapsed');
+                
+                // Toggle state
                 header.classList.toggle('collapsed');
                 itemsEl.classList.toggle('collapsed');
+                
+                // Store state in localStorage
+                const collapseStateKey = `seq-tree-collapse-${sourceName}`;
+                const newIsCollapsed = header.classList.contains('collapsed');
+                localStorage.setItem(collapseStateKey, newIsCollapsed ? 'collapsed' : 'expanded');
             });
         });
         
@@ -1371,28 +1385,28 @@ json.dumps(_result)
         
         const { fileName, functionName, source } = this.selectedSequence;
         
-        // For user-edited files, use displayName if available
-        let displayFileName = fileName;
+        // Use source name from JSON configuration
+        const origin = source?.name || 'unknown';
+        
+        // Determine path to display
+        let pathToDisplay = fileName;
         if (source?.isUserEdited && source?.displayName) {
-            displayFileName = source.displayName;
+            // For user-edited files, use displayName
+            pathToDisplay = source.displayName;
+        } else if (source?.type === 'pyodide_module') {
+            // For modules, use the module path
+            pathToDisplay = source.module || source.fullModulePath || fileName;
         } else {
-            // Format: short_filename:functionName
-            let shortFileName = fileName;
-            if (fileName.includes('/')) {
-                shortFileName = fileName.split('/').pop();
-            }
-            if (shortFileName.endsWith('.py')) {
-                shortFileName = shortFileName.slice(0, -3);
-            }
-            displayFileName = shortFileName;
+            // For files, use the file path (remove user/ prefix if present)
+            pathToDisplay = fileName.replace(/^user\//, '');
         }
         
         // Remove .py extension if present
-        if (displayFileName.endsWith('.py')) {
-            displayFileName = displayFileName.slice(0, -3);
+        if (pathToDisplay.endsWith('.py')) {
+            pathToDisplay = pathToDisplay.slice(0, -3);
         }
         
-        const displayName = `${displayFileName}:${functionName}`;
+        const displayName = `${origin} / ${pathToDisplay}:${functionName}`;
         nameElement.textContent = displayName;
         
         // Get docstring for tooltip
