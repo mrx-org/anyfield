@@ -3,10 +3,14 @@
     --accent: #3b82f6;
     --size: 35px;
     --arrow-len: 120px;
-    --arrow-min: 98px;
+    /* Ratio for 98px / 120px = 0.816 */
+    --scale-min: 0.816;
     --tilt: 35deg;
     --speed: 2s;
     --color: #fff;
+    /* Delay for spin start: at 12% of 20s we show "Start Rotating Spins", +1s ≈ 3.4s */
+    --spin-delay: 8s;
+    --shadow-delay: 10s;
 }
 
 .loading-overlay {
@@ -30,7 +34,6 @@
     position: relative;
     width: 120px;
     height: 240px;
-    contain: strict;
 }
 
 /* 1. NUCLEUS */
@@ -45,15 +48,19 @@
 }
 
 /* 2. ARROW */
+/* The container handles the TILT (Rotation) */
 .arrow-pivot {
     position: absolute;
     top: 50%; left: 50%;
     width: 4px; height: 0;
-    
     /* SWING: Left <-> Right */
     animation: swing calc(var(--speed) / 2) ease-in-out infinite alternate;
-    
-    /* Z-INDEX: Front <-> Back */
+    /* Start swinging after the loading text reached "Start Rotating Spins" for ~1s */
+    animation-delay: var(--spin-delay);
+    /* Hint to browser to use GPU */
+    will-change: transform;
+    /* Initial pose: maximum tilt to the RIGHT, plus GPU promotion */
+    transform: rotate(var(--tilt)) translateZ(0);
     z-index: 20;
 }
 
@@ -61,13 +68,25 @@
     position: absolute;
     width: 100%; height: 100%;
     animation: layer-swap var(--speed) steps(1) infinite;
+    /* Keep z-layer swapping in sync with spin start */
+    animation-delay: var(--spin-delay);
 }
 
+/* The wrapper handles the LENGTH (Scaling)
+   Changed from animating height (CPU) to scaleY (GPU) */
 .stick-wrapper {
     position: absolute; 
-    left: -2px; width: 4px; 
-    /* STRETCH: Long <-> Short */
-    animation: stretch-centered calc(var(--speed) / 2) ease-in-out infinite;
+    left: -2px; width: 4px;
+    height: var(--arrow-len);
+    top: calc(var(--arrow-len) * -0.5);
+    /* The scale happens relative to the center, shrinking ends inwards */
+    transform-origin: center center;
+    /* STRETCH: Scale 1 -> Scale min -> Scale 1 */
+    animation: stretch-gpu calc(var(--speed) / 2) ease-in-out infinite;
+    /* Delay stretch so the spin + length change start together */
+    animation-delay: var(--spin-delay);
+    will-change: transform;
+    transform: translateZ(0);
 }
 
 .shaft {
@@ -80,10 +99,13 @@
 /* HEAD: Points UP */
 .head {
     position: absolute;
-    top: -10px; left: -5px;
+    top: -10px; 
+    left: 50%;
+    transform: translateX(-50%);
     width: 0; height: 0;
     border-left: 7px solid transparent; 
     border-right: 7px solid transparent; 
+    /* This border defines the direction: bottom border -> tip points UP */
     border-bottom: 16px solid var(--color);
     border-top: 0;
 }
@@ -93,9 +115,11 @@
     position: absolute;
     top: calc(50% + 90px); left: 50%;
     width: 0; height: 0;
-    /* CRITICAL: This squashes Y by 85%. 
-       We must compensate by making children very tall. */
-    transform: scaleY(0.15); 
+    /* Use translateZ to promote the entire shadow plane to GPU */
+    transform: scaleY(0.15) translateZ(0); 
+    opacity: 0;
+    animation: fadeIn 1s ease-in forwards;
+    animation-delay: var(--shadow-delay);
 }
 
 .shadow-rotator {
@@ -103,48 +127,57 @@
     top: 0; left: 0;
     width: 0; height: 0;
     animation: shadow-spin var(--speed) linear infinite;
+    /* Shadow rotation starts when the spin starts */
+    animation-delay: var(--spin-delay);
+    will-change: transform;
+    transform: translateZ(0);
 }
 
 .shadow-bar {
     position: absolute;
-    /* Compensate for scaleY(0.15): 4px visual / 0.15 = ~26px physical */
-    top: -8px; 
-    height: 16px;
+    /* User-tuned dimensions for a crisper bar */
+    top: -4px; 
+    height: 8px;
     left: -35px; 
     width: 70px; 
-    background: rgba(255,255,255,0.4); 
+    /* 30% darker shadow (0.4 -> 0.52) */
+    background: rgba(255,255,255,0.52); 
     border-radius: 4px;
-    filter: blur(1px);
+    filter: blur(2px);
+    /* Promote to GPU to avoid re-blurring in the compositor */
+    transform: translateZ(0);
 }
 
 .shadow-head {
     position: absolute;
-    /* Center vertically on the thick bar */
     top: 50%;
-    margin-top: -20px; /* Half of total height (border-top + border-bottom) */
-    left: -5px; 
+    margin-top: -10px;
+    /* Place the head at the outer end of the 70px bar */
+    left: 70px; 
     width: 0; height: 0;
-    
     border-left: 7px solid transparent; 
-    border-right: 7px solid transparent; 
-    border-left: 16px solid rgba(255,255,255,0.4);
-    
-    /* Compensate for scaleY: 3px visual / 0.15 = ~20px physical */
-    border-top: 20px solid transparent;
-    border-bottom: 20px solid transparent;
-    
+    border-right: 7px solid transparent;
+    /* This border defines the direction: left border -> tip points RIGHT (outwards) */
+    border-left: 12px solid rgba(255,255,255,0.52);
+    border-top: 10px solid transparent;
+    border-bottom: 10px solid transparent;
     filter: blur(1px);
-    transform: rotate(180deg);
+    /* No rotation needed as the border-left points the tip away from the center */
+    transform: none;
 }
 
 .shadow-nucleus {
     position: absolute;
     top: calc(50% + 90px); left: 50%;
     width: 20px; height: 4px; 
-    background: rgba(255,255,255,0.3);
+    /* 30% darker nucleus shadow (0.3 -> 0.39) */
+    background: rgba(255,255,255,0.39);
     border-radius: 50%;
-    transform: translate(-50%, -50%);
-    filter: blur(1px);
+    transform: translate3d(-50%, -50%, 0);
+    filter: blur(2px);
+    opacity: 0;
+    animation: fadeIn 1s ease-in forwards;
+    animation-delay: var(--shadow-delay);
 }
 
 #loader-text {
@@ -156,25 +189,37 @@
     font-weight: 500;
 }
 
+/* Ensure the container has a stable width/alignment so text changes don't jump */
+.loader-text {
+    font-family: monospace; /* Optional: looks better for loading logs */
+    text-align: center;
+    min-height: 1.5em; 
+}
+
+/* The magic happens here: animated loading messages driven purely by CSS */
+.loader-text::after {
+    content: "Initializing...";
+    animation: loadSequence 30s linear forwards;
+}
+
 /* --- ANIMATIONS --- */
 
 @keyframes swing {
-    from { transform: rotate(calc(var(--tilt) * -1)); }
-    to   { transform: rotate(var(--tilt)); }
+    /* Start at max RIGHT tilt, then swing to max LEFT tilt */
+    from { transform: rotate(var(--tilt)); }
+    to   { transform: rotate(calc(var(--tilt) * -1)); }
 }
 
-@keyframes stretch-centered {
+/* NEW: Uses scaleY instead of animating height/top */
+@keyframes stretch-gpu {
     0% { 
-        height: var(--arrow-len); 
-        top: calc(var(--arrow-len) * -0.5);
+        transform: scaleY(1);
     }
     50% { 
-        height: var(--arrow-min); 
-        top: calc(var(--arrow-min) * -0.5);
+        transform: scaleY(var(--scale-min));
     }
     100% { 
-        height: var(--arrow-len); 
-        top: calc(var(--arrow-len) * -0.5);
+        transform: scaleY(1);
     }
 }
 
@@ -187,4 +232,29 @@
 @keyframes shadow-spin {
     from { transform: rotate(0deg); }
     to   { transform: rotate(360deg); } 
+}
+
+/* Animated loading message sequence for the loader text */
+@keyframes loadSequence {
+    0%   { content: "Installing No-Field Scanner"; }
+    10%  { content: "Defining Rotating Frame..."; }
+    20%  { content: "Start Rotating Spins"; }
+    30%  { content: "Calculating transverse magnetization."; }
+    35%  { content: "Connecting Freiburg"; }
+    40%  { content: "Connecting Freiburg, New York"; }
+    45%  { content: "Connecting Freiburg, New York, Berlin"; }
+    60%  { content: "Connecting Freiburg, New York, Berlin, Erlangen."; }
+    65%  { content: "Connecting PyPulseq..."; }
+    70%  { content: "Connecting MR-zero..."; }
+    75%  { content: "Loading Sequences..."; }
+    80%  { content: "Fixing some raster time issues..."; }
+    85%  { content: "Loading Virtual Phantoms..."; }
+    90%  { content: "Ready for scanning in any second."; }
+    95%  { content: "Ready for scanning in any second.."; }
+    100% { content: "Ready for scanning in any second..."; }
+}
+
+@keyframes fadeIn {
+    from { opacity: 0; }
+    to   { opacity: 1; }
 }

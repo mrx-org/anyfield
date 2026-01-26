@@ -17,6 +17,12 @@ sources = [
         'dependencies': ['pypulseq']
     },
     {
+        'name': 'GRE',
+        'type': 'built-in',
+        'path': 'built-in-seq/gre_seq.py',
+        'dependencies': ['pypulseq']
+    },
+    {
         'name': 'RARE 2D (Playground)',
         'type': 'built-in',
         'path': 'built-in-seq/mr0_rare_2d_seq.py',

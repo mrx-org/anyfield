@@ -16,6 +16,7 @@
     <script src="https://cdnjs.cloudflare.com/ajax/libs/codemirror/5.65.2/codemirror.min.js"></script>
     <script src="https://cdnjs.cloudflare.com/ajax/libs/codemirror/5.65.2/mode/python/python.min.js"></script>
     <link rel="stylesheet" href="pypulseq/seq_explorer.css">
+    <link rel="stylesheet" href="scan_zero/scan_module.css">
 
     <style>
         :root {
@@ -42,32 +43,13 @@
         }
 
         header {
-            height: 50px;
+            height: 36px;
             display: flex;
             align-items: center;
             padding: 0 1rem;
             background: var(--panel-bg);
             border-bottom: 1px solid var(--border);
             justify-content: space-between;
-        }
-
-        .mode-selector {
-            display: flex;
-            gap: 1rem;
-        }
-
-        .mode-btn {
-            padding: 0.5rem 1rem;
-            background: rgba(255, 255, 255, 0.05);
-            border: 1px solid var(--border);
-            color: white;
-            border-radius: 4px;
-            cursor: pointer;
-        }
-
-        .mode-btn.active {
-            background: var(--accent);
-            border-color: var(--accent);
         }
 
         .lab-grid {
@@ -88,7 +70,7 @@
         #slot-footer { 
             grid-area: footer; 
             display: grid; 
-            grid-template-columns: calc(var(--sidebar-width) * 2) 1fr; 
+            grid-template-columns: 1fr 0.8fr 1.5fr; 
             gap: 1px; 
             background: var(--border); 
             overflow: hidden; 
@@ -127,14 +109,19 @@
         }
         .tabs-content {
             flex: 1;
-            overflow-y: auto;
-            padding: 10px;
+            overflow: hidden;
+            padding: 2px;
+            display: flex;
+            flex-direction: column;
         }
         .tab-pane {
             display: none;
+            height: 100%;
+            overflow: hidden;
         }
         .tab-pane.active {
-            display: block;
+            display: flex;
+            flex-direction: column;
         }
 
         /* Module Styles Override */
@@ -145,13 +132,13 @@
         .seq-plot-container {
             height: 100% !important;
         }
-        #slot-footer .seq-explorer {
+        #slot-footer .seq-explorer, #slot-footer .scan-module {
             height: 100%;
         }
     </style>
 </head>
 <body>
-    <div id="loader" class="loading-overlay">
+        <div id="loader" class="loading-overlay">
         <div class="scene">
             <div class="shadow-nucleus"></div>
             <div class="shadow-floor">
@@ -171,22 +158,14 @@
                 </div>
             </div>
         </div>
-        <div id="loader-text">Initializing No-field Scanner...</div>
+        <!-- Text is driven purely by CSS (.loader-text::after) during loading -->
+        <div id="loader-text" class="loader-text"></div>
     </div>
 
     <div class="lab-shell">
         <header>
             <div style="display: flex; align-items: center; gap: 2rem;">
-                <div style="font-weight: bold; font-size: 1.2rem;">No-field <span style="font-weight: normal; color: var(--accent);">Scanner</span></div>
-                <div class="mode-selector">
-                    <button id="btn-mode-planning" class="mode-btn active">Planning Mode</button>
-                    <button id="btn-mode-sequence" class="mode-btn">Sequence Mode</button>
-                </div>
-            </div>
-            <div class="header-actions" style="display: flex; gap: 0.5rem;">
-                <button class="mode-btn" onclick="location.reload()">Reset Lab</button>
-                <button class="mode-btn" onclick="window.open('index.html', '_blank')">Niivue Standalone</button>
-                <button class="mode-btn" onclick="window.open('pypulseq/seq_explorer.html', '_blank')">Explorer Standalone</button>
+                <div style="font-weight: bold; font-size: 1.1rem;">No-field <span style="font-weight: normal; color: var(--accent);">Scanner</span></div>
             </div>
         </header>
         
@@ -195,6 +174,7 @@
             <div id="slot-main"></div>
             <div id="slot-footer">
                 <div id="col-tree" class="footer-col"></div>
+                <div id="col-scan" class="footer-col" style="padding:0"></div>
                 <div id="col-params" class="footer-col"></div>
             </div>
         </div>
@@ -207,21 +187,26 @@
         <div id="seq-tree-container" class="seq-explorer"></div>
         <div id="seq-params-container" class="seq-explorer"></div>
         <div id="seq-plot-container" class="seq-explorer"></div>
+        <div id="scan-module-container" class="scan-module"></div>
     </div>
 
     <script type="module">
         import { NiivueModule } from './niivue_app.js';
         import { SequenceExplorer } from './pypulseq/seq_explorer.js';
+        import { ScanModule } from './scan_zero/scan_module.js';
         import { eventHub } from './event_hub.js';
 
         class ViewManager {
-            constructor(nvModule, seqExplorer) {
+            constructor(nvModule, seqExplorer, scanModule) {
                 this.nv = nvModule;
                 this.seq = seqExplorer;
+                this.scan = scanModule;
+                this.currentMode = null;
                 this.slots = {
                     sidebar: document.getElementById('slot-sidebar'),
                     main: document.getElementById('slot-main'),
                     tree: document.getElementById('col-tree'),
+                    scan: document.getElementById('col-scan'),
                     params: document.getElementById('col-params')
                 };
                 this.cache = {
@@ -229,7 +214,8 @@
                     nvControls: document.getElementById('nv-controls-container'),
                     seqTree: document.getElementById('seq-tree-container'),
                     seqParams: document.getElementById('seq-params-container'),
-                    seqPlot: document.getElementById('seq-plot-container')
+                    seqPlot: document.getElementById('seq-plot-container'),
+                    scanModule: document.getElementById('scan-module-container')
                 };
             }
 
@@ -243,28 +229,27 @@
 
             setMode(mode, autoPlot = false) {
                 console.log('Switching to mode:', mode);
+                this.currentMode = mode;
                 
                 // Clear slots
                 this.slots.sidebar.innerHTML = '';
                 this.slots.main.innerHTML = '';
                 this.slots.tree.innerHTML = '';
+                this.slots.scan.innerHTML = '';
                 this.slots.params.innerHTML = '';
 
                 // Always fixed parts
                 this.moveToSlot('nvControls', 'sidebar');
                 this.moveToSlot('seqTree', 'tree');
+                this.moveToSlot('scanModule', 'scan');
                 this.moveToSlot('seqParams', 'params');
 
                 if (mode === 'planning') {
                     this.moveToSlot('nvViewer', 'main');
                     this.slots.main.classList.remove('scrollable');
-                    document.getElementById('btn-mode-planning').classList.add('active');
-                    document.getElementById('btn-mode-sequence').classList.remove('active');
                 } else if (mode === 'sequence') {
                     this.moveToSlot('seqPlot', 'main');
                     this.slots.main.classList.add('scrollable');
-                    document.getElementById('btn-mode-planning').classList.remove('active');
-                    document.getElementById('btn-mode-sequence').classList.add('active');
                     
                     // Trigger plot if requested and not already plotting
                     if (autoPlot && this.seq && this.seq.selectedSequence) {
@@ -285,7 +270,6 @@
             try {
                 // A. START PYODIDE & PACKAGES IN BACKGROUND
                 const pyodidePromise = (async () => {
-                    loaderText.textContent = "Loading Python Runtime...";
                     const py = await loadPyodide({
                         indexURL: "https://cdn.jsdelivr.net/pyodide/v0.29.0/full/",
                     });
@@ -297,7 +281,6 @@
                 })();
 
                 // B. INITIALIZE MODULES IMMEDIATELY (Parallel to Step A)
-                loaderText.textContent = "Initializing UI...";
                 const nvModule = new NiivueModule(); 
                 nvModule.renderViewer('nv-viewer-container');
                 nvModule.renderControls('nv-controls-container', true);
@@ -314,6 +297,9 @@
                 explorer.renderParams('seq-params-container');
                 explorer.renderPlot('seq-plot-container');
 
+                const scanModule = new ScanModule();
+                scanModule.render('scan-module-container');
+
                 // C. FETCH CONFIG IN PARALLEL
                 const configPromise = explorer.getDefaultSourcesConfig();
 
@@ -323,21 +309,20 @@
                 explorer.config.pyodide = pyodide;
 
                 // E. RUN PYTHON-DEPENDENT SETUP IN PARALLEL
-                loaderText.textContent = "Finalizing Scanner...";
                 const configCode = await configPromise;
                 await Promise.all([
+                    nvModule.initPyodide(), // Initialize resampling tools on the shared instance
                     explorer.installOptimizedPlotFunction(),
                     explorer.detectVersions(),
                     explorer.loadSourcesFromConfig(configCode)
                 ]);
 
                 // 4. Initialize ViewManager
-                const viewManager = new ViewManager(nvModule, explorer);
+                const viewManager = new ViewManager(nvModule, explorer, scanModule);
                 viewManager.setMode('planning');
 
-                // Mode switching
-                document.getElementById('btn-mode-planning').onclick = () => viewManager.setMode('planning');
-                document.getElementById('btn-mode-sequence').onclick = () => viewManager.setMode('sequence', true);
+                // Load demo volume on startup
+                nvModule.loadUrl(nvModule.DEMO_URL, "mni152.nii.gz", true);
 
                 // Hide loader
                 document.getElementById('loader').classList.add('hidden');
@@ -348,8 +333,6 @@
 
             } catch (e) {
                 console.error("Bootstrap failed:", e);
-                loaderText.textContent = "Error: " + e.message;
-                loaderText.style.color = "#ef4444";
             }
         }
 

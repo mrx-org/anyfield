@@ -1322,6 +1322,9 @@ json.dumps(functions)
                     this.config.onSequenceSelect(this.selectedSequence);
                 }
                 
+                // Notify other modules via eventHub
+                eventHub.emit('sequenceSelected', this.selectedSequence);
+                
                 // Load parameters for the selected function
                 this.loadFunctionParameters(this.selectedSequence);
             });
@@ -1829,7 +1832,7 @@ json.dumps(_result)
         }
     }
     
-    async executeFunction() {
+    async executeFunction(silent = false) {
         if (!this.selectedSequence || !this.config.pyodide) {
             console.warn('No function selected or Pyodide not available');
             return;
@@ -1841,14 +1844,14 @@ json.dumps(_result)
         const executeBtn = paramsRoot.querySelector('#seq-execute-btn');
         if (!executeBtn) return;
         
-        console.log('Plotting started for sequence:', this.selectedSequence.fileName);
+        console.log('Execution started for sequence:', this.selectedSequence.fileName, silent ? '(silent)' : '');
         
-        if (this.config.onFunctionStart) {
+        if (!silent && this.config.onFunctionStart) {
             this.config.onFunctionStart(this.selectedSequence);
         }
 
         executeBtn.disabled = true;
-        executeBtn.textContent = 'Plotting...';
+        executeBtn.textContent = silent ? 'Generating...' : 'Plotting...';
         
         // Clear any previous error display
         const errorDisplay = paramsRoot.querySelector('#seq-error-display');
@@ -1999,9 +2002,12 @@ if hasattr(sys, '_pp_patch_func'):
 
 # Plot if sequence found
 if seq is not None:
-    plt.close('all')
-    seq.plot(plot_now=False, plot_speed="${plotSpeed}")
-    plt.show()
+    if not ${silent ? 'True' : 'False'}:
+        plt.close('all')
+        seq.plot(plot_now=False, plot_speed="${plotSpeed}")
+        plt.show()
+    else:
+        print("Sequence generated (silent mode)")
 else:
     print("No sequence found")
 
@@ -2048,9 +2054,12 @@ if hasattr(sys, '_pp_patch_func'):
 
 # Plot if sequence found
 if seq is not None:
-    plt.close('all')
-    seq.plot(plot_now=False, plot_speed="${plotSpeed}")
-    plt.show()
+    if not ${silent ? 'True' : 'False'}:
+        plt.close('all')
+        seq.plot(plot_now=False, plot_speed="${plotSpeed}")
+        plt.show()
+    else:
+        print("Sequence generated (silent mode)")
 else:
     print("No sequence found")
 
@@ -2382,9 +2391,12 @@ if hasattr(sys, '_pp_patch_func'):
 
 # Plot if sequence found
 if seq is not None:
-    plt.close('all')
-    seq.plot(plot_now=False, plot_speed="${plotSpeed}")
-    plt.show()
+    if not ${silent ? 'True' : 'False'}:
+        plt.close('all')
+        seq.plot(plot_now=False, plot_speed="${plotSpeed}")
+        plt.show()
+    else:
+        print("Sequence generated (silent mode)")
 else:
     print("No sequence found")
 
@@ -2434,6 +2446,10 @@ result
         this.sequences = {};
         this.selectedSequence = null;
         this.updateSequenceNameDisplay();
+        
+        // Notify other modules via eventHub
+        eventHub.emit('sequenceSelected', null);
+        
         this.renderTree();
     }
     
@@ -3155,6 +3171,10 @@ sys.modules['__main__']._user_edited_files['${finalFileName}'] = ${JSON.stringif
                             source: newSource
                         };
                         this.updateSequenceNameDisplay();
+                        
+                        // Notify other modules via eventHub
+                        eventHub.emit('sequenceSelected', this.selectedSequence);
+                        
                         await this.loadFunctionParameters(this.selectedSequence);
                     }
                     

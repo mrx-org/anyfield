@@ -80,10 +80,16 @@ export class NiivueModule {
     this.btnNewFile = null;
     this.btnAddFile = null;
     this.resampleToFovBtn = null;
-    this.pyodideStatus = null;
-
+    
     this.DEMO_URL = "https://niivue.github.io/niivue-demo-images/mni152.nii.gz";
     this.FOV_RGBA255 = new Uint8Array([255, 220, 0, 255]);
+    this.isInitialized = false;
+    this._initWaiters = [];
+  }
+
+  waitForInit() {
+    if (this.isInitialized) return Promise.resolve();
+    return new Promise(resolve => this._initWaiters.push(resolve));
   }
 
   renderViewer(target) {
@@ -116,24 +122,33 @@ export class NiivueModule {
         <div class="options-grid standalone-controls">
           ${this._getPanelSourceHtml()}
           ${this._getPanelViewHtml()}
-          ${this._getPanelFovHtml()}
-          ${this._getPanelExportHtml()}
+          <div class="panel-flat">
+            ${this._getPanelFovHtml(true)}
+            <div style="margin-top: 12px; border-top: 1px solid var(--border); padding-top: 12px;">
+                ${this._getPanelExportHtml(true)}
+            </div>
+          </div>
         </div>
       `;
     } else {
       this.containerControls.innerHTML = `
         <div class="tabbed-controls">
           <div class="tabs-header">
-            <button class="tab-btn active" data-tab="source">Source</button>
-            <button class="tab-btn" data-tab="view">View</button>
+            <button class="tab-btn active" data-tab="source">VIEWER</button>
+            <button class="tab-btn" data-tab="view">OPTIONS</button>
             <button class="tab-btn" data-tab="fov">FOV</button>
-            <button class="tab-btn" data-tab="export">Export</button>
           </div>
           <div class="tabs-content">
             <div class="tab-pane active" id="tab-source-${this.instanceId}">${this._getPanelSourceHtml()}</div>
             <div class="tab-pane" id="tab-view-${this.instanceId}">${this._getPanelViewHtml()}</div>
-            <div class="tab-pane" id="tab-fov-${this.instanceId}">${this._getPanelFovHtml()}</div>
-            <div class="tab-pane" id="tab-export-${this.instanceId}">${this._getPanelExportHtml()}</div>
+            <div class="tab-pane" id="tab-fov-${this.instanceId}">
+                <div class="panel-flat">
+                    ${this._getPanelFovHtml(true)}
+                    <div style="margin-top: 12px; border-top: 1px solid var(--border); padding-top: 12px;">
+                        ${this._getPanelExportHtml(true)}
+                    </div>
+                </div>
+            </div>
           </div>
         </div>
       `;
@@ -143,6 +158,9 @@ export class NiivueModule {
       const panes = this.containerControls.querySelectorAll('.tab-pane');
       buttons.forEach(btn => {
         btn.onclick = () => {
+          if (window.viewManager && window.viewManager.currentMode !== 'planning') {
+            window.viewManager.setMode('planning');
+          }
           buttons.forEach(b => b.classList.remove('active'));
           panes.forEach(p => p.classList.remove('active'));
           btn.classList.add('active');
@@ -154,48 +172,23 @@ export class NiivueModule {
 
     this.bindControlElements();
     this.setupEventListeners();
-    this.initPyodide();
+    // Do not auto-initialize Pyodide here; let the bootstrap process handle it
+    // or call it manually if needed.
   }
 
   _getPanelSourceHtml() {
     return `
-        <div class="panel">
-          <h1 class="section-title">Volume Source</h1>
-          <div class="row" style="display: flex; flex-direction: column; gap: 8px;">
-            <div style="display: flex; gap: 8px;">
-              <button id="btn-new-file-${this.instanceId}" class="btn primary" style="flex: 1;">New File</button>
-              <button id="btn-add-file-${this.instanceId}" class="btn" style="flex: 1;">Add File</button>
+        <div id="panel-viewer-controls-${this.instanceId}" class="panel-flat" style="display: flex; flex-direction: column; height: 100%; box-sizing: border-box; overflow: hidden;">
+          <h3 class="panel-title">VIEWER</h3>
+          <div class="row" style="display: flex; flex-direction: column; gap: 4px; flex-shrink: 0;">
+            <div style="display: flex; gap: 4px;">
+              <button id="btn-add-file-${this.instanceId}" class="btn primary" style="flex: 1; padding: 4px 2px;">Add File</button>
+              <button id="load-demo-${this.instanceId}" class="btn primary" style="flex: 1; padding: 4px 2px;">Load demo</button>
               <input id="file-${this.instanceId}" type="file" accept=".nii,.nii.gz,.gz" style="display: none;" />
             </div>
-            <button id="load-demo-${this.instanceId}" class="btn primary">Load demo (MNI152)</button>
           </div>
-          <div id="volume-list-${this.instanceId}" style="margin-top: 12px; display: flex; flex-direction: column; gap: 4px; max-height: 150px; overflow-y: auto; border-top: 1px solid var(--border); padding-top: 8px;">
+          <div id="volume-list-${this.instanceId}" style="margin-top: 6px; display: flex; flex-direction: column; gap: 4px; flex: 1; overflow-y: auto; border-top: 1px solid var(--border); padding-top: 4px;">
             <!-- Volume checkboxes will be added here -->
-          </div>
-          <div class="stateBox">
-            <div class="stateRow">
-              <div class="stateKey">Status</div>
-              <div class="stateVal auto-wrap" id="statusText-${this.instanceId}">idle</div>
-            </div>
-            <div class="stateRow">
-              <div class="stateKey">Rotation</div>
-              <div class="stateVal">az=<span id="azVal-${this.instanceId}">—</span>°, el=<span id="elVal-${this.instanceId}">—</span>°</div>
-            </div>
-            <div class="stateRow">
-              <div class="stateKey">Slices (vox)</div>
-              <div class="stateVal"><span id="voxVal-${this.instanceId}">—</span></div>
-            </div>
-            <div class="stateRow">
-              <div class="stateKey">Location (mm)</div>
-              <div class="stateVal"><span id="mmVal-${this.instanceId}">—</span></div>
-            </div>
-          </div>
-          <div class="kv">
-            <div><strong>Note:</strong> Niivue via CDN (unpkg).</div>
-            <div style="border-top: 1px solid var(--border); margin-top: 4px; padding-top: 4px;">
-              <strong>Info:</strong>
-              <div id="locStrVal-${this.instanceId}" class="stateVal auto-wrap" style="margin-top: 2px;">—</div>
-            </div>
           </div>
         </div>
     `;
@@ -203,8 +196,8 @@ export class NiivueModule {
 
   _getPanelViewHtml() {
     return `
-        <div class="panel">
-          <h1 class="section-title">View Options</h1>
+        <div class="panel-flat">
+          <h3 class="panel-title">OPTIONS</h3>
           <div class="row" style="grid-template-columns: 1fr 1fr; gap: 4px;">
             <label class="toggle"><input id="showFov-${this.instanceId}" type="checkbox" checked /> FOV Box</label>
             <label class="toggle"><input id="sliceMM-${this.instanceId}" type="checkbox" /> Slice MM</label>
@@ -224,16 +217,16 @@ export class NiivueModule {
           <div class="hint">
             Ctrl+Left: Move FOV<br>
             Ctrl+Right: Rotate FOV<br>
-            Ctrl+Scroll: Resize FOV
+            Ctrl+Scroll: Resize FOV<br>
+            Ctrl+Middle: Zoom
           </div>
         </div>
     `;
   }
 
-  _getPanelFovHtml() {
-    return `
-        <div class="panel">
-          <h1 class="section-title">FOV Protocol</h1>
+  _getPanelFovHtml(noContainer = false) {
+    const content = `
+          <h3 class="panel-title">FOV Protocol</h3>
           <div class="sliderGroup" id="fovControls-${this.instanceId}">
             <div class="sliderRow">
               <div>Size X (mm)</div>
@@ -253,7 +246,7 @@ export class NiivueModule {
               <div>Size Z (mm)</div>
               <div class="input-sync">
                 <input id="fovZVal-${this.instanceId}" type="number" class="num-input" step="1" />
-                <input id="fovZ-${this.instanceId}" type="range" min="1" max="600" step="1" value="100" />
+                <input id="fovZ-${this.instanceId}" type="range" min="1" max="600" step="1" value="10" />
               </div>
             </div>
             <div class="sliderRow" style="margin-top: 2px; border-top: 1px solid var(--border); padding-top: 2px;">
@@ -299,14 +292,13 @@ export class NiivueModule {
               </div>
             </div>
           </div>
-        </div>
     `;
+    return noContainer ? content : `<div class="panel-flat">${content}</div>`;
   }
 
-  _getPanelExportHtml() {
-    return `
-        <div class="panel">
-          <h1 class="section-title">Export & Mask</h1>
+  _getPanelExportHtml(noContainer = false) {
+    const content = `
+          <h3 class="panel-title">Export & Mask</h3>
           <div class="sliderGroup">
             <div class="sliderRow">
               <div>Mask X</div>
@@ -338,11 +330,8 @@ export class NiivueModule {
               Resample to FOV
             </button>
           </div>
-          <div id="pyodideStatus-${this.instanceId}" style="font-size: 10px; color: var(--muted); margin-top: 4px; text-align: center;">
-            Python (Pyodide): loading...
-          </div>
-        </div>
     `;
+    return noContainer ? content : `<div class="panel-flat">${content}</div>`;
   }
 
   renderFull(container) {
@@ -406,10 +395,17 @@ export class NiivueModule {
     this.mmVal = qs("mmVal");
     this.locStrVal = qs("locStrVal");
     this.volumeListContainer = qs("volume-list");
-    this.btnNewFile = qs("btn-new-file");
     this.btnAddFile = qs("btn-add-file");
     this.resampleToFovBtn = qs("resampleToFov");
-    this.pyodideStatus = qs("pyodideStatus");
+  }
+
+  triggerHighlight() {
+    const target = this.containerViewer ? this.containerViewer.querySelector('.viewer') : null;
+    if (!target) return;
+    
+    target.classList.remove('highlight-add');
+    void target.offsetWidth; // Force reflow
+    target.classList.add('highlight-add');
   }
 
   async initNiivue() {
@@ -472,6 +468,9 @@ export class NiivueModule {
 
     setInterval(() => this.updateAngles(), 200);
     this.setStatus("ready");
+    this.isInitialized = true;
+    this._initWaiters.forEach(resolve => resolve());
+    this._initWaiters = [];
   }
 
   async initPyodide() {
@@ -585,11 +584,6 @@ def run_resampling(source_bytes, reference_bytes):
   }
 
   setupEventListeners() {
-    this.btnNewFile.addEventListener("click", () => {
-      this.isAddingVolume = false;
-      this.fileInput.click();
-    });
-
     this.btnAddFile.addEventListener("click", () => {
       this.isAddingVolume = true;
       this.fileInput.click();
@@ -625,7 +619,7 @@ def run_resampling(source_bytes, reference_bytes):
 
     this.downloadFovMeshBtn.addEventListener("click", () => this.handleDownloadFovMesh());
     this.resampleToFovBtn.addEventListener("click", () => this.handleResampleToFov());
-    this.btnDemo.onclick = () => this.loadUrl(this.DEMO_URL, "mni152.nii.gz");
+    this.btnDemo.onclick = () => this.loadUrl(this.DEMO_URL, "mni152.nii.gz", true);
     this.fileInput.onchange = (e) => { 
       const f=e.target.files?.[0]; 
       if(f){ 
@@ -754,14 +748,26 @@ def run_resampling(source_bytes, reference_bytes):
   }
 
   handleMouseDown(e) {
-         if (e.button === 1) {
+         if (window.viewManager && window.viewManager.currentMode !== 'planning') {
+            window.viewManager.setMode('planning');
+         }
+
+         // Ctrl + Middle Mouse Drag: Zoom
+         if (e.ctrlKey && e.button === 1) {
             e.preventDefault();
+            e.stopPropagation();
+            e.stopImmediatePropagation();
+            this.savedDragMode = this.nv.opts.dragMode;
+            this.nv.opts.dragMode = DRAG_MODE.callbackOnly;
             this.isZooming2D = true;
             this.zoomStartMouseY = e.clientY;
             this.zoomStartValue = Number(this.zoom2D.value);
+            this.zoomStartPan = [...this.nv.scene.pan2Dxyzmm];
             this.setStatus("Zooming 2D...");
             return;
          }
+
+         // Ctrl + Mouse Drag: FOV Actions
          if (e.ctrlKey) {
             e.preventDefault();
             this.savedDragMode = this.nv.opts.dragMode;
@@ -786,19 +792,26 @@ def run_resampling(source_bytes, reference_bytes):
          }
   }
 
-  handleMouseMove(e) {
+    handleMouseMove(e) {
          if (this.isZooming2D) {
+            e.preventDefault();
+            e.stopPropagation();
             const dy = e.clientY - this.zoomStartMouseY;
             let newVal = this.zoomStartValue - (dy / 200);
             newVal = Math.max(0.2, Math.min(2.0, newVal));
             this.zoom2D.value = String(newVal.toFixed(2));
-            const pan = this.nv.scene.pan2Dxyzmm;
+            
+            // Use the snapshotted pan to prevent the object from moving while zooming
+            const pan = this.zoomStartPan || [0, 0, 0, 0];
             this.nv.setPan2Dxyzmm([pan[0], pan[1], pan[2], newVal]);
+            
             this.syncFovLabels();
             this.rebuildFovLive();
             return;
          }
          if (this.isDraggingFov && this.dragStartOffsets) {
+            e.preventDefault();
+            e.stopPropagation();
             const currMm = this.getMouseMm(e, this.dragStartTileIndex);
             if (currMm && this.dragStartMm) {
                const dx = currMm[0] - this.dragStartMm[0];
@@ -810,6 +823,8 @@ def run_resampling(source_bytes, reference_bytes):
                this.rebuildFovLive();
             }
          } else if (this.isRotatingFov) {
+             e.preventDefault();
+             e.stopPropagation();
              const currAngle = this.getMouseAngle(e);
              let deltaRad = currAngle - this.dragStartAngle;
              while (deltaRad <= -Math.PI) deltaRad += 2 * Math.PI;
@@ -831,12 +846,22 @@ def run_resampling(source_bytes, reference_bytes):
   }
 
   handleMouseUp() {
-         if (this.isZooming2D) { this.isZooming2D = false; this.setStatus("Zoom 2D finished"); this.syncFovLabels(); }
+         if (this.isZooming2D) { 
+            this.isZooming2D = false; 
+            this.zoomStartPan = null;
+            this.nv.opts.dragMode = this.savedDragMode;
+            this.setStatus("Zoom 2D finished"); 
+            this.syncFovLabels(); 
+         }
          if (this.isDraggingFov) { this.isDraggingFov = false; this.nv.opts.dragMode = this.savedDragMode; this.setStatus("FOV Drag finished"); this.syncFovLabels(); }
          if (this.isRotatingFov) { this.isRotatingFov = false; this.nv.opts.dragMode = this.savedDragMode; this.setStatus("FOV Rotate finished"); this.syncFovLabels(); }
   }
 
   handleWheel(e) {
+          if (window.viewManager && window.viewManager.currentMode !== 'planning') {
+              window.viewManager.setMode('planning');
+          }
+
           if (e.ctrlKey) {
               e.preventDefault();
               this.updateViewFromMouse(e);
@@ -1192,27 +1217,126 @@ def run_resampling(source_bytes, reference_bytes):
       const url = URL.createObjectURL(new Blob([bytes]));
       const name = (this.nv.volumes[0].name || "vol").replace(/\.nii(\.gz)?$/, "") + "_resampled.nii";
       await this.nv.addVolumesFromUrl([{ url, name, colormap: "gray", opacity: 1.0 }]);
-      this.updateVolumeList(); this.setStatus(`✓ Resampled: ${name}`);
+      this.updateVolumeList(); 
+      this.triggerHighlight();
+      this.setStatus(`✓ Resampled: ${name}`);
     } catch (e) { console.error(e); this.setStatus(`Error: ${e.message}`); } finally { this.resampleToFovBtn.disabled = false; }
   }
 
   updateVolumeList() {
     if (!this.volumeListContainer) return;
     this.volumeListContainer.innerHTML = "";
-    this.nv.volumes.forEach((vol, index) => {
-      const row = document.createElement("div"); row.className = "toggle"; row.style.justifyContent="space-between"; row.style.background="rgba(255,255,255,0.03)"; row.style.padding="4px"; row.style.borderRadius="4px";
-      const left = document.createElement("div"); left.style.display="flex"; left.style.gap="8px"; left.style.alignItems="center"; left.style.overflow="hidden";
-      const cb = document.createElement("input"); cb.type="checkbox"; cb.checked=vol.opacity>0; cb.onchange=()=>this.nv.setOpacity(index, cb.checked?(vol.opacity===0?1:vol.opacity):0);
-      const name = document.createElement("span"); name.textContent=vol.name||`Vol ${index+1}`; name.style.fontSize="11px"; name.style.textOverflow="ellipsis"; name.style.overflow="hidden";
-      const actions = document.createElement("div"); actions.style.display="flex"; actions.style.gap="4px";
-      const dl = document.createElement("button"); dl.innerHTML="↓"; dl.className="btn"; dl.style.padding="0 6px"; dl.onclick=()=>this.downloadVolume(vol);
-      const rm = document.createElement("button"); rm.textContent="×"; rm.className="btn"; rm.style.padding="0 6px"; rm.onclick=()=>{this.nv.removeVolume(vol); this.updateVolumeList();};
-      left.appendChild(cb); left.appendChild(name); row.appendChild(left); actions.appendChild(dl); actions.appendChild(rm); row.appendChild(actions);
+    
+    // Reverse order to match scan order (newest on top)
+    const reversedVolumes = [...this.nv.volumes].reverse();
+    const reversedIndices = this.nv.volumes.map((_, i) => i).reverse();
+
+    reversedVolumes.forEach((vol, i) => {
+      const originalIndex = reversedIndices[i];
+      const row = document.createElement("div"); 
+      row.className = "volume-row";
+      row.style.background = "rgba(255,255,255,0.03)";
+      row.style.border = "1px solid rgba(255,255,255,0.08)";
+      row.style.padding = "4px 8px";
+      row.style.borderRadius = "4px";
+      row.style.display = "flex";
+      row.style.alignItems = "center";
+      row.style.gap = "8px";
+      row.style.marginBottom = "4px";
+      row.style.cursor = "pointer";
+
+      // 1. Checkbox (similar to scan list)
+      const cb = document.createElement("input"); 
+      cb.type = "checkbox"; 
+      cb.checked = vol.opacity > 0; 
+      cb.onchange = (e) => {
+          e.stopPropagation();
+          this.nv.setOpacity(originalIndex, cb.checked ? (vol.opacity === 0 ? 1 : vol.opacity) : 0);
+      };
+
+      // 2. Info container (title + meta)
+      const info = document.createElement("div");
+      info.style.flex = "1";
+      info.style.display = "flex";
+      info.style.flexDirection = "column";
+      info.style.overflow = "hidden";
+
+      let titleText = vol.name || `Vol ${originalIndex + 1}`;
+      let metaText = "Imported File";
+
+      // Try to parse scan filename: scan_NUMBER_YYYY-MM-DD_HH-mm-ss_SequenceName.nii.gz
+      const scanMatch = titleText.match(/^scan_(\d+)_(\d{4}-\d{2}-\d{2})_(\d{2}-\d{2}-\d{2})_(.*)\.nii/);
+      if (scanMatch) {
+          const scanNum = scanMatch[1];
+          const timeStr = scanMatch[3].replace(/-/g, ':');
+          titleText = `${scanNum}. ${scanMatch[4].replace(/\.nii.*/, '')}`;
+          metaText = timeStr;
+          row.style.borderLeft = "3px solid #22c55e"; // Match SCAN module "done" color
+      } else if (titleText.toLowerCase().includes("mask")) {
+          row.style.borderLeft = "3px solid #3b82f6"; // Primary blue for masks
+      } else {
+          row.style.borderLeft = "3px solid transparent";
+      }
+
+      const title = document.createElement("div");
+      title.textContent = titleText;
+      title.style.fontSize = "12px";
+      title.style.fontWeight = "500";
+      title.style.whiteSpace = "nowrap";
+      title.style.overflow = "hidden";
+      title.style.textOverflow = "ellipsis";
+
+      const meta = document.createElement("div");
+      meta.textContent = metaText;
+      meta.style.fontSize = "10px";
+      meta.style.color = "var(--muted)";
+      meta.style.marginTop = "1px";
+      meta.style.opacity = "0.8";
+
+      info.appendChild(title);
+      info.appendChild(meta);
+
+      // 3. Actions
+      const actions = document.createElement("div");
+      actions.style.display = "flex";
+      actions.style.gap = "4px";
+      actions.style.alignItems = "center";
+
+      const dl = document.createElement("button"); 
+      dl.innerHTML = "↓"; 
+      dl.className = "btn"; 
+      dl.style.padding = "2px 6px"; 
+      dl.style.fontSize = "10px";
+      dl.style.height = "20px";
+      dl.onclick = (e) => { e.stopPropagation(); this.downloadVolume(vol); };
+
+      const rm = document.createElement("button"); 
+      rm.textContent = "×"; 
+      rm.className = "btn"; 
+      rm.style.padding = "2px 6px"; 
+      rm.style.fontSize = "10px";
+      rm.style.height = "20px";
+      rm.onclick = (e) => { e.stopPropagation(); this.nv.removeVolume(vol); this.updateVolumeList(); };
+
+      row.appendChild(cb);
+      row.appendChild(info);
+      actions.appendChild(dl);
+      actions.appendChild(rm);
+      row.appendChild(actions);
+
+      // Make row clickable to toggle checkbox, but ignore if clicking buttons or checkbox directly
+      row.onclick = (e) => {
+          if (e.target === cb || e.target.closest('button')) return;
+          cb.checked = !cb.checked;
+          this.nv.setOpacity(originalIndex, cb.checked ? (vol.opacity === 0 ? 1 : vol.opacity) : 0);
+      };
+
       this.volumeListContainer.appendChild(row);
     });
   }
 
   async loadUrl(url, name, isAdding = false) {
+    await this.waitForInit();
     try {
       this.setStatus(`loading: ${name??url}`);
       if (isAdding) {
@@ -1228,12 +1352,14 @@ def run_resampling(source_bytes, reference_bytes):
               const [dx, dy, dz] = info.dim3;
               this.fullFovMm = [dx*this.voxelSpacingMm[0], dy*this.voxelSpacingMm[1], dz*this.voxelSpacingMm[2]];
               const sr = (s,n,mm,def) => { s.min=n.min="1"; s.max=n.max="600"; s.step=n.step="1"; s.value=n.value=def?String(def):String(Math.round(mm)); };
-              sr(this.fovX,this.fovXVal,this.fullFovMm[0],220); sr(this.fovY,this.fovYVal,this.fullFovMm[1],220); sr(this.fovZ,this.fovZVal,this.fullFovMm[2],100);
+              sr(this.fovX,this.fovXVal,this.fullFovMm[0],220); sr(this.fovY,this.fovYVal,this.fullFovMm[1],220); sr(this.fovZ,this.fovZVal,this.fullFovMm[2],10);
               const so = (s,n) => { s.min=n.min="-500"; s.max=n.max="500"; s.step=n.step="0.1"; s.value=n.value="0"; };
               so(this.fovOffX,this.fovOffXVal); so(this.fovOffY,this.fovOffYVal); so(this.fovOffZ,this.fovOffZVal);
           }
       }
-      this.syncFovLabels(); this.updateFovMesh(); this.updateVolumeList(); this.setStatus(`loaded: ${name??url}`);
+      this.syncFovLabels(); this.updateFovMesh(); this.updateVolumeList(); 
+      this.triggerHighlight();
+      this.setStatus(`loaded: ${name??url}`);
     } catch (e) { this.setStatus(`Error: ${e.message}`); }
   }
 }
@@ -1242,5 +1368,9 @@ def run_resampling(source_bytes, reference_bytes):
 export async function initNiivueApp(containerId, options = {}) {
   const module = new NiivueModule(options);
   module.renderFull(containerId);
+  // Do not await initPyodide here, it can run in background
+  module.initPyodide();
+  // Load demo volume on startup
+  module.loadUrl(module.DEMO_URL, "mni152.nii.gz", true);
   return { nv: module.nv, loadUrl: module.loadUrl.bind(module), setStatus: module.setStatus.bind(module) };
 }

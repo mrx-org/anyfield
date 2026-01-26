@@ -30,7 +30,7 @@
   position: relative;
   background: #000;
   border: 1px solid var(--border);
-  border-radius: 10px;
+  border-radius: 0;
   overflow: hidden;
   min-height: 400px;
 }
@@ -45,9 +45,26 @@
 .niivue-app .panel {
   background: var(--panel);
   border: 1px solid var(--border);
-  border-radius: 10px;
+  border-radius: 0;
   padding: 12px;
   overflow: auto;
+}
+
+.niivue-app .panel-flat {
+  padding: 2px;
+  overflow: auto;
+  height: 100%;
+}
+
+.niivue-app .panel-title {
+  font-size: 11px;
+  font-weight: 600;
+  margin: 0 0 4px;
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+  color: var(--accent);
+  display: flex;
+  align-items: center;
 }
 
 .niivue-app .panel h1, .niivue-app .section-title {
@@ -64,7 +81,7 @@
 .niivue-app .row {
   display: grid;
   gap: 8px;
-  margin-bottom: 12px;
+  margin-bottom: 8px;
 }
 
 .niivue-app .btn {
@@ -74,10 +91,10 @@
   border: 1px solid var(--border);
   background: rgba(255, 255, 255, 0.06);
   color: var(--text);
-  border-radius: 8px;
-  padding: 8px 10px;
+  border-radius: 6px;
+  padding: 4px 8px;
   cursor: pointer;
-  font-size: 12px;
+  font-size: 11px;
   font-weight: 500;
   transition: all 0.2s ease;
 }
@@ -99,6 +116,23 @@
 .niivue-app .btn:disabled {
   opacity: 0.6;
   cursor: not-allowed;
+}
+
+@keyframes highlight-fade {
+  0% { 
+    outline: 2px solid #22c55e;
+    outline-offset: -2px;
+    background: rgba(34, 197, 94, 0.1);
+  }
+  100% { 
+    outline: 2px solid transparent;
+    outline-offset: -2px;
+    background: transparent;
+  }
+}
+
+.niivue-app .highlight-add {
+  animation: highlight-fade 3s ease-out forwards;
 }
 
 .niivue-app .kv {
@@ -173,13 +207,13 @@
 }
 
 .niivue-app .hint {
-  margin-top: 10px;
+  margin-top: 6px;
   color: var(--text);
   opacity: 0.95;
-  font-size: 14px;
-  line-height: 1.5;
+  font-size: 12px;
+  line-height: 1.4;
   background: rgba(255, 255, 255, 0.07);
-  padding: 10px;
+  padding: 6px;
   border-radius: 6px;
   border: 1px solid var(--border);
 }
@@ -199,10 +233,10 @@
 
 .niivue-app .sliderGroup {
   display: grid;
-  gap: 8px;
-  padding: 10px;
+  gap: 4px;
+  padding: 6px;
   border: 1px solid var(--border);
-  border-radius: 10px;
+  border-radius: 8px;
   background: rgba(255, 255, 255, 0.04);
 }
 
@@ -210,9 +244,9 @@
   display: grid;
   grid-template-columns: 1fr auto;
   align-items: center;
-  gap: 10px;
+  gap: 6px;
   color: var(--muted);
-  font-size: 12px;
+  font-size: 11px;
 }
 
 .niivue-app .sliderRow input[type="range"] {
