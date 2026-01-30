@@ -1514,6 +1514,15 @@ export class ScanPreviewModule {
     }
   }
 
+  triggerHighlight() {
+    const target = this.container ? this.container.querySelector('.viewer') : null;
+    if (!target) return;
+    
+    target.classList.remove('highlight-add');
+    void target.offsetWidth; // Force reflow
+    target.classList.add('highlight-add');
+  }
+
   async loadSingleScan(url, name) {
     await this.waitForInit();
     if (this._isSyncing) return;
@@ -1546,6 +1555,9 @@ export class ScanPreviewModule {
       // Update label with clean name
       let cleanName = (name || "scan").replace(/^scan_\d+_/, '').replace(/\.nii.*/, '');
       this.updateLabel(cleanName);
+      
+      // Trigger highlight effect when scan is loaded
+      this.triggerHighlight();
       
       console.log("ScanPreviewModule loaded:", name);
     } catch (e) {

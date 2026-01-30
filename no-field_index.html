@@ -23,10 +23,14 @@
 
     <style>
         :root {
-            --bg: #0b1020;
-            --panel-bg: #141b2d;
-            --border: rgba(255, 255, 255, 0.12);
+            /* Unified color system - single background hierarchy */
+            --bg: #0a0e1a;              /* Base background - darkest */
+            --bg-elevated: #0f1424;     /* Slightly elevated surfaces */
+            --bg-panel: #141b2d;        /* Panel/card background */
+            --border: rgba(255, 255, 255, 0.1);
             --accent: #3b82f6;
+            --text: #e8ecff;
+            --muted: #a9b3da;
             --sidebar-width: 260px;
         }
         body, html {
@@ -34,7 +38,7 @@
             padding: 0;
             height: 100vh;
             background: var(--bg);
-            color: #e8ecff;
+            color: var(--text);
             font-family: system-ui, -apple-system, sans-serif;
             overflow: hidden;
         }
@@ -50,7 +54,7 @@
             display: flex;
             align-items: center;
             padding: 0 1rem;
-            background: var(--panel-bg);
+            background: var(--bg-panel);
             border-bottom: 1px solid var(--border);
             justify-content: space-between;
         }
@@ -66,8 +70,20 @@
             overflow: hidden;
         }
 
-        #slot-sidebar { grid-area: sidebar; border-right: 1px solid var(--border); border-bottom: 1px solid var(--border); overflow-y: auto; background: var(--bg); }
-        #slot-main { grid-area: main; border-bottom: 1px solid var(--border); overflow: hidden; position: relative; }
+        #slot-sidebar { 
+            grid-area: sidebar; 
+            border-right: 1px solid var(--border); 
+            border-bottom: 1px solid var(--border); 
+            overflow-y: auto; 
+            background: var(--bg-elevated); 
+        }
+        #slot-main { 
+            grid-area: main; 
+            border-bottom: 1px solid var(--border); 
+            overflow: hidden; 
+            position: relative; 
+            background: var(--bg);
+        }
         #slot-main.scrollable { overflow-y: auto; }
         
         #slot-footer { 
@@ -77,11 +93,14 @@
             gap: 1px; 
             background: var(--border); 
             overflow: hidden; 
-            border-top: 1px solid var(--border); 
         }
         
-        .footer-col { background: var(--bg); overflow-y: auto; padding: 12px; position: relative; }
-        .footer-col:first-child { border-right: 1px solid var(--border); }
+        .footer-col { 
+            background: var(--bg-elevated); 
+            overflow-y: auto; 
+            padding: 12px; 
+            position: relative; 
+        }
 
         /* Tab Styles for Sidebar */
         .tabbed-controls {
@@ -91,7 +110,7 @@
         }
         .tabs-header {
             display: flex;
-            background: rgba(0,0,0,0.2);
+            background: var(--bg);
             border-bottom: 1px solid var(--border);
         }
         .tab-btn {
@@ -108,7 +127,7 @@
         .tab-btn.active {
             color: var(--accent);
             border-bottom: 2px solid var(--accent);
-            background: rgba(255,255,255,0.05);
+            background: var(--bg-elevated);
         }
         .tabs-content {
             flex: 1;
@@ -116,6 +135,7 @@
             padding: 2px;
             display: flex;
             flex-direction: column;
+            background: var(--bg-elevated);
         }
         .tab-pane {
             display: none;
@@ -131,12 +151,15 @@
         .niivue-app, .standalone-viewer, .standalone-controls {
             height: 100% !important;
             width: 100% !important;
+            background: transparent !important;
         }
         .seq-plot-container {
             height: 100% !important;
+            background: var(--bg) !important;
         }
         #slot-footer .seq-explorer, #slot-footer .scan-module {
             height: 100%;
+            background: transparent;
         }
     </style>
 </head>

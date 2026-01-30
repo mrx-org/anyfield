@@ -2,7 +2,7 @@
     display: flex;
     flex-direction: column;
     height: 100%;
-    background: var(--panel-bg, #141b2d);
+    background: transparent;
     color: var(--text, #e8ecff);
 }
 
@@ -60,8 +60,8 @@
 }
 
 .queue-item {
-    background: rgba(255, 255, 255, 0.03);
-    border: 1px solid rgba(255, 255, 255, 0.08);
+    background: rgba(255, 255, 255, 0.02);
+    border: 1px solid var(--border, rgba(255, 255, 255, 0.1));
     border-radius: var(--radius-md, 4px);
     padding: var(--spacing-sm, 4px) var(--spacing-md, 8px);
     margin-bottom: var(--spacing-sm, 4px);

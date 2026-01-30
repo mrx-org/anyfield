@@ -5,12 +5,21 @@
 
 :root {
     /* === COLOR TOKENS === */
-    --bg: #0b1020;
-    --panel-bg: #141b2d;
-    --panel: #111a33;
+    /* Background Hierarchy (darkest to lightest) */
+    --bg: #0a0e1a;              /* Base background - darkest */
+    --bg-elevated: #0f1424;     /* Slightly elevated surfaces */
+    --bg-panel: #141b2d;        /* Panel/card background */
+    
+    /* Legacy aliases for compatibility */
+    --panel-bg: var(--bg-panel);
+    --panel: var(--bg-elevated);
+    
+    /* Text Colors */
     --text: #e8ecff;
     --muted: #a9b3da;
-    --border: rgba(255, 255, 255, 0.12);
+    --border: rgba(255, 255, 255, 0.1);
+    
+    /* Accent Colors */
     --accent: #3b82f6;
     --accent-hover: #2563eb;
     
@@ -25,8 +34,8 @@
     --info: #3b82f6;
     
     /* Interactive States */
-    --hover-bg: rgba(255, 255, 255, 0.06);
-    --hover-bg-strong: rgba(255, 255, 255, 0.12);
+    --hover-bg: rgba(255, 255, 255, 0.05);
+    --hover-bg-strong: rgba(255, 255, 255, 0.1);
     --active-bg: rgba(255, 255, 255, 0.08);
     --selected-bg: rgba(59, 130, 246, 0.2);
     
@@ -70,8 +79,8 @@
 
 /* Volume Row (used in niivue_app.js) */
 .volume-row {
-    background: rgba(255, 255, 255, 0.03);
-    border: 1px solid rgba(255, 255, 255, 0.08);
+    background: rgba(255, 255, 255, 0.02);
+    border: 1px solid var(--border);
     border-radius: var(--radius-md);
     padding: var(--spacing-sm) var(--spacing-md);
     display: flex;
@@ -190,7 +199,7 @@
     padding: 0.3rem 0.5rem;
     border: 1px solid var(--border);
     border-radius: var(--radius-md);
-    background: rgba(255, 255, 255, 0.08);
+    background: rgba(255, 255, 255, 0.05);
     color: var(--text);
     font-size: 0.8rem;
 }
@@ -213,7 +222,7 @@
 
 .params-type-tag {
     font-size: 0.7rem;
-    background: rgba(255, 255, 255, 0.08);
+    background: rgba(255, 255, 255, 0.04);
     color: var(--muted);
     padding: 0.1rem 0.3rem;
     border-radius: var(--radius-md);
@@ -388,20 +397,45 @@
 .niivue-app,
 .seq-explorer,
 .scan-module {
-    --bg: #0b1020;
-    --panel-bg: #141b2d;
+    --bg: #0a0e1a;
+    --bg-elevated: #0f1424;
+    --bg-panel: #141b2d;
+    --panel-bg: var(--bg-panel);
+    --panel: var(--bg-elevated);
     --text: #e8ecff;
     --muted: #a9b3da;
-    --border: rgba(255, 255, 255, 0.12);
+    --border: rgba(255, 255, 255, 0.1);
     --accent: #3b82f6;
 }
 
+/* Module backgrounds - transparent to inherit from containers */
+.niivue-app,
+.seq-explorer,
 .scan-module {
-    background: var(--panel-bg);
+    background: transparent;
     color: var(--text);
+}
+
+/* Seq Explorer section backgrounds */
+#seq-explorer-section,
+#seq-params-section {
+    background: transparent;
+    border: none;
 }
 
 .seq-explorer .seq-function-item.selected {
     background: var(--selected-bg);
     border-left-color: var(--accent);
+}
+
+/* Seq Plot container */
+.seq-plot-container,
+#seq-plot-output {
+    background: var(--bg);
+}
+
+/* Matplotlib toolbar harmonization */
+.mpl-toolbar {
+    background: var(--bg-elevated) !important;
+    border-bottom: 1px solid var(--border) !important;
 }
