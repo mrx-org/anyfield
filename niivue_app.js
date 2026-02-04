@@ -41,6 +41,7 @@ export class NiivueModule {
     this.statusOverlay = null;
     this.statusText = null;
     this.fileInput = null;
+    this.dirInput = null;
     this.btnDemo = null;
     this.showFov = null;
     this.sliceMM = null;
@@ -83,11 +84,14 @@ export class NiivueModule {
     this.volumeListContainer = null;
     this.btnNewFile = null;
     this.btnAddFile = null;
+    this.btnAddFolder = null;
     this.resampleToFovBtn = null;
     
     this.DEMO_URL = "https://niivue.github.io/niivue-demo-images/mni152.nii.gz";
     this.FOV_RGBA255 = new Uint8Array([255, 220, 0, 255]);
     this.isInitialized = false;
+    this.volumeGroups = [];
+    this.collapsedGroups = new Set();
     this._initWaiters = [];
     this.selectedVolume = null; // Track which volume is selected for preview
   }
@@ -186,10 +190,12 @@ export class NiivueModule {
         <div id="panel-viewer-controls-${this.instanceId}" class="panel-flat" style="display: flex; flex-direction: column; height: 100%; box-sizing: border-box; overflow: hidden;">
           <h3 class="panel-title">VIEWER</h3>
           <div class="row" style="display: flex; flex-direction: column; gap: 4px; flex-shrink: 0;">
-            <div style="display: flex; gap: 4px;">
+            <div style="display: flex; gap: 4px; flex-wrap: wrap;">
               <button id="btn-add-file-${this.instanceId}" class="btn btn-secondary btn-sm btn-flex">Add File</button>
+              <button id="btn-add-folder-${this.instanceId}" class="btn btn-secondary btn-sm btn-flex" title="Select folder with JSON + NIfTIs">Add Folder</button>
               <button id="load-demo-${this.instanceId}" class="btn btn-secondary btn-sm btn-flex">Load demo</button>
-              <input id="file-${this.instanceId}" type="file" accept=".nii,.nii.gz,.gz" style="display: none;" />
+              <input id="file-${this.instanceId}" type="file" accept=".nii,.nii.gz,.gz,.json" multiple style="display: none;" />
+              <input id="dir-${this.instanceId}" type="file" webkitdirectory directory multiple style="display: none;" />
             </div>
           </div>
           <div id="volume-list-${this.instanceId}" style="margin-top: 6px; display: flex; flex-direction: column; gap: 4px; flex: 1; overflow-y: auto; border-top: 1px solid var(--border); padding-top: 4px;">
@@ -200,11 +206,12 @@ export class NiivueModule {
   }
 
   _getPanelViewHtml() {
+    const showFovChecked = this.options.showFovDefault !== false;
     return `
         <div class="panel-flat">
           <h3 class="panel-title">OPTIONS</h3>
           <div class="row" style="grid-template-columns: 1fr 1fr; gap: 4px;">
-            <label class="toggle"><input id="showFov-${this.instanceId}" type="checkbox" checked /> FOV Box</label>
+            <label class="toggle"><input id="showFov-${this.instanceId}" type="checkbox" ${showFovChecked ? 'checked' : ''} /> FOV Box</label>
             <label class="toggle"><input id="sliceMM-${this.instanceId}" type="checkbox" /> Slice MM</label>
             <label class="toggle"><input id="radiological-${this.instanceId}" type="checkbox" /> Radio.</label>
             <label class="toggle"><input id="showRender-${this.instanceId}" type="checkbox" checked /> 3D Render</label>
@@ -223,7 +230,8 @@ export class NiivueModule {
             Ctrl+Left: Move FOV<br>
             Ctrl+Right: Rotate FOV<br>
             Ctrl+Scroll: Resize FOV<br>
-            Ctrl+Middle: Zoom
+            Ctrl+Middle: Zoom<br>
+            Left/Right: 4D frame (when volume has 4D)
           </div>
         </div>
     `;
@@ -345,14 +353,14 @@ export class NiivueModule {
 
     root.classList.add('niivue-app');
     root.innerHTML = `
-      <div class="layout">
+      <div class="layout standalone-layout">
+        <div id="controls-slot-${this.instanceId}" class="standalone-sidebar"></div>
         <div id="viewer-slot-${this.instanceId}"></div>
-        <div id="controls-slot-${this.instanceId}"></div>
       </div>
     `;
 
     this.renderViewer(`viewer-slot-${this.instanceId}`);
-    this.renderControls(`controls-slot-${this.instanceId}`);
+    this.renderControls(`controls-slot-${this.instanceId}`, true);
   }
 
   bindControlElements() {
@@ -401,6 +409,8 @@ export class NiivueModule {
     this.locStrVal = qs("locStrVal");
     this.volumeListContainer = qs("volume-list");
     this.btnAddFile = qs("btn-add-file");
+    this.btnAddFolder = qs("btn-add-folder");
+    this.dirInput = qs("dir");
     this.resampleToFovBtn = qs("resampleToFov");
   }
 
@@ -411,6 +421,53 @@ export class NiivueModule {
     target.classList.remove('highlight-add');
     void target.offsetWidth; // Force reflow
     target.classList.add('highlight-add');
+  }
+
+  showJsonChoiceDialog(jsonFiles, niftiFiles) {
+    return new Promise((resolve) => {
+      const overlay = document.createElement("div");
+      overlay.className = "json-choice-overlay";
+      overlay.style.cssText = "position:fixed;inset:0;background:rgba(0,0,0,0.6);display:flex;align-items:center;justify-content:center;z-index:9999;";
+      const box = document.createElement("div");
+      box.className = "json-choice-dialog";
+      box.style.cssText = "background:var(--bg-panel);border:1px solid var(--border);border-radius:8px;padding:16px;min-width:280px;max-width:400px;box-shadow:0 8px 32px rgba(0,0,0,0.4);";
+      const title = document.createElement("div");
+      title.style.cssText = "font-weight:600;margin-bottom:12px;color:var(--text);";
+      title.textContent = "Choose phantom configuration";
+      const hint = document.createElement("div");
+      hint.style.cssText = "font-size:11px;color:var(--muted);margin-bottom:12px;";
+      hint.textContent = `${niftiFiles.length} NIfTI file(s) found. Select which JSON to use:`;
+      const list = document.createElement("div");
+      list.style.cssText = "display:flex;flex-direction:column;gap:6px;margin-bottom:16px;max-height:200px;overflow-y:auto;";
+      jsonFiles.forEach((f) => {
+        const btn = document.createElement("button");
+        btn.className = "btn";
+        btn.style.cssText = "text-align:left;padding:10px 12px;justify-content:flex-start;";
+        btn.textContent = f.name;
+        btn.onclick = () => {
+          overlay.remove();
+          resolve(f);
+        };
+        list.appendChild(btn);
+      });
+      const footer = document.createElement("div");
+      footer.style.cssText = "display:flex;justify-content:flex-end;gap:8px;";
+      const cancel = document.createElement("button");
+      cancel.className = "btn btn-secondary";
+      cancel.textContent = "Cancel";
+      cancel.onclick = () => {
+        overlay.remove();
+        resolve(null);
+      };
+      footer.appendChild(cancel);
+      box.appendChild(title);
+      box.appendChild(hint);
+      box.appendChild(list);
+      box.appendChild(footer);
+      overlay.appendChild(box);
+      overlay.onclick = (e) => { if (e.target === overlay) { overlay.remove(); resolve(null); } };
+      document.body.appendChild(overlay);
+    });
   }
 
   async initNiivue() {
@@ -470,12 +527,25 @@ export class NiivueModule {
     window.addEventListener("mousemove", (e) => this.handleMouseMove(e));
     window.addEventListener("mouseup", () => this.handleMouseUp());
     this.canvas.addEventListener("wheel", (e) => this.handleWheel(e), { passive: false, capture: true });
+    window.addEventListener("keydown", (e) => this.handleKeydown(e));
 
     setInterval(() => this.updateAngles(), 200);
     this.setStatus("ready");
     this.isInitialized = true;
     this._initWaiters.forEach(resolve => resolve());
     this._initWaiters = [];
+    setTimeout(() => this.emitViewOptions(), 100);
+  }
+
+  emitViewOptions() {
+    if (this.sliceMM && this.radiological && this.showRender && this.showCrosshair) {
+      eventHub.emit('viewOptionsChange', {
+        sliceMM: this.sliceMM.checked,
+        radiological: this.radiological.checked,
+        showRender: this.showRender.checked,
+        showCrosshair: this.showCrosshair.checked
+      });
+    }
   }
 
   async initPyodide() {
@@ -593,15 +663,58 @@ def run_resampling(source_bytes, reference_bytes):
       this.isAddingVolume = true;
       this.fileInput.click();
     });
+    if (this.btnAddFolder && this.dirInput) {
+      this.btnAddFolder.addEventListener("click", () => this.dirInput.click());
+      this.dirInput.onchange = async (e) => {
+        const entries = Array.from(e.target.files || []);
+        e.target.value = "";
+        if (!entries.length) return;
+        const rootDir = entries[0]?.webkitRelativePath?.split("/")[0] || "";
+        const jsonFiles = entries.filter(f => {
+          if (!f.name.toLowerCase().endsWith(".json")) return false;
+          const dir = f.webkitRelativePath.split("/")[0];
+          return dir === rootDir && !f.webkitRelativePath.slice(rootDir.length + 1).includes("/");
+        });
+        const niftiFiles = entries.filter(f => {
+          if (!/\.nii(\.gz)?$/i.test(f.name)) return false;
+          const dir = f.webkitRelativePath.split("/")[0];
+          return dir === rootDir && !f.webkitRelativePath.slice(rootDir.length + 1).includes("/");
+        });
+        if (jsonFiles.length === 0) {
+          this.setStatus("Folder must contain a .json file (multi-phantom definition).");
+          return;
+        }
+        if (niftiFiles.length === 0) {
+          this.setStatus("No .nii or .nii.gz files found in the folder.");
+          return;
+        }
+        let chosen = jsonFiles[0];
+        if (jsonFiles.length > 1) {
+          chosen = await this.showJsonChoiceDialog(jsonFiles, niftiFiles);
+          if (!chosen) return;
+        }
+        await this.loadMultiPhantomFromFiles(chosen, niftiFiles);
+      };
+    }
 
     this.showFov.addEventListener("change", () => this.requestFovUpdate());
-    this.sliceMM.addEventListener("change", () => this.nv.setSliceMM(this.sliceMM.checked));
-    this.radiological.addEventListener("change", () => this.nv.setRadiologicalConvention(this.radiological.checked));
+    this.sliceMM.addEventListener("change", () => {
+      this.nv.setSliceMM(this.sliceMM.checked);
+      this.emitViewOptions();
+    });
+    this.radiological.addEventListener("change", () => {
+      this.nv.setRadiologicalConvention(this.radiological.checked);
+      this.emitViewOptions();
+    });
     this.showRender.addEventListener("change", () => { 
       this.nv.opts.multiplanarShowRender = this.showRender.checked ? SHOW_RENDER.ALWAYS : SHOW_RENDER.NEVER; 
       this.nv.drawScene(); 
+      this.emitViewOptions();
     });
-    this.showCrosshair.addEventListener("change", () => this.nv.setCrosshairWidth(this.showCrosshair.checked ? 1 : 0));
+    this.showCrosshair.addEventListener("change", () => {
+      this.nv.setCrosshairWidth(this.showCrosshair.checked ? 1 : 0);
+      this.emitViewOptions();
+    });
 
     this.bindBiDirectional(this.zoom2D, this.zoom2DVal, () => { 
       const pan = this.nv.scene.pan2Dxyzmm; 
@@ -625,15 +738,29 @@ def run_resampling(source_bytes, reference_bytes):
     this.downloadFovMeshBtn.addEventListener("click", () => this.handleDownloadFovMesh());
     this.resampleToFovBtn.addEventListener("click", () => this.handleResampleToFov());
     this.btnDemo.onclick = () => this.loadUrl(this.DEMO_URL, "mni152.nii.gz", true);
-    this.fileInput.onchange = (e) => { 
-      const f=e.target.files?.[0]; 
-      if(f){ 
-        const u=URL.createObjectURL(f); 
-        this.loadUrl(u, f.name, this.isAddingVolume).finally(()=>{ 
-          setTimeout(()=>URL.revokeObjectURL(u),30000); 
-          e.target.value=""; 
-        }); 
-      } 
+    this.fileInput.onchange = async (e) => {
+      const files = Array.from(e.target.files || []);
+      e.target.value = "";
+      if (!files.length) return;
+      const jsonFile = files.find(f => f.name.toLowerCase().endsWith('.json'));
+      const niftiFiles = files.filter(f => /\.nii(\.gz)?$/i.test(f.name));
+      if (jsonFile && niftiFiles.length > 0) {
+        await this.loadMultiPhantomFromFiles(jsonFile, niftiFiles);
+      } else if (jsonFile && niftiFiles.length === 0) {
+        this.setStatus("Use Add Folder to select a directory with JSON + NIfTIs, or select both together.");
+      } else if (files.length === 1) {
+        const f = files[0];
+        const u = URL.createObjectURL(f);
+        this.loadUrl(u, f.name, this.isAddingVolume).finally(() => {
+          setTimeout(() => URL.revokeObjectURL(u), 30000);
+        });
+      } else {
+        for (const f of niftiFiles) {
+          const u = URL.createObjectURL(f);
+          await this.loadUrl(u, f.name, true);
+          setTimeout(() => URL.revokeObjectURL(u), 30000);
+        }
+      }
     };
   }
 
@@ -723,6 +850,26 @@ def run_resampling(source_bytes, reference_bytes):
   setStatus(s) {
     if (this.statusText) this.statusText.textContent = s;
     if (this.statusOverlay) this.statusOverlay.textContent = s;
+  }
+
+  handleKeydown(e) {
+    const target = e.target;
+    if (target && (target.tagName === "INPUT" || target.tagName === "TEXTAREA" || target.tagName === "SELECT" || target.isContentEditable)) return;
+    if (e.key !== "ArrowLeft" && e.key !== "ArrowRight") return;
+    const vols = this.nv?.volumes || [];
+    const nFrame = (v) => v.nFrame4D ?? (v.dims && v.dims.length > 3 ? v.dims[3] : 1);
+    const vol4d = vols.find(v => (v.opacity ?? 0) > 0 && nFrame(v) > 1);
+    if (!vol4d) return;
+    const n = nFrame(vol4d);
+    let frame = vol4d.frame4D ?? 0;
+    if (e.key === "ArrowLeft") frame = Math.max(0, frame - 1);
+    else frame = Math.min(n - 1, frame + 1);
+    if (frame === (vol4d.frame4D ?? 0)) return;
+    vol4d.frame4D = frame;
+    if (typeof vol4d.applyOptionsUpdate === "function") vol4d.applyOptionsUpdate({ frame4D: frame });
+    this.nv.drawScene();
+    this.setStatus(`${vol4d.name || "Volume"}: frame ${frame + 1}/${n}`);
+    e.preventDefault();
   }
 
   readAnglesBestEffort() {
@@ -1178,15 +1325,55 @@ def run_resampling(source_bytes, reference_bytes):
     return this.setNiftiQform(niftiBytes, affineRow, 2);
   }
 
-  downloadVolume(vol) {
+  async downloadVolume(vol) {
     try {
-      const bytes = this.getVolumeNifti(vol);
-      const url = URL.createObjectURL(new Blob([bytes], {type: "application/octet-stream"}));
-      const a = document.createElement("a"); a.href = url;
-      const fname = vol.name || "volume.nii"; a.download = fname.endsWith(".gz") ? fname : fname + (fname.endsWith(".nii") ? "" : ".nii");
+      let bytes = this.getVolumeNifti(vol);
+      const fname = vol.name || "volume.nii";
+      const useGz = fname.endsWith(".gz");
+      if (useGz) {
+        const blob = new Blob([bytes]);
+        const stream = blob.stream().pipeThrough(new CompressionStream("gzip"));
+        bytes = new Uint8Array(await new Response(stream).arrayBuffer());
+      }
+      const downloadName = useGz ? fname : fname + (fname.endsWith(".nii") ? "" : ".nii");
+      const url = URL.createObjectURL(new Blob([bytes], { type: "application/octet-stream" }));
+      const a = document.createElement("a"); a.href = url; a.download = downloadName;
       document.body.appendChild(a); a.click(); a.remove(); setTimeout(() => URL.revokeObjectURL(url), 10000);
-      this.setStatus(`Downloaded: ${a.download}`);
+      this.setStatus(`Downloaded: ${downloadName}`);
     } catch (e) { console.error(e); this.setStatus(`Download error: ${e.message}`); }
+  }
+
+  async downloadGroupAsZip(group) {
+    try {
+      const folderName = group.jsonName;
+      const JSZip = (await import("https://esm.run/jszip@3.10.1")).default;
+      const zip = new JSZip();
+      const subfolder = zip.folder(folderName);
+      if (group.jsonContent && group.jsonFileName) {
+        subfolder.file(group.jsonFileName, group.jsonContent);
+      }
+      for (const vol of group.volumes) {
+        const bytes = this.getVolumeNifti(vol);
+        const fname = vol.name || "volume.nii";
+        subfolder.file(fname, bytes);
+      }
+      const blob = await zip.generateAsync({ type: "blob" });
+      const url = URL.createObjectURL(blob);
+      const a = document.createElement("a"); a.href = url; a.download = `${folderName}.zip`;
+      document.body.appendChild(a); a.click(); a.remove();
+      setTimeout(() => URL.revokeObjectURL(url), 10000);
+      this.setStatus(`Downloaded: ${folderName}.zip`);
+    } catch (e) {
+      console.error(e);
+      this.setStatus(`Zip failed, downloading individually...`);
+      if (group.jsonContent && group.jsonFileName) {
+        const a = document.createElement("a");
+        a.href = URL.createObjectURL(new Blob([group.jsonContent]));
+        a.download = group.jsonFileName;
+        a.click();
+      }
+      group.volumes.forEach(v => this.downloadVolume(v));
+    }
   }
 
   handleDownloadFovMesh() {
@@ -1214,168 +1401,256 @@ def run_resampling(source_bytes, reference_bytes):
   async handleResampleToFov() {
     if (!this.pyodide || !this.nv.volumes?.length) return;
     try {
-      this.resampleToFovBtn.disabled = true; this.setStatus("Resampling...");
-      const src = this.getVolumeNifti(this.nv.volumes[0]), ref = this.generateFovMaskNifti();
-      this.pyodide.globals.set("source_bytes", src); this.pyodide.globals.set("reference_bytes", ref);
-      let res = await this.pyodide.runPythonAsync(`run_resampling(source_bytes, reference_bytes)`);
-      const bytes = (res && res.toJs) ? res.toJs() : res; if(res.destroy) res.destroy();
-      const url = URL.createObjectURL(new Blob([bytes]));
-      const name = (this.nv.volumes[0].name || "vol").replace(/\.nii(\.gz)?$/, "") + "_resampled.nii";
-      await this.nv.addVolumesFromUrl([{ url, name, colormap: "gray", opacity: 1.0 }]);
-      this.updateVolumeList(); 
+      this.resampleToFovBtn.disabled = true;
+      const ref = this.generateFovMaskNifti();
+      this.pyodide.globals.set("reference_bytes", ref);
+
+      if (this.volumeGroups?.length > 0) {
+        this.setStatus("Resampling multi-phantom...");
+        const newGroups = [];
+        for (const group of this.volumeGroups) {
+          const newVolumes = [];
+          const pdIdx = group.volumes.findIndex(v => /_PD\.nii(\.gz)?$/i.test(v?.name || ""));
+          const defaultVisibleIdx = pdIdx >= 0 ? pdIdx : 0;
+          for (let i = 0; i < group.volumes.length; i++) {
+            const vol = group.volumes[i];
+            const src = this.getVolumeNifti(vol);
+            this.pyodide.globals.set("source_bytes", src);
+            let res = await this.pyodide.runPythonAsync(`run_resampling(source_bytes, reference_bytes)`);
+            const bytes = (res && res.toJs) ? res.toJs() : res; if (res?.destroy) res.destroy();
+            const url = URL.createObjectURL(new Blob([bytes]));
+            const name = vol.name || "vol";
+            const added = await this.nv.addVolumesFromUrl([{
+              url, name, colormap: "gray", opacity: i === defaultVisibleIdx ? 1.0 : 0
+            }]);
+            if (added?.length) newVolumes.push(added[0]);
+            setTimeout(() => URL.revokeObjectURL(url), 30000);
+          }
+          const groupId = "g-" + Math.random().toString(36).substr(2, 9);
+          const folderName = group.jsonName + "_resampled";
+          newGroups.push({
+            id: groupId,
+            jsonName: folderName,
+            volumes: newVolumes,
+            jsonContent: group.jsonContent,
+            jsonFileName: group.jsonFileName || group.jsonName + ".json"
+          });
+        }
+        this.volumeGroups.push(...newGroups);
+        this.setStatus(`✓ Resampled multi-phantom: ${newGroups.length} group(s)`);
+      } else {
+        this.setStatus("Resampling...");
+        const vol = this.nv.volumes[0];
+        const src = this.getVolumeNifti(vol);
+        this.pyodide.globals.set("source_bytes", src);
+        let res = await this.pyodide.runPythonAsync(`run_resampling(source_bytes, reference_bytes)`);
+        const bytes = (res && res.toJs) ? res.toJs() : res; if (res?.destroy) res.destroy();
+        const url = URL.createObjectURL(new Blob([bytes]));
+        const name = (vol.name || "vol").replace(/\.nii(\.gz)?$/, "") + "_resampled.nii";
+        await this.nv.addVolumesFromUrl([{ url, name, colormap: "gray", opacity: 1.0 }]);
+        setTimeout(() => URL.revokeObjectURL(url), 30000);
+        this.setStatus(`✓ Resampled: ${name}`);
+      }
+      this.updateVolumeList();
       this.triggerHighlight();
-      this.setStatus(`✓ Resampled: ${name}`);
     } catch (e) { console.error(e); this.setStatus(`Error: ${e.message}`); } finally { this.resampleToFovBtn.disabled = false; }
   }
 
   updateVolumeList() {
     if (!this.volumeListContainer) return;
     this.volumeListContainer.innerHTML = "";
-    
+    const volSet = new Set(this.nv.volumes);
+    this.volumeGroups = this.volumeGroups.filter(g => {
+      g.volumes = g.volumes.filter(v => volSet.has(v));
+      return g.volumes.length > 0;
+    });
+    const groupVolSet = new Set();
+    this.volumeGroups.forEach(g => g.volumes.forEach(v => groupVolSet.add(v)));
     const phantoms = [];
     const scans = [];
-    
     this.nv.volumes.forEach((vol, index) => {
-        if (vol.name && vol.name.startsWith('scan_')) {
-            scans.push({ vol, index });
-        } else {
-            phantoms.push({ vol, index });
-        }
+      if (vol.name && vol.name.startsWith('scan_')) {
+        scans.push({ vol, index });
+      } else if (!groupVolSet.has(vol)) {
+        phantoms.push({ vol, index });
+      }
     });
 
     const createHeader = (title) => {
-        const h = document.createElement("div");
-        h.className = "section-header";
-        h.textContent = title;
-        return h;
+      const h = document.createElement("div");
+      h.className = "section-header";
+      h.textContent = title;
+      return h;
     };
 
-    const createRow = (vol, originalIndex) => {
-      const row = document.createElement("div"); 
+    const createRow = (vol, originalIndex, opts = {}) => {
+      const { noDownload, noRemove, noCheckbox, noMeta, shortTitle } = opts;
+      const row = document.createElement("div");
       row.className = "volume-row";
-      
-      // Determine row type and classes
       const isScan = vol.name && vol.name.startsWith('scan_');
       const isMask = vol.name?.toLowerCase().includes("mask");
       const isSelected = this.selectedVolume === vol;
-      
-      if (isScan) {
-          row.classList.add('scan-item');
-      } else if (isMask) {
-          row.classList.add('mask-item');
-      }
-      
-      if (isSelected) {
-          row.classList.add('selected');
-      }
+      if (isScan) row.classList.add('scan-item');
+      else if (isMask) row.classList.add('mask-item');
+      if (isSelected) row.classList.add('selected');
 
-      // Checkbox
-      const cb = document.createElement("input"); 
-      cb.type = "checkbox"; 
-      cb.checked = vol.opacity > 0; 
-      cb.onclick = (e) => {
-          e.stopPropagation();
-      };
-      cb.onchange = (e) => {
+      if (!noCheckbox) {
+        const cb = document.createElement("input");
+        cb.type = "checkbox";
+        cb.checked = vol.opacity > 0;
+        cb.onclick = (e) => e.stopPropagation();
+        cb.onchange = (e) => {
           e.stopPropagation();
           const newOpacity = cb.checked ? (vol.opacity === 0 ? 1 : vol.opacity) : 0;
-          
           if (cb.checked && !isScan) {
-              // Mutual exclusion for phantoms only
-              this.nv.volumes.forEach((v, idx) => {
-                  if (idx === originalIndex) return;
-                  const isOtherScan = v.name && v.name.startsWith('scan_');
-                  if (!isOtherScan) {
-                      this.nv.setOpacity(idx, 0);
-                  }
-              });
+            this.nv.volumes.forEach((v, idx) => {
+              if (idx === originalIndex) return;
+              if (!v.name?.startsWith('scan_')) this.nv.setOpacity(idx, 0);
+            });
           }
-          
           this.nv.setOpacity(originalIndex, newOpacity);
           this.updateVolumeList();
           this.updatePreviewFromSelection();
-      };
-
-      // Info container
-      const info = document.createElement("div");
-      info.className = "volume-row-info";
-
-      let titleText = vol.name || `Vol ${originalIndex + 1}`;
-      let metaText = "Imported Phantom";
-
-      const scanMatch = titleText.match(/^scan_(\d+)_(\d{4}-\d{2}-\d{2})_(\d{2}-\d{2}-\d{2})_(.*)\.nii/);
-      if (scanMatch) {
-          const scanNum = scanMatch[1];
-          const timeStr = scanMatch[3].replace(/-/g, ':');
-          titleText = `${scanNum}. ${scanMatch[4].replace(/\.nii.*/, '')}`;
-          metaText = timeStr;
+        };
+        row.appendChild(cb);
       }
 
+      const info = document.createElement("div");
+      info.className = "volume-row-info";
+      let titleText = vol.name || `Vol ${originalIndex + 1}`;
+      let metaText = "Imported Phantom";
+      const scanMatch = titleText.match(/^scan_(\d+)_(\d{4}-\d{2}-\d{2})_(\d{2}-\d{2}-\d{2})_(.*)\.nii/);
+      if (scanMatch) {
+        titleText = `${scanMatch[1]}. ${scanMatch[4].replace(/\.nii.*/, '')}`;
+        metaText = scanMatch[3].replace(/-/g, ':');
+      } else if (shortTitle && vol.name) {
+        const m = vol.name.match(/_([^_.]+)\.nii(\.gz)?$/i);
+        titleText = m ? m[1] : vol.name.replace(/\.nii(\.gz)?$/i, '').replace(/.*_/, '') || vol.name;
+      }
       const title = document.createElement("div");
       title.className = "volume-row-title";
       title.textContent = titleText;
-
-      const meta = document.createElement("div");
-      meta.className = "volume-row-meta";
-      meta.textContent = metaText;
-
       info.appendChild(title);
-      info.appendChild(meta);
+      if (!noMeta) {
+        const meta = document.createElement("div");
+        meta.className = "volume-row-meta";
+        meta.textContent = metaText;
+        info.appendChild(meta);
+      }
+      row.appendChild(info);
 
-      // Actions
       const actions = document.createElement("div");
       actions.className = "volume-row-actions";
-
-      const dl = document.createElement("button"); 
-      dl.innerHTML = "↓"; 
-      dl.className = "btn volume-row-btn"; 
-      dl.onclick = (e) => { e.stopPropagation(); this.downloadVolume(vol); };
-
-      const rm = document.createElement("button"); 
-      rm.textContent = "×"; 
-      rm.className = "btn volume-row-btn"; 
-      rm.onclick = (e) => { 
-          e.stopPropagation(); 
-          if (this.selectedVolume === vol) {
-              this.selectedVolume = null;
-          }
-          this.nv.removeVolume(vol); 
+      if (!noDownload) {
+        const dl = document.createElement("button");
+        dl.innerHTML = "↓";
+        dl.className = "btn volume-row-btn";
+        dl.onclick = (e) => { e.stopPropagation(); this.downloadVolume(vol); };
+        actions.appendChild(dl);
+      }
+      if (!noRemove) {
+        const rm = document.createElement("button");
+        rm.textContent = "×";
+        rm.className = "btn volume-row-btn";
+        rm.onclick = (e) => {
+          e.stopPropagation();
+          if (this.selectedVolume === vol) this.selectedVolume = null;
+          this.nv.removeVolume(vol);
           this.updateVolumeList();
           this.updatePreviewFromSelection();
-      };
-
-      row.appendChild(cb);
-      row.appendChild(info);
-      actions.appendChild(dl);
-      actions.appendChild(rm);
+        };
+        actions.appendChild(rm);
+      }
       row.appendChild(actions);
 
-      // Row click for selection
-      row.onclick = (e) => {
-          if (e.target === cb || e.target.closest('button')) return;
-          
-          if (isScan) {
-              if (this.selectedVolume === vol) {
-                  this.selectedVolume = null;
-              } else {
-                  this.selectedVolume = vol;
-              }
-              this.updateVolumeList();
-              this.updatePreviewFromSelection();
-          }
-      };
-      
+      if (isScan && !noCheckbox) {
+        row.onclick = (e) => {
+          if (e.target === row.querySelector('input[type="checkbox"]') || e.target.closest('button')) return;
+          this.selectedVolume = this.selectedVolume === vol ? null : vol;
+          this.updateVolumeList();
+          this.updatePreviewFromSelection();
+        };
+      }
       return row;
     };
 
-    if (phantoms.length > 0) {
-        this.volumeListContainer.appendChild(createHeader("Phantoms"));
-        phantoms.forEach(p => this.volumeListContainer.appendChild(createRow(p.vol, p.index)));
+    const createGroupRow = (group) => {
+      const expanded = !this.collapsedGroups.has(group.id);
+      const row = document.createElement("div");
+      row.className = "volume-row volume-group-parent";
+      const toggle = document.createElement("span");
+      toggle.className = "group-toggle";
+      toggle.textContent = expanded ? "▼" : "▶";
+      toggle.style.cssText = "cursor:pointer;margin-right:4px;font-size:10px;";
+      const info = document.createElement("div");
+      info.className = "volume-row-info";
+      const title = document.createElement("div");
+      title.className = "volume-row-title";
+      title.textContent = group.jsonName;
+      const meta = document.createElement("div");
+      meta.className = "volume-row-meta";
+      meta.textContent = `${group.volumes.length} sub-phantoms`;
+      info.appendChild(title);
+      info.appendChild(meta);
+      const actions = document.createElement("div");
+      actions.className = "volume-row-actions";
+      const dl = document.createElement("button");
+      dl.innerHTML = "↓";
+      dl.className = "btn volume-row-btn";
+      dl.title = "Download as zip (folder + JSON + NIfTIs)";
+      dl.onclick = (e) => {
+        e.stopPropagation();
+        this.downloadGroupAsZip(group);
+      };
+      const rm = document.createElement("button");
+      rm.textContent = "×";
+      rm.className = "btn volume-row-btn";
+      rm.onclick = (e) => {
+        e.stopPropagation();
+        group.volumes.forEach(v => this.nv.removeVolume(v));
+        this.volumeGroups = this.volumeGroups.filter(g => g.id !== group.id);
+        this.updateVolumeList();
+        this.updatePreviewFromSelection();
+      };
+      actions.appendChild(dl);
+      actions.appendChild(rm);
+      row.appendChild(toggle);
+      row.appendChild(info);
+      row.appendChild(actions);
+      toggle.onclick = (e) => {
+        e.stopPropagation();
+        if (this.collapsedGroups.has(group.id)) this.collapsedGroups.delete(group.id);
+        else this.collapsedGroups.add(group.id);
+        this.updateVolumeList();
+      };
+      return row;
+    };
+
+    const createSubRow = (vol, originalIndex) => {
+      const row = createRow(vol, originalIndex, { noDownload: true, noRemove: true, noMeta: true, shortTitle: true });
+      row.classList.add("volume-group-sub");
+      row.style.marginLeft = "16px";
+      return row;
+    };
+
+    if (phantoms.length > 0 || this.volumeGroups.length > 0) {
+      this.volumeListContainer.appendChild(createHeader("Phantoms"));
+      this.volumeGroups.forEach(group => {
+        this.volumeListContainer.appendChild(createGroupRow(group));
+        const expanded = !this.collapsedGroups.has(group.id);
+        if (expanded) {
+          group.volumes.forEach(vol => {
+            const idx = this.nv.volumes.indexOf(vol);
+            if (idx >= 0) this.volumeListContainer.appendChild(createSubRow(vol, idx));
+          });
+        }
+      });
+      phantoms.forEach(p => this.volumeListContainer.appendChild(createRow(p.vol, p.index)));
     }
 
     if (scans.length > 0) {
-        this.volumeListContainer.appendChild(createHeader("Scans"));
-        [...scans].reverse().forEach(s => this.volumeListContainer.appendChild(createRow(s.vol, s.index)));
+      this.volumeListContainer.appendChild(createHeader("Scans"));
+      [...scans].reverse().forEach(s => this.volumeListContainer.appendChild(createRow(s.vol, s.index)));
     }
   }
 
@@ -1388,6 +1663,80 @@ def run_resampling(source_bytes, reference_bytes):
     } else {
       // No selection, clear preview
       window.scanPreview.loadSingleScan(null, null);
+    }
+  }
+
+  async loadMultiPhantomFromFiles(jsonFile, niftiFiles) {
+    await this.waitForInit();
+    try {
+      const jsonText = await jsonFile.text();
+      let fileList = null;
+      try {
+        const parsed = JSON.parse(jsonText);
+        if (Array.isArray(parsed)) {
+          fileList = parsed.filter(s => typeof s === "string" && /\.nii(\.gz)?$/i.test(s));
+        } else if (parsed && typeof parsed === "object") {
+          const arr = parsed.phantoms || parsed.files || parsed.volumes;
+          if (Array.isArray(arr)) {
+            fileList = arr.filter(s => typeof s === "string" && /\.nii(\.gz)?$/i.test(s));
+          }
+        }
+      } catch (_) {}
+      const nameMap = new Map(niftiFiles.map(f => [f.name, f]));
+      const ordered = fileList
+        ? fileList.map(n => nameMap.get(n)).filter(Boolean)
+        : [...niftiFiles].sort((a, b) => a.name.localeCompare(b.name));
+      if (ordered.length === 0) {
+        this.setStatus("No matching NIfTI files found for JSON phantom.");
+        return;
+      }
+      const groupId = "g-" + Math.random().toString(36).substr(2, 9);
+      const jsonName = jsonFile.name.replace(/\.json$/i, "");
+      this.setStatus(`loading multi-phantom: ${jsonName} (${ordered.length} volumes)`);
+      const toRemove = this.nv.volumes.filter(v => !v.name.startsWith("scan_") && !v.name.toLowerCase().includes("mask"));
+      toRemove.forEach(v => this.nv.removeVolume(v));
+      this.volumeGroups = [];
+      const pdIdx = ordered.findIndex(f => /_PD\.nii(\.gz)?$/i.test(f.name));
+      const defaultVisibleIdx = pdIdx >= 0 ? pdIdx : 0;
+      const groupVolumes = [];
+      for (let i = 0; i < ordered.length; i++) {
+        const f = ordered[i];
+        const u = URL.createObjectURL(f);
+        const added = await this.nv.addVolumesFromUrl([{
+          url: u,
+          name: f.name,
+          colormap: "gray",
+          opacity: i === defaultVisibleIdx ? 1.0 : 0
+        }]);
+        if (added?.length) {
+          added[0].sourceUrl = u;
+          added[0]._groupId = groupId;
+          added[0]._sourceFile = f;
+          groupVolumes.push(added[0]);
+        }
+        setTimeout(() => URL.revokeObjectURL(u), 30000);
+      }
+      this.volumeGroups.push({ id: groupId, jsonName, volumes: groupVolumes, jsonContent: jsonText, jsonFileName: jsonFile.name });
+      const info = this.getVolumeInfo();
+      if (info) {
+        this.voxelSpacingMm = this.estimateVoxelSpacingMm(info);
+        if (info.dim3) {
+          const [dx, dy, dz] = info.dim3;
+          this.fullFovMm = [dx * this.voxelSpacingMm[0], dy * this.voxelSpacingMm[1], dz * this.voxelSpacingMm[2]];
+          const sr = (s, n, mm, def) => { s.min = n.min = "1"; s.max = n.max = "600"; s.step = n.step = "1"; s.value = n.value = def ? String(def) : String(Math.round(mm)); };
+          sr(this.fovX, this.fovXVal, this.fullFovMm[0], 220); sr(this.fovY, this.fovYVal, this.fullFovMm[1], 220); sr(this.fovZ, this.fovZVal, this.fullFovMm[2], 10);
+          const so = (s, n) => { s.min = n.min = "-500"; s.max = n.max = "500"; s.step = n.step = "0.1"; s.value = n.value = "0"; };
+          so(this.fovOffX, this.fovOffXVal); so(this.fovOffY, this.fovOffYVal); so(this.fovOffZ, this.fovOffZVal);
+        }
+      }
+      this.syncFovLabels();
+      this.updateFovMesh();
+      this.updateVolumeList();
+      this.updatePreviewFromSelection();
+      this.triggerHighlight();
+      this.setStatus(`loaded: ${jsonName} (${groupVolumes.length} volumes)`);
+    } catch (e) {
+      this.setStatus(`Error: ${e.message}`);
     }
   }
 
@@ -1493,6 +1842,17 @@ export class ScanPreviewModule {
     setTimeout(() => this.initNiivue(), 10);
   }
 
+  applyViewOptions(opts) {
+    if (!this.nv) return;
+    if (opts.sliceMM !== undefined) this.nv.setSliceMM(opts.sliceMM);
+    if (opts.radiological !== undefined) this.nv.setRadiologicalConvention(opts.radiological);
+    if (opts.showRender !== undefined) {
+      this.nv.opts.multiplanarShowRender = opts.showRender ? SHOW_RENDER.ALWAYS : SHOW_RENDER.NEVER;
+    }
+    if (opts.showCrosshair !== undefined) this.nv.setCrosshairWidth(opts.showCrosshair ? 1 : 0);
+    this.nv.drawScene();
+  }
+
   async initNiivue() {
     try {
       await this.nv.attachToCanvas(this.canvas);
@@ -1502,6 +1862,8 @@ export class ScanPreviewModule {
       // Set crosshair to be thinner and 50% transparent
       this.nv.opts.crosshairColor = [0.2, 0.8, 0.2, 0.5]; // 50% transparent green
       this.nv.opts.crosshairWidth = 0.5; // Thinner crosshair
+      
+      eventHub.on('viewOptionsChange', (opts) => this.applyViewOptions(opts));
       
       this.nv.drawScene();
       
@@ -1575,7 +1937,7 @@ export class ScanPreviewModule {
 
 // For backward compatibility or standalone use
 export async function initNiivueApp(containerId, options = {}) {
-  const module = new NiivueModule(options);
+  const module = new NiivueModule({ showFovDefault: false, ...options });
   module.renderFull(containerId);
   // Do not await initPyodide here, it can run in background
   module.initPyodide();

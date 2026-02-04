@@ -1,14 +1,14 @@
 #!/usr/bin/env python3
 """
-Resample a target NIfTI file to match the grid of a FOV mask NIfTI file.
+Resample target NIfTI file(s) to match the grid of a FOV mask NIfTI file.
 
 Usage:
     python resample.py
 
 The script will prompt you to:
 1. Select the FOV mask NIfTI file (defines target grid)
-2. Select the target NIfTI file (to be resampled)
-3. The resampled file will be saved as <target_name>_resampled.nii
+2. Select one or more target NIfTI file(s) (to be resampled)
+3. Each resampled file will be saved as <target_name>_resampled.nii[.gz]
 """
 
 import numpy as np
@@ -41,6 +41,29 @@ def select_file(title, filetypes=None):
     
     root.destroy()
     return filepath
+
+
+def select_files(title, filetypes=None):
+    """Open a file dialog to select multiple files."""
+    if filetypes is None:
+        filetypes = [
+            ("NIfTI files", "*.nii *.nii.gz"),
+            ("Standard NIfTI", "*.nii"),
+            ("Compressed NIfTI", "*.nii.gz"),
+            ("All files", "*.*")
+        ]
+    
+    root = tk.Tk()
+    root.withdraw()  # Hide the main window
+    root.attributes('-topmost', True)  # Bring dialog to front
+    
+    filepaths = filedialog.askopenfilenames(
+        title=title,
+        filetypes=filetypes
+    )
+    
+    root.destroy()
+    return list(filepaths)
 
 
 def load_nifti(path):
@@ -193,79 +216,77 @@ def main():
     
     print(f"Selected FOV mask: {os.path.basename(fov_path)}")
     
-    # Step 2: Select target file
+    # Step 2: Select target file(s)
     print()
-    print("Step 2: Select target NIfTI file (to be resampled)...")
-    target_path = select_file("Select target NIfTI file")
+    print("Step 2: Select target NIfTI file(s) (to be resampled)...")
+    print("  (You can select multiple .nii or .nii.gz files)")
+    target_paths = select_files("Select target NIfTI file(s)")
     
-    if not target_path:
-        print("No file selected. Exiting.")
+    if not target_paths:
+        print("No files selected. Exiting.")
         sys.exit(1)
     
-    print(f"Selected target: {os.path.basename(target_path)}")
+    print(f"Selected {len(target_paths)} target(s): {[os.path.basename(p) for p in target_paths]}")
     print()
     
-    # Load files
-    print("Loading files...")
+    # Load FOV mask once
+    print("Loading FOV mask...")
     try:
         fov_img = load_nifti(fov_path)
-        target_img = load_nifti(target_path)
     except Exception as e:
-        print(f"Error loading files: {e}")
+        print(f"Error loading FOV mask: {e}")
         sys.exit(1)
     
-    # Display information
-    print()
     print("FOV mask properties:")
     print(f"  Shape: {fov_img.shape}")
     print(f"  Spacing: {fov_img.header.get_zooms()}")
     print(f"  Affine shape: {fov_img.affine.shape}")
-    
-    print()
-    print("Target properties:")
-    print(f"  Shape: {target_img.shape}")
-    print(f"  Spacing: {target_img.header.get_zooms()}")
-    print(f"  Affine shape: {target_img.affine.shape}")
     print()
     
-    # Resample
-    print("Resampling target to match FOV mask grid...")
-    print("  (Using linear interpolation)")
-    try:
-        resampled_img = resample_to_reference(target_img, fov_img, order=1)
-    except Exception as e:
-        print(f"Error during resampling: {e}")
-        import traceback
-        traceback.print_exc()
-        sys.exit(1)
-    
-    # Save result - handle both .nii and .nii.gz
-    if target_path.endswith('.nii.gz'):
-        # Remove .nii.gz and add _resampled.nii.gz
-        base = target_path[:-7]  # Remove '.nii.gz'
-        output_path = f"{base}_resampled.nii.gz"
-    elif target_path.endswith('.nii'):
-        # Remove .nii and add _resampled.nii
-        base = target_path[:-4]  # Remove '.nii'
-        output_path = f"{base}_resampled.nii"
-    else:
-        # Fallback: just add _resampled.nii
-        base, _ = os.path.splitext(target_path)
-        output_path = f"{base}_resampled.nii"
+    # Process each target file
+    for i, target_path in enumerate(target_paths):
+        print("-" * 60)
+        print(f"Processing [{i + 1}/{len(target_paths)}]: {os.path.basename(target_path)}")
+        print("-" * 60)
+        
+        try:
+            target_img = load_nifti(target_path)
+        except Exception as e:
+            print(f"  Error loading target: {e}")
+            continue
+        
+        print(f"  Target shape: {target_img.shape}, spacing: {target_img.header.get_zooms()[:3]}")
+        
+        # Resample
+        print("  Resampling to match FOV mask grid (linear interpolation)...")
+        try:
+            resampled_img = resample_to_reference(target_img, fov_img, order=1)
+        except Exception as e:
+            print(f"  Error during resampling: {e}")
+            import traceback
+            traceback.print_exc()
+            continue
+        
+        # Save result - handle both .nii and .nii.gz
+        if target_path.endswith('.nii.gz'):
+            base = target_path[:-7]
+            output_path = f"{base}_resampled.nii.gz"
+        elif target_path.endswith('.nii'):
+            base = target_path[:-4]
+            output_path = f"{base}_resampled.nii"
+        else:
+            base, _ = os.path.splitext(target_path)
+            output_path = f"{base}_resampled.nii"
+        
+        try:
+            nib.save(resampled_img, output_path)
+            print(f"  ✓ Saved: {os.path.basename(output_path)}")
+        except Exception as e:
+            print(f"  Error saving file: {e}")
     
     print()
-    print(f"Saving resampled file to: {os.path.basename(output_path)}")
-    try:
-        nib.save(resampled_img, output_path)
-        print("✓ Resampling complete!")
-        print()
-        print("Resampled file properties:")
-        print(f"  Shape: {resampled_img.shape}")
-        print(f"  Spacing: {resampled_img.header.get_zooms()}")
-        print(f"  Output file: {output_path}")
-    except Exception as e:
-        print(f"Error saving file: {e}")
-        sys.exit(1)
+    print("=" * 60)
+    print(f"Done. Processed {len(target_paths)} file(s).")
 
 
 if __name__ == "__main__":
