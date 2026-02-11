@@ -1032,6 +1032,7 @@ def run_resampling(source_bytes, reference_bytes):
 
           if (e.ctrlKey) {
               e.preventDefault();
+              e.stopPropagation();
               this.updateViewFromMouse(e);
               if (this.currentAxCorSag === null) return;
               const delta = e.deltaY > 0 ? -10 : 10; 
