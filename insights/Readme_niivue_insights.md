@@ -191,3 +191,62 @@ $$P_{local,0} = \left[ -L_x/2 + sp_x/2, \quad -L_y/2 + sp_y/2, \quad -L_z/2 + sp
 Adding half the voxel spacing ($sp/2$) effectively shifts the grid so that the **entire voxel volume** stays contained within the theoretical FOV box. Without this correction, the mask would appear shifted by half a voxel in all directions relative to the STL mesh.
 
 Because this logic is mathematically robust and hardcoded into the export, the manual "Shift Voxel" toggle is unnecessary and has been removed from the UI.
+
+---
+
+## Interactive FOV Positioning via Mouse Click
+
+### The Problem
+When using Ctrl+click to position the FOV box at a specific location, the FOV appeared at the **center of the brain** instead of at the **clicked position**.
+
+### Root Cause
+The original implementation computed FOV offsets using a **voxel-based approach**:
+1. Get voxel coordinates from `lastLocationVox` (from Niivue's `onLocationChange`)
+2. Convert voxel → offset using custom affine transform
+3. Use `voxelToWorldFactory(affine)` to transform mesh vertices to world coordinates
+
+**The problem**: The affine matrix from `hdr.affine` or `vol.matRAS` was missing the translation component (see "Critical Niivue Limitation" above). This caused the voxel-to-world transform to behave like an identity transform, so voxel $(0,0,0)$ incorrectly mapped to world $(0,0,0)$ instead of the actual world position.
+
+### The Solution
+Instead of computing world coordinates via a potentially broken affine, **use Niivue's slice geometry directly** to compute world mm from the mouse position:
+
+```javascript
+// Get slice info for the clicked tile
+const slice = nv.screenSlices[tileIndex];
+const ltwh = slice.leftTopWidthHeight;
+
+// Compute fractional position within slice
+let fX = (screenX - ltwh[0]) / ltwh[2];
+const fY = 1.0 - (screenY - ltwh[1]) / ltwh[3];
+if (ltwh[2] < 0) fX = 1.0 - fX;
+
+// Compute slice-local mm coordinates
+let xyzMM = [
+    slice.leftTopMM[0] + fX * slice.fovMM[0],
+    slice.leftTopMM[1] + fY * slice.fovMM[1],
+    0
+];
+const v = slice.AxyzMxy;
+xyzMM[2] = v[2] + v[4] * (xyzMM[1] - v[1]) - v[3] * (xyzMM[0] - v[0]);
+
+// Convert to RAS world coordinates based on slice orientation
+let rasMM;
+if (slice.axCorSag === 1) rasMM = [xyzMM[0], xyzMM[2], xyzMM[1]];      // Coronal
+else if (slice.axCorSag === 2) rasMM = [xyzMM[2], xyzMM[0], xyzMM[1]]; // Sagittal
+else rasMM = xyzMM;                                                     // Axial
+```
+
+### Key Insight
+The FOV offset values (`fovOffX/Y/Z`) represent **displacement in world mm from the brain center (world origin)**. When offset = 0, the FOV is centered at world $(0,0,0)$. So when clicking at world position $(x, y, z)$, the offset should simply be $(x, y, z)$ — no complex voxel conversion needed.
+
+### Additional Improvement
+Also store `lastLocationMm` from Niivue's `onLocationChange` callback as a fallback when slice geometry is unavailable:
+
+```javascript
+nv.onLocationChange = (data) => {
+    const { mm } = data;
+    if (mm?.length >= 3) {
+        this.lastLocationMm = [mm[0], mm[1], mm[2]];
+    }
+};
+```

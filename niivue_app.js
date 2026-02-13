@@ -31,7 +31,10 @@ export class NiivueModule {
     this.dragStartAngle = 0;
     this.dragStartTileIndex = -1;
     this.dragStartMm = null;
+    this.dragStartPx = null;
     this.dragStartOffsets = null;
+    this.lastLocationVox = null;
+    this.lastLocationMm = null;
     this.fovUpdatePending = false;
 
     // Elements (will be set in render methods)
@@ -129,8 +132,9 @@ export class NiivueModule {
       <div class="viewer standalone-viewer" style="position: relative;">
         <canvas id="${this.canvasId}"></canvas>
         <div class="status" id="statusOverlay-${this.instanceId}">idle</div>
-        <div class="viewer-hint" style="position: absolute; bottom: 8px; right: 8px; font-size: 11px; color: #666; pointer-events: none;">
-          CTRL + mouse to change FoV
+        <div class="viewer-hint" style="position: absolute; bottom: 8px; right: 8px; font-size: 11px; color: rgba(255,255,255,0.7); pointer-events: none; text-shadow: 0 1px 2px rgba(0,0,0,0.8);">
+          CTRL + mouse to change FoV<br>
+          <span id="crosshairVoxVal-${this.instanceId}">—</span>
         </div>
       </div>
     `;
@@ -458,6 +462,7 @@ export class NiivueModule {
     this.voxVal = qs("voxVal");
     this.mmVal = qs("mmVal");
     this.locStrVal = qs("locStrVal");
+    this.crosshairVoxVal = qs("crosshairVoxVal") || document.getElementById(`crosshairVoxVal-${this.instanceId}`);
     this.volumeListContainer = qs("volume-list");
     this.btnAddFile = qs("btn-add-file");
     this.btnAddFolder = qs("btn-add-folder");
@@ -571,6 +576,15 @@ export class NiivueModule {
         }
         
         if (this.locStrVal) this.locStrVal.textContent = str ? String(str) : "—";
+
+        if (this.crosshairVoxVal && (Array.isArray(vox) || ArrayBuffer.isView(vox)) && vox.length >= 3) {
+          this.crosshairVoxVal.textContent = `Voxel ${Number(vox[0]).toFixed(1)}, ${Number(vox[1]).toFixed(1)}, ${Number(vox[2]).toFixed(1)}`;
+          this.lastLocationVox = [Number(vox[0]), Number(vox[1]), Number(vox[2])];
+        }
+        // Also store world mm coordinates for FOV positioning
+        if ((Array.isArray(mm) || ArrayBuffer.isView(mm)) && mm.length >= 3) {
+          this.lastLocationMm = [Number(mm[0]), Number(mm[1]), Number(mm[2])];
+        }
       } catch (e) { console.warn("onLocationChange handler failed", e); }
     };
 
@@ -580,6 +594,7 @@ export class NiivueModule {
     this.canvas.addEventListener("wheel", (e) => this.handleWheel(e), { passive: false, capture: true });
 
     setInterval(() => this.updateAngles(), 200);
+    setInterval(() => this.updateCrosshairVox(), 150);
     this.setStatus("ready");
     this.isInitialized = true;
     this._initWaiters.forEach(resolve => resolve());
@@ -921,6 +936,30 @@ def run_resampling(source_bytes, reference_bytes):
     return null;
   }
 
+  updateCrosshairVox() {
+    if (!this.crosshairVoxVal) return;
+    try {
+      const frac = this.nv?.scene?.crosshairPos;
+      const f0 = frac?.[0] ?? frac?.x;
+      const f1 = frac?.[1] ?? frac?.y;
+      const f2 = frac?.[2] ?? frac?.z;
+      if (f0 == null || f1 == null || f2 == null) {
+        this.crosshairVoxVal.textContent = "—";
+        return;
+      }
+      const { dim3 } = this.getVolumeInfo();
+      if (!dim3) {
+        this.crosshairVoxVal.textContent = "—";
+        return;
+      }
+      const [dx, dy, dz] = dim3;
+      const vx = Number(f0) * (dx - 1), vy = Number(f1) * (dy - 1), vz = Number(f2) * (dz - 1);
+      this.crosshairVoxVal.textContent = `Voxel ${vx.toFixed(1)}, ${vy.toFixed(1)}, ${vz.toFixed(1)}`;
+    } catch (e) {
+      this.crosshairVoxVal.textContent = "—";
+    }
+  }
+
   updateAngles() {
     const pair = this.readAnglesBestEffort();
     if (!pair) return;
@@ -970,7 +1009,17 @@ def run_resampling(source_bytes, reference_bytes):
             } else if (e.button === 0) {
                 this.dragStartTileIndex = this.updateViewFromMouse(e);
                 this.isDraggingFov = true;
-                this.dragStartMm = this.getMouseMm(e, this.dragStartTileIndex); 
+                const rect = this.canvas.getBoundingClientRect();
+                const dpr = window.devicePixelRatio || 1;
+                this.dragStartPx = [(e.clientX - rect.left) * dpr, (e.clientY - rect.top) * dpr];
+                const centerOffsets = this.getOffsetsForCenterAtClick(e, this.dragStartTileIndex);
+                if (centerOffsets) {
+                    this.fovOffX.value = String(centerOffsets[0].toFixed(1));
+                    this.fovOffY.value = String(centerOffsets[1].toFixed(1));
+                    this.fovOffZ.value = String(centerOffsets[2].toFixed(1));
+                    this.syncFovLabels();
+                    this.rebuildFovLive();
+                }
                 this.dragStartOffsets = [Number(this.fovOffX.value), Number(this.fovOffY.value), Number(this.fovOffZ.value)];
                 this.setStatus("Dragging FOV...");
             }
@@ -994,19 +1043,30 @@ def run_resampling(source_bytes, reference_bytes):
             this.rebuildFovLive();
             return;
          }
-         if (this.isDraggingFov && this.dragStartOffsets) {
+         if (this.isDraggingFov && this.dragStartOffsets && this.dragStartPx) {
             e.preventDefault();
             e.stopPropagation();
-            const currMm = this.getMouseMm(e, this.dragStartTileIndex);
-            if (currMm && this.dragStartMm) {
-               const dx = currMm[0] - this.dragStartMm[0];
-               const dy = currMm[1] - this.dragStartMm[1];
-               const dz = currMm[2] - this.dragStartMm[2];
-               this.fovOffX.value = String((this.dragStartOffsets[0] + dx).toFixed(1));
-               this.fovOffY.value = String((this.dragStartOffsets[1] + dy).toFixed(1));
-               this.fovOffZ.value = String((this.dragStartOffsets[2] + dz).toFixed(1));
-               this.rebuildFovLive();
-            }
+            const slice = this.nv.screenSlices?.[this.dragStartTileIndex];
+            if (!slice?.leftTopWidthHeight || !slice?.fovMM) return;
+            const rect = this.canvas.getBoundingClientRect();
+            const dpr = window.devicePixelRatio || 1;
+            const currPx = [(e.clientX - rect.left) * dpr, (e.clientY - rect.top) * dpr];
+            const dxPx = currPx[0] - this.dragStartPx[0];
+            const dyPx = currPx[1] - this.dragStartPx[1];
+            const ltwh = slice.leftTopWidthHeight;
+            const mmPerPxX = slice.fovMM[0] / Math.abs(ltwh[2]) || 0;
+            const mmPerPxY = slice.fovMM[1] / Math.abs(ltwh[3]) || 0;
+            let d0 = dxPx * mmPerPxX;
+            let d1 = -dyPx * mmPerPxY;
+            if (ltwh[2] < 0) d0 = -d0;
+            let dx = 0, dy = 0, dz = 0;
+            if (slice.axCorSag === 0) { dx = d0; dy = d1; }
+            else if (slice.axCorSag === 1) { dx = d0; dz = d1; }
+            else { dy = d0; dz = d1; }
+            this.fovOffX.value = String((this.dragStartOffsets[0] + dx).toFixed(1));
+            this.fovOffY.value = String((this.dragStartOffsets[1] + dy).toFixed(1));
+            this.fovOffZ.value = String((this.dragStartOffsets[2] + dz).toFixed(1));
+            this.rebuildFovLive();
          } else if (this.isRotatingFov) {
              e.preventDefault();
              e.stopPropagation();
@@ -1128,6 +1188,51 @@ def run_resampling(source_bytes, reference_bytes):
       } catch(e) { return null; }
   }
 
+  /** Returns FOV offsets [offX, offY, offZ] to center the FOV on the point under the mouse. */
+  getOffsetsForCenterAtClick(e, tileIndex) {
+      if (!this.nv.volumes?.length || tileIndex < 0) return null;
+      try {
+          // Compute world mm directly from mouse position and slice info
+          const rect = this.canvas.getBoundingClientRect();
+          const dpr = window.devicePixelRatio || 1;
+          const sx = (e.clientX - rect.left) * dpr;
+          const sy = (e.clientY - rect.top) * dpr;
+          const slice = this.nv.screenSlices[tileIndex];
+          if (!slice?.leftTopWidthHeight || !slice.AxyzMxy || slice.AxyzMxy.length < 5) {
+              // Fallback to cached location
+              if (this.lastLocationMm && this.lastLocationMm.length >= 3) {
+                  return [...this.lastLocationMm];
+              }
+              return null;
+          }
+          
+          const ltwh = slice.leftTopWidthHeight;
+          let fX = (sx - ltwh[0]) / ltwh[2];
+          const fY = 1.0 - (sy - ltwh[1]) / ltwh[3];
+          if (ltwh[2] < 0) fX = 1.0 - fX;
+          
+          // Compute slice-local mm coordinates
+          let xyzMM = [
+              slice.leftTopMM[0] + fX * slice.fovMM[0],
+              slice.leftTopMM[1] + fY * slice.fovMM[1],
+              0
+          ];
+          const v = slice.AxyzMxy;
+          xyzMM[2] = v[2] + v[4] * (xyzMM[1] - v[1]) - v[3] * (xyzMM[0] - v[0]);
+          
+          // Convert to RAS world coordinates based on slice orientation
+          let rasMM;
+          if (slice.axCorSag === 1) rasMM = [xyzMM[0], xyzMM[2], xyzMM[1]];      // Coronal
+          else if (slice.axCorSag === 2) rasMM = [xyzMM[2], xyzMM[0], xyzMM[1]]; // Sagittal
+          else rasMM = xyzMM;                                                     // Axial
+          
+          return rasMM;
+      } catch (err) { 
+          console.warn("[FOV DEBUG] getOffsetsForCenterAtClick error:", err);
+          return null; 
+      }
+  }
+
   getMouseAngle(e) {
       const frac = this.nv.scene.crosshairPos;
       const tileInfo = this.nv.frac2canvasPosWithTile(frac, this.currentAxCorSag);
@@ -1196,17 +1301,23 @@ def run_resampling(source_bytes, reference_bytes):
   }
 
   voxToMmFactory(vol, affine) {
+    // Use affine-based transform - vol.vox2mm can have issues
+    const affineTransform = this.voxelToWorldFactory(affine);
     if (typeof vol?.vox2mm === "function") {
       return (x, y, z) => {
         try {
           const out = vol.vox2mm([x, y, z]);
-          if ((Array.isArray(out) || ArrayBuffer.isView(out)) && out.length >= 3) return [Number(out[0]), Number(out[1]), Number(out[2])];
-        } catch (e) {}
-          const w = this.voxelToWorldFactory(affine)(x, y, z);
+          if ((Array.isArray(out) || ArrayBuffer.isView(out)) && out.length >= 3) {
+            return [Number(out[0]), Number(out[1]), Number(out[2])];
+          }
+        } catch (e) {
+          // Fall through to affine transform
+        }
+        const w = affineTransform(x, y, z);
         return [Number(w[0]), Number(w[1]), Number(w[2])];
       };
     }
-    return this.voxelToWorldFactory(affine);
+    return affineTransform;
   }
 
   getFovGeometry() {
