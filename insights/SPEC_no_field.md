@@ -44,3 +44,24 @@ The dashboard uses a "Slot" system to dynamically swap components between `Plann
 | +-------------------+----------+--------------------------+ |
 +-------------------------------------------------------------+
 ```
+
+## Mobile Adaptations
+
+The dashboard includes specific adaptations for mobile devices (viewport ≤768px).
+
+### Layout Changes
+- **Sidebar collapsed by default**: On mobile, the viewer pane (sidebar) starts collapsed to maximize screen space for the main content.
+- **Footer card navigation**: The three footer columns (Sequences, Scan, Protocol) become horizontally scrollable cards with dot indicators.
+
+### Touch Interactions
+- **Footer dot swiping**: The dot indicator area responds to swipe gestures to navigate between footer cards.
+- **FOV dragging without Ctrl**: When the FOV checkbox is enabled, single-finger touch directly drags the FOV box position (no Ctrl key required, unlike desktop).
+  - Touch centers the FOV at the initial touch point
+  - Dragging moves the FOV in the slice plane
+  - This mirrors how Niivue's crosshair responds to touch on mobile
+
+### CSS Overrides
+Mobile-specific styles are defined in `no_field_mobile.css`:
+- Footer cards use `scroll-snap` for smooth card-based navigation
+- Dot indicators are visible and interactive on mobile
+- Various spacing and sizing adjustments for touch-friendly targets

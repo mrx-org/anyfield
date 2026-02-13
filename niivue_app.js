@@ -991,8 +991,9 @@ def run_resampling(source_bytes, reference_bytes):
             return;
          }
 
-         // Ctrl + Mouse Drag: FOV Actions
-         if (e.ctrlKey) {
+         // Ctrl + Mouse Drag: FOV Actions (on mobile, no Ctrl needed if FOV is visible)
+         const mobileFovDrag = this.isMobileMode() && this.showFov?.checked && e.button === 0;
+         if (e.ctrlKey || mobileFovDrag) {
             e.preventDefault();
             this.savedDragMode = this.nv.opts.dragMode;
             this.nv.opts.dragMode = DRAG_MODE.callbackOnly;
@@ -1100,6 +1101,11 @@ def run_resampling(source_bytes, reference_bytes):
          }
          if (this.isDraggingFov) { this.isDraggingFov = false; this.nv.opts.dragMode = this.savedDragMode; this.setStatus("FOV Drag finished"); this.syncFovLabels(); }
          if (this.isRotatingFov) { this.isRotatingFov = false; this.nv.opts.dragMode = this.savedDragMode; this.setStatus("FOV Rotate finished"); this.syncFovLabels(); }
+  }
+
+  /** Check if we're in mobile mode */
+  isMobileMode() {
+      return window.matchMedia('(max-width: 768px)').matches;
   }
 
   handleWheel(e) {
