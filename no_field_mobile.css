@@ -14,11 +14,6 @@
         grid-template-columns: 24px 1fr;
     }
 
-    /* Hide scan preview when sidebar is expanded (give full width to main viewer) */
-    .lab-grid:not(.sidebar-collapsed) #nv-scan-preview-container {
-        display: none !important;
-    }
-
     /* Footer: dots fixed at top, cards scroll below (dots outside scroll container) */
     .footer-wrapper .footer-card-dots {
         display: flex;
