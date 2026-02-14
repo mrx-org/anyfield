@@ -38,6 +38,9 @@ export class NiivueModule {
     this.fovUpdatePending = false;
     this.isTwoFingerRotating = false;
     this.touchRotateStartAngle = 0;
+    this.touchPendingFovDrag = false;
+    this.touchStartX = 0;
+    this.touchStartY = 0;
 
     // Elements (will be set in render methods)
     this.containerViewer = null;
@@ -599,17 +602,11 @@ export class NiivueModule {
         if (!this.showFov?.checked) return;
         
         if (e.touches.length === 1) {
-            // Single finger = FOV drag
+            // Single finger: wait for movement before starting FOV drag so double-tap can be detected
             const touch = e.touches[0];
-            this.handleMouseDown({ 
-                clientX: touch.clientX, 
-                clientY: touch.clientY, 
-                button: 0, 
-                ctrlKey: true,
-                preventDefault: () => e.preventDefault(),
-                stopPropagation: () => e.stopPropagation(),
-                stopImmediatePropagation: () => e.stopImmediatePropagation()
-            });
+            this.touchPendingFovDrag = true;
+            this.touchStartX = touch.clientX;
+            this.touchStartY = touch.clientY;
         } else if (e.touches.length === 2) {
             // Two fingers = FOV rotation
             e.preventDefault();
@@ -641,15 +638,39 @@ export class NiivueModule {
         }
     }, { passive: false, capture: true });
     
+    const TOUCH_DRAG_THRESHOLD_PX = 10;
     window.addEventListener("touchmove", (e) => {
         if (!this.showFov?.checked) return;
         
-        if (this.isDraggingFov && e.touches.length === 1) {
-            // Single finger drag
+        if (this.touchPendingFovDrag && e.touches.length === 1) {
+            const touch = e.touches[0];
+            const dx = touch.clientX - this.touchStartX;
+            const dy = touch.clientY - this.touchStartY;
+            if (Math.sqrt(dx * dx + dy * dy) >= TOUCH_DRAG_THRESHOLD_PX) {
+                this.touchPendingFovDrag = false;
+                this.handleMouseDown({
+                    clientX: this.touchStartX,
+                    clientY: this.touchStartY,
+                    button: 0,
+                    ctrlKey: true,
+                    preventDefault: () => e.preventDefault(),
+                    stopPropagation: () => e.stopPropagation(),
+                    stopImmediatePropagation: () => e.stopImmediatePropagation()
+                });
+                e.preventDefault();
+                this.handleMouseMove({
+                    clientX: touch.clientX,
+                    clientY: touch.clientY,
+                    preventDefault: () => {},
+                    stopPropagation: () => {}
+                });
+            }
+        } else if (this.isDraggingFov && e.touches.length === 1) {
+            // Single finger drag (already started)
             const touch = e.touches[0];
             e.preventDefault();
-            this.handleMouseMove({ 
-                clientX: touch.clientX, 
+            this.handleMouseMove({
+                clientX: touch.clientX,
                 clientY: touch.clientY,
                 preventDefault: () => {},
                 stopPropagation: () => {}
@@ -686,6 +707,7 @@ export class NiivueModule {
     window.addEventListener("touchend", (e) => {
         if (this.isDraggingFov && !this.isTwoFingerRotating) {
             this.handleMouseUp();
+            this.touchPendingFovDrag = false;
         }
         if (this.isTwoFingerRotating && e.touches.length < 2) {
             this.isTwoFingerRotating = false;
@@ -701,18 +723,18 @@ export class NiivueModule {
         this.toggleMaximize();
     });
     
-    // Double-tap detection for touch
+    // Double-tap detection for touch (only when touch was a tap, not a drag)
     let lastTapTime = 0;
     this.canvas.addEventListener("touchend", (e) => {
         if (e.touches.length === 0 && e.changedTouches.length === 1) {
             const now = Date.now();
-            if (now - lastTapTime < 300 && now - lastTapTime > 50) {
-                // Double tap detected - but only if we weren't dragging
-                if (!this.isDraggingFov && !this.isTwoFingerRotating) {
+            if (this.touchPendingFovDrag) {
+                if (now - lastTapTime < 300 && now - lastTapTime > 50 && !this.isTwoFingerRotating) {
                     this.toggleMaximize();
                 }
+                lastTapTime = now;
             }
-            lastTapTime = now;
+            this.touchPendingFovDrag = false;
         }
     });
 
