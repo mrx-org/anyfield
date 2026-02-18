@@ -280,6 +280,7 @@ export class NiivueModule {
             <label class="toggle"><input id="radiological-${this.instanceId}" type="checkbox" /> Radio.</label>
             <label class="toggle"><input id="showRender-${this.instanceId}" type="checkbox" checked /> 3D Render</label>
             <label class="toggle"><input id="showCrosshair-${this.instanceId}" type="checkbox" checked /> Crosshair</label>
+            <label class="toggle"><input id="compactMode-${this.instanceId}" type="checkbox" /> Compact</label>
           </div>
           <div class="sliderGroup" style="margin-top: 8px;">
             <div class="sliderRow">
@@ -438,6 +439,7 @@ export class NiivueModule {
     this.radiological = qs("radiological");
     this.showRender = qs("showRender");
     this.showCrosshair = qs("showCrosshair");
+    this.compactMode = qs("compactMode");
     this.zoom2D = qs("zoom2D");
     this.zoom2DVal = qs("zoom2DVal");
     this.fovControls = qs("fovControls");
@@ -945,6 +947,12 @@ def run_resampling(source_bytes, reference_bytes):
       this.nv.setCrosshairWidth(this.showCrosshair.checked ? 1 : 0);
       this.emitViewOptions();
     });
+    if (this.compactMode) {
+      this.compactMode.addEventListener("change", () => {
+        const shell = document.querySelector(".lab-shell");
+        if (shell) shell.classList.toggle("compact-mode", this.compactMode.checked);
+      });
+    }
 
     this.bindBiDirectional(this.zoom2D, this.zoom2DVal, () => { 
       const pan = this.nv.scene.pan2Dxyzmm; 

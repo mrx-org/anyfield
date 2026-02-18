@@ -38,7 +38,7 @@
         pointer-events: none;
     }
     .footer-wrapper .footer-card-dots .footer-card-tab {
-        font-size: 0.8rem;
+        font-size: 0.95rem;
         font-weight: 400;
         color: var(--muted);
         opacity: 0.6;
@@ -83,33 +83,4 @@
         box-sizing: border-box;
     }
 
-    /* Override collapse on mobile: always three equal full-width cards */
-    #slot-footer.tree-collapsed,
-    #slot-footer.params-collapsed,
-    #slot-footer.tree-collapsed.params-collapsed {
-        display: flex;
-        flex-direction: row;
-        grid-template-columns: unset;
-        overflow-x: auto;
-        overflow-y: hidden;
-        scroll-snap-type: x mandatory;
-        -webkit-overflow-scrolling: touch;
-    }
-
-    #slot-footer.tree-collapsed .footer-col,
-    #slot-footer.tree-collapsed #col-tree,
-    #slot-footer.tree-collapsed #col-scan,
-    #slot-footer.tree-collapsed #col-params,
-    #slot-footer.params-collapsed .footer-col,
-    #slot-footer.params-collapsed #col-tree,
-    #slot-footer.params-collapsed #col-scan,
-    #slot-footer.params-collapsed #col-params,
-    #slot-footer.tree-collapsed.params-collapsed .footer-col,
-    #slot-footer.tree-collapsed.params-collapsed #col-tree,
-    #slot-footer.tree-collapsed.params-collapsed #col-scan,
-    #slot-footer.tree-collapsed.params-collapsed #col-params {
-        flex: 0 0 100%;
-        min-width: 100%;
-        scroll-snap-align: start;
-    }
 }

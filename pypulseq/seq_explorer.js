@@ -84,7 +84,7 @@ const SEQ_TEMPLATES = {
         return `<div id="seq-params-section">
                 <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 0.5rem;">
                     <div>
-                        <h3 class="section-title seq-params-toggle" style="margin: 0;">Protocol</h3>
+                        <h3 class="section-title" style="margin: 0;">Protocol</h3>
                         <div id="seq-current-name" style="font-size: 0.7rem; color: var(--muted); margin-top: 0.25rem; cursor: help;" title=""></div>
                     </div>
                     <div style="display: flex; gap: 0.5rem; align-items: center;">
@@ -122,7 +122,7 @@ const SEQ_TEMPLATES = {
                     </label>`
             : '';
         return `<div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 0.75rem; flex-wrap: wrap; gap: 0.5rem;">
-                <h3 class="section-title seq-tree-toggle" style="margin: 0;">Sequences</h3>
+                <h3 class="section-title" style="margin: 0;">Sequences</h3>
                 <div style="display: flex; align-items: center; gap: 0.75rem;">
                     ${filterHtml}
                     <button id="seq-add-sources-btn" class="btn btn-secondary btn-sm">
@@ -217,34 +217,6 @@ export class SequenceExplorer {
             getFovBtn.addEventListener('click', () => this.getFovFromSequence());
         }
 
-        // In the no-field app, allow collapsing the PROTOCOL footer column by clicking the heading.
-        const footer = document.getElementById('slot-footer');
-        const colParams = document.getElementById('col-params');
-        if (footer && colParams && colParams.dataset.collapseBound !== '1') {
-            colParams.dataset.collapseBound = '1';
-            colParams.style.cursor = 'pointer';
-            colParams.addEventListener('click', (e) => {
-                if (window.matchMedia('(max-width: 768px)').matches) return;
-                const isCollapsed = footer.classList.contains('params-collapsed');
-                // Normalize target for mobile (text nodes etc.)
-                const targetEl = e.target instanceof Element ? e.target : e.target?.parentElement;
-                if (!isCollapsed) {
-                    // Only collapse if the original PROTOCOL heading was clicked
-                    if (!targetEl) return;
-                    const inHeader = targetEl.closest('.seq-params-toggle');
-                    if (!inHeader) return;
-                    colParams.dataset.fullHtml = colParams.innerHTML;
-                    colParams.innerHTML = `<h3 class="section-title" style="margin: 0; text-align: center;">P</h3>`;
-                    footer.classList.add('params-collapsed');
-                } else {
-                    // When collapsed, any click inside the skinny column (including on "P") expands
-                    if (colParams.dataset.fullHtml) {
-                        colParams.innerHTML = colParams.dataset.fullHtml;
-                    }
-                    footer.classList.remove('params-collapsed');
-                }
-            });
-        }
     }
 
     renderPlot(target) {
@@ -1411,38 +1383,6 @@ json.dumps(functions)
         const treeEl = this.treeTarget || this.container.querySelector('#seq-tree');
         if (!treeEl) return;
 
-        // In the no-field app, allow collapsing the SEQUENCES footer column by clicking the heading.
-        // We defer binding until after the DOM has been updated by this renderTree call.
-        setTimeout(() => {
-            const footer = document.getElementById('slot-footer');
-            const colTree = document.getElementById('col-tree');
-            if (!footer || !colTree) return; // Standalone seq_explorer (no no-field layout)
-            if (colTree.dataset.collapseBound === '1') return;
-            colTree.dataset.collapseBound = '1';
-            colTree.style.cursor = 'pointer';
-            colTree.addEventListener('click', (e) => {
-                if (window.matchMedia('(max-width: 768px)').matches) return;
-                const isCollapsed = footer.classList.contains('tree-collapsed');
-                // Normalize target for mobile (text nodes etc.)
-                const targetEl = e.target instanceof Element ? e.target : e.target?.parentElement;
-                if (!isCollapsed) {
-                    // Only collapse if the original SEQUENCES heading was clicked
-                    if (!targetEl) return;
-                    const inHeader = targetEl.closest('.seq-tree-toggle');
-                    if (!inHeader) return;
-                    colTree.dataset.fullHtml = colTree.innerHTML;
-                    colTree.innerHTML = `<h3 class="section-title" style="margin: 0; text-align: center;">S</h3>`;
-                    footer.classList.add('tree-collapsed');
-                } else {
-                    // When collapsed, any click inside the skinny column (including on "S") expands
-                    if (colTree.dataset.fullHtml) {
-                        colTree.innerHTML = colTree.dataset.fullHtml;
-                    }
-                    footer.classList.remove('tree-collapsed');
-                }
-            });
-        }, 0);
-        
         console.log('Rendering tree. Filter enabled:', this.filterSeqPrefix, 'Total sequences:', Object.keys(this.sequences).length);
         
         const headingHtml = SEQ_TEMPLATES.treeHeading(this.config.showFilter, this.filterSeqPrefix);

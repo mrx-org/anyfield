@@ -605,7 +605,7 @@
 }
 
 #col-scan {
-    padding: 0;
+    padding: 12px;
 }
 
 #module-cache {
@@ -658,4 +658,73 @@
 .mpl-toolbar {
     background: var(--bg-elevated) !important;
     border-bottom: 1px solid var(--border) !important;
+}
+
+/* Compact mode: mobile layout regardless of viewport (OPTIONS → Compact) */
+.lab-shell.compact-mode .viewer-hint,
+.lab-shell.compact-mode .preview-hint {
+    display: none !important;
+}
+.lab-shell.compact-mode .lab-grid {
+    --sidebar-width: 200px;
+    grid-template-columns: 200px 1fr;
+    grid-template-rows: 1fr 368px;
+}
+.lab-shell.compact-mode .lab-grid.sidebar-collapsed {
+    grid-template-columns: 24px 1fr;
+}
+.lab-shell.compact-mode .footer-wrapper .footer-card-dots {
+    display: flex;
+    flex-shrink: 0;
+    justify-content: center;
+    align-items: center;
+    gap: 8px;
+    height: 28px;
+    background: var(--bg-elevated);
+}
+.lab-shell.compact-mode .footer-wrapper .footer-card-dots .footer-card-dot-sep {
+    color: var(--muted);
+    opacity: 0.5;
+    font-size: 0.65rem;
+    user-select: none;
+    pointer-events: none;
+}
+.lab-shell.compact-mode .footer-wrapper .footer-card-dots .footer-card-tab {
+    font-size: 0.95rem;
+    font-weight: 400;
+    color: var(--muted);
+    opacity: 0.6;
+    cursor: pointer;
+    user-select: none;
+    transition: opacity 0.2s, color 0.2s, font-weight 0.2s;
+}
+.lab-shell.compact-mode .footer-wrapper .footer-card-dots .footer-card-tab.active {
+    opacity: 1;
+    color: var(--accent);
+    font-weight: 600;
+}
+.lab-shell.compact-mode #slot-footer {
+    flex: 1;
+    min-height: 0;
+    display: flex;
+    flex-direction: row;
+    grid-template-columns: unset;
+    overflow-x: auto;
+    overflow-y: hidden;
+    scroll-snap-type: x mandatory;
+    -webkit-overflow-scrolling: touch;
+    gap: 1px;
+    background: var(--bg-elevated);
+}
+.lab-shell.compact-mode #slot-footer #col-tree { order: 1; }
+.lab-shell.compact-mode #slot-footer #col-params { order: 2; }
+.lab-shell.compact-mode #slot-footer #col-scan { order: 3; }
+.lab-shell.compact-mode #slot-footer .footer-col,
+.lab-shell.compact-mode #slot-footer #col-tree,
+.lab-shell.compact-mode #slot-footer #col-scan,
+.lab-shell.compact-mode #slot-footer #col-params {
+    flex: 0 0 100%;
+    min-width: 100%;
+    scroll-snap-align: start;
+    box-sizing: border-box;
 }
