@@ -35,8 +35,8 @@ export class ScanModule {
 
         this.container.innerHTML = `
             <div class="scan-module">
-                <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 0.5rem;">
-                    <h3 class="section-title" style="margin: 0;">Run</h3>
+                <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 0.75rem;">
+                    <h3 class="section-title" style="margin: 0;">RUN</h3>
                 </div>
                 <div class="scan-header">
                     <button id="btn-start-scan" class="scan-btn">
