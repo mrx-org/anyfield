@@ -1474,6 +1474,12 @@ os.makedirs('/phantom/averaged', exist_ok=True)
     return Number(vol.getValue(ix, iy, iz, frame));
   }
 
+  /** Format number with 4 significant digits (12 → "12.00", 12.123 → "12.12"). */
+  formatSigFigs4(val) {
+    if (val === 0 || !Number.isFinite(val)) return String(val);
+    return Number(val).toPrecision(4);
+  }
+
   updateCrosshairIntensity(vox) {
     if (!this.crosshairIntensityEl) return;
     try {
@@ -1487,7 +1493,7 @@ os.makedirs('/phantom/averaged', exist_ok=True)
         this.crosshairIntensityEl.textContent = "—";
         return;
       }
-      this.crosshairIntensityEl.textContent = Number.isInteger(val) ? String(val) : val.toFixed(2);
+      this.crosshairIntensityEl.textContent = this.formatSigFigs4(val);
     } catch (e) {
       this.crosshairIntensityEl.textContent = "—";
     }

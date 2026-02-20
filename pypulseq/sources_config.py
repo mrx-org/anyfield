@@ -3,20 +3,6 @@
 
 sources = [
     {
-        'type': 'module',
-        'name': 'mrseq.scripts',
-        'path': 'mrseq.scripts',
-        'seq_func': None,
-        'dependencies': ['numpy>=2.0.0', 'pypulseq', {'name': 'mrseq', 'deps': False}, 'ismrmrd']
-    },
-    {
-        'type': 'folder',
-        'name': 'pypulseq',
-        'path': 'https://github.com/imr-framework/pypulseq/tree/master/examples/scripts',
-        'seq_func': None,
-        'dependencies': ['pypulseq']
-    },
-    {
         'type': 'file',
         'name': 'Built-in',
         'path': 'built_in_seq/gre_seq.py',
@@ -35,6 +21,20 @@ sources = [
         'name': 'Built-in',
         'path': 'built_in_seq/seq_pulseq_interpreter.py',
         'seq_func': 'seq_pulseq_interpreter',
+        'dependencies': ['pypulseq']
+    },
+    {
+        'type': 'module',
+        'name': 'mrseq.scripts',
+        'path': 'mrseq.scripts',
+        'seq_func': None,
+        'dependencies': ['numpy>=2.0.0', 'pypulseq', {'name': 'mrseq', 'deps': False}, 'ismrmrd']
+    },
+    {
+        'type': 'folder',
+        'name': 'pypulseq',
+        'path': 'https://github.com/imr-framework/pypulseq/tree/master/examples/scripts',
+        'seq_func': None,
         'dependencies': ['pypulseq']
     },
     {

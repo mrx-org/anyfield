@@ -1433,12 +1433,34 @@ json.dumps(functions)
             }
         }
         
+        // Order of source names: follow config.sources, then User groups, then any remaining
+        const sourceOrder = [];
+        const seen = new Set();
+        for (const s of this.config.sources) {
+            const name = s?.name || s?.path || '';
+            if (name && !seen.has(name)) {
+                seen.add(name);
+                sourceOrder.push(name);
+            }
+        }
+        for (const name of ['User Refined Sequences', 'User Protocols']) {
+            if (!seen.has(name) && sourceGroups[name]?.length) {
+                seen.add(name);
+                sourceOrder.push(name);
+            }
+        }
+        for (const name of Object.keys(sourceGroups)) {
+            if (!seen.has(name)) sourceOrder.push(name);
+        }
+        
         let html = '';
         let totalFunctions = 0;
         let displayedSources = 0;
         
-        // Render each source group
-        for (const [sourceName, files] of Object.entries(sourceGroups)) {
+        // Render each source group in config order
+        for (const sourceName of sourceOrder) {
+            const files = sourceGroups[sourceName];
+            if (!files || files.length === 0) continue;
             if (files.length === 0) continue;
             
             displayedSources++;
