@@ -73,9 +73,8 @@ export class ScanModule {
         this.scanCounter++;
         const now = new Date();
         const pad = (n) => String(n).padStart(2, '0');
-        const ts = `${now.getFullYear()}-${pad(now.getMonth()+1)}-${pad(now.getDate())}_${pad(now.getHours())}-${pad(now.getMinutes())}-${pad(now.getSeconds())}`;
         const seqSafeName = ((this.currentSequence.displayName || this.currentSequence.name) || "Scan").replace(/\s+/g, '_');
-        const baseName = `scan_${this.scanCounter}_${ts}_${seqSafeName}`;
+        const baseName = `scan_${this.scanCounter}_${seqSafeName}`;
 
         // 1. Trigger sequence execution; snapshot saved as e.g. user/1_prot_gre.py (scan number + short name)
         if (window.seqExplorer) {

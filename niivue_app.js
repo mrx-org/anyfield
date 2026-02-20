@@ -2425,10 +2425,14 @@ os.makedirs('/phantom/averaged', exist_ok=True)
       info.className = "volume-row-info";
       let titleText = vol.name || `Vol ${originalIndex + 1}`;
       let metaText = "Imported Phantom";
-      const scanMatch = titleText.match(/^scan_(\d+)_(\d{4}-\d{2}-\d{2})_(\d{2}-\d{2}-\d{2})_(.*)\.nii/);
-      if (scanMatch) {
-        titleText = `${scanMatch[1]}. ${scanMatch[4].replace(/\.nii.*/, '')}`;
-        metaText = scanMatch[3].replace(/-/g, ':');
+      const scanMatchOld = titleText.match(/^scan_(\d+)_(\d{4}-\d{2}-\d{2})_(\d{2}-\d{2}-\d{2})_(.*)\.nii/);
+      const scanMatchNew = titleText.match(/^scan_(\d+)_(.*)\.nii(\.gz)?$/i);
+      if (scanMatchOld) {
+        titleText = `${scanMatchOld[1]}. ${scanMatchOld[4].replace(/\.nii.*/, '')}`;
+        metaText = scanMatchOld[3].replace(/-/g, ':');
+      } else if (scanMatchNew) {
+        titleText = `${scanMatchNew[1]}. ${scanMatchNew[2].replace(/\.nii.*/, '')}`;
+        metaText = "";
       } else if (shortTitle && vol.name) {
         const m = vol.name.match(/_([^_.]+)\.nii(\.gz)?$/i);
         titleText = m ? m[1] : vol.name.replace(/\.nii(\.gz)?$/i, '').replace(/.*_/, '') || vol.name;
@@ -2918,9 +2922,9 @@ export class ScanPreviewModule {
       this.currentScanName = name;
       this.nv.drawScene();
       
-      // Update label with clean name
-      let cleanName = (name || "scan").replace(/^scan_\d+_/, '').replace(/\.nii.*/, '');
-      this.updateLabel(cleanName);
+      // Update label: full filename without extension (e.g. scan_1_gre_seq)
+      const labelName = (name || "scan").replace(/\.nii(\.gz)?$/i, '');
+      this.updateLabel(labelName);
       
       // Trigger highlight effect when scan is loaded
       this.triggerHighlight();
