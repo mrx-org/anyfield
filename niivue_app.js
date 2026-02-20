@@ -1688,17 +1688,15 @@ os.makedirs('/phantom/averaged', exist_ok=True)
           if (!slice?.leftTopWidthHeight || !slice.AxyzMxy || slice.AxyzMxy.length < 5) {
               // Fallback to cached location
               if (this.lastLocationMm && this.lastLocationMm.length >= 3) {
-                  return [...this.lastLocationMm];
+                  const off = this.worldMmToFovOffset(this.lastLocationMm);
+                  return off ?? [...this.lastLocationMm];
               }
               return null;
           }
-          
           const ltwh = slice.leftTopWidthHeight;
           let fX = (sx - ltwh[0]) / ltwh[2];
           const fY = 1.0 - (sy - ltwh[1]) / ltwh[3];
           if (ltwh[2] < 0) fX = 1.0 - fX;
-          
-          // Compute slice-local mm coordinates
           let xyzMM = [
               slice.leftTopMM[0] + fX * slice.fovMM[0],
               slice.leftTopMM[1] + fY * slice.fovMM[1],
@@ -1706,17 +1704,51 @@ os.makedirs('/phantom/averaged', exist_ok=True)
           ];
           const v = slice.AxyzMxy;
           xyzMM[2] = v[2] + v[4] * (xyzMM[1] - v[1]) - v[3] * (xyzMM[0] - v[0]);
-          
-          // Convert to RAS world coordinates based on slice orientation
           let rasMM;
           if (slice.axCorSag === 1) rasMM = [xyzMM[0], xyzMM[2], xyzMM[1]];      // Coronal
           else if (slice.axCorSag === 2) rasMM = [xyzMM[2], xyzMM[0], xyzMM[1]]; // Sagittal
           else rasMM = xyzMM;                                                     // Axial
-          
-          return rasMM;
-      } catch (err) { 
+
+          const off = this.worldMmToFovOffset(rasMM);
+          return off ?? rasMM;
+      } catch (err) {
           console.warn("[FOV DEBUG] getOffsetsForCenterAtClick error:", err);
-          return null; 
+          return null;
+      }
+  }
+
+  /** Map RAS world mm to this app's volume-relative FOV offset convention.
+   *  Probes the same voxToMmFactory that getFovGeometry uses to stay perfectly self-consistent. */
+  worldMmToFovOffset(rasMM) {
+      const { vol, dim3, affine } = this.getVolumeInfo();
+      if (!vol || !dim3 || !rasMM || rasMM.length < 3) return null;
+      const [dx, dy, dz] = dim3;
+      const spacing = this.voxelSpacingMm ?? [1, 1, 1];
+      const fullMm = this.fullFovMm ?? [dx * spacing[0], dy * spacing[1], dz * spacing[2]];
+      try {
+          const vox2mm = this.voxToMmFactory(vol, affine);
+          const o  = vox2mm(0, 0, 0);
+          const ex = vox2mm(1, 0, 0);
+          const ey = vox2mm(0, 1, 0);
+          const ez = vox2mm(0, 0, 1);
+          const a=ex[0]-o[0], b=ey[0]-o[0], c=ez[0]-o[0];
+          const d=ex[1]-o[1], e=ey[1]-o[1], f=ez[1]-o[1];
+          const g=ex[2]-o[2], h=ey[2]-o[2], k=ez[2]-o[2];
+          const det = a*(e*k-f*h) - b*(d*k-f*g) + c*(d*h-e*g);
+          if (Math.abs(det) < 1e-12) return null;
+          const inv = 1 / det;
+          const w = [rasMM[0]-o[0], rasMM[1]-o[1], rasMM[2]-o[2]];
+          const vx = ((e*k-f*h)*w[0] + (c*h-b*k)*w[1] + (b*f-c*e)*w[2]) * inv;
+          const vy = ((f*g-d*k)*w[0] + (a*k-c*g)*w[1] + (c*d-a*f)*w[2]) * inv;
+          const vz = ((d*h-e*g)*w[0] + (b*g-a*h)*w[1] + (a*e-b*d)*w[2]) * inv;
+          const cVx = (dx - 1) / 2, cVy = (dy - 1) / 2, cVz = (dz - 1) / 2;
+          return [
+              (vx - cVx) * spacing[0] + fullMm[0] / 2,
+              (vy - cVy) * spacing[1] + fullMm[1] / 2,
+              (vz - cVz) * spacing[2] + fullMm[2] / 2
+          ];
+      } catch (_) {
+          return null;
       }
   }
 
