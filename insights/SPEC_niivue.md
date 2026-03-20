@@ -13,6 +13,7 @@ Modular medical imaging component for 3D/orthographic NIfTI visualization and in
 - **Interactions**: 
   - Standardized mouse gestures: Ctrl+Left (Move FOV), Ctrl+Right (Rotate FOV), Ctrl+Scroll (Resize FOV), Ctrl+Middle Drag (Zoom).
   - Automatic mode switching to "Planning" on any viewer interaction.
+  - **Touch FOV**: Two-finger twist rotates the FOV using the **same axis per pane as Ctrl+Right** (axial → Z, coronal → Y, sagittal → X). The pane is taken from the **slice tile at gesture start** (finger midpoint), not from the crosshair-driven `currentAxCorSag` updates from `onLocationChange` (which would otherwise pin rotation to the wrong axis on mobile).
 
 ## Coordinate System & Affine Handling
 - **Affine source**: `getVolumeInfo(targetVol?)` is the single source of truth for volume metadata (dims, affine, header). All code paths use this instead of parsing `hdr.affine` independently.

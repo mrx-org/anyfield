@@ -30,6 +30,8 @@ export class NiivueModule {
     this.fovMesh = null;
     this.isAddingVolume = false;
     this.currentAxCorSag = null;
+    /** Pane (0=axial, 1=coronal, 2=sagittal) for active FOV rotate gesture; not overwritten by onLocationChange. */
+    this.fovRotateAxCorSag = null;
     this.lastAzEl = null;
     this.savedDragMode = DRAG_MODE.contrast;
     this.isDraggingFov = false;
@@ -971,14 +973,16 @@ export class NiivueModule {
             const midX = (t1.clientX + t2.clientX) / 2;
             const midY = (t1.clientY + t2.clientY) / 2;
             this.dragStartTileIndex = this.updateViewFromMouse({ clientX: midX, clientY: midY });
+            this.fovRotateAxCorSag = this._paneFromScreenSliceTile(this.dragStartTileIndex) ?? this.currentAxCorSag;
             
             // Calculate initial angle between the two touch points
             this.touchRotateStartAngle = Math.atan2(t2.clientY - t1.clientY, t2.clientX - t1.clientX);
             
             // Get current rotation value based on slice orientation
             let startVal = 0;
-            if (this.currentAxCorSag === 0) startVal = Number(this.fovRotZ.value);
-            else if (this.currentAxCorSag === 1) startVal = Number(this.fovRotY.value);
+            const pane = this.fovRotateAxCorSag;
+            if (pane === 0) startVal = Number(this.fovRotZ.value);
+            else if (pane === 1) startVal = Number(this.fovRotY.value);
             else startVal = Number(this.fovRotX.value);
             this.dragStartRotation = startVal;
             
@@ -1048,8 +1052,9 @@ export class NiivueModule {
                 return n;
             };
             
-            if (this.currentAxCorSag === 0) this.fovRotZ.value = String(norm(finalRot).toFixed(1));
-            else if (this.currentAxCorSag === 1) this.fovRotY.value = String(norm(finalRot).toFixed(1));
+            const pane = this.fovRotateAxCorSag;
+            if (pane === 0) this.fovRotZ.value = String(norm(finalRot).toFixed(1));
+            else if (pane === 1) this.fovRotY.value = String(norm(finalRot).toFixed(1));
             else this.fovRotX.value = String(norm(finalRot).toFixed(1));
             this.rebuildFovLive();
         }
@@ -1063,6 +1068,7 @@ export class NiivueModule {
         if (this.isTwoFingerRotating && e.touches.length < 2) {
             this.isTwoFingerRotating = false;
             this.isRotatingFov = false;
+            this.fovRotateAxCorSag = null;
             this.nv.opts.dragMode = this.savedDragMode;
             this.twoFingerReleaseTime = Date.now();
             this.setStatus("FOV Rotate finished");
@@ -1655,10 +1661,12 @@ os.makedirs('/phantom/averaged', exist_ok=True)
             this.nv.opts.dragMode = DRAG_MODE.callbackOnly;
             if (e.button === 2) {
                 this.dragStartTileIndex = this.updateViewFromMouse(e);
+                this.fovRotateAxCorSag = this._paneFromScreenSliceTile(this.dragStartTileIndex) ?? this.currentAxCorSag;
                 this.isRotatingFov = true;
                 let startVal = 0;
-                if (this.currentAxCorSag === 0) startVal = Number(this.fovRotZ.value);
-                else if (this.currentAxCorSag === 1) startVal = Number(this.fovRotY.value);
+                const pane = this.fovRotateAxCorSag;
+                if (pane === 0) startVal = Number(this.fovRotZ.value);
+                else if (pane === 1) startVal = Number(this.fovRotY.value);
                 else startVal = Number(this.fovRotX.value);
                 this.dragStartRotation = startVal;
                 this.dragStartAngle = this.getMouseAngle(e);
@@ -1740,8 +1748,9 @@ os.makedirs('/phantom/averaged', exist_ok=True)
                  if (n < -180) n += 360;
                  return n;
              };
-             if (this.currentAxCorSag === 0) this.fovRotZ.value = String(norm(finalRot).toFixed(1));
-             else if (this.currentAxCorSag === 1) this.fovRotY.value = String(norm(finalRot).toFixed(1));
+             const pane = this.fovRotateAxCorSag;
+             if (pane === 0) this.fovRotZ.value = String(norm(finalRot).toFixed(1));
+             else if (pane === 1) this.fovRotY.value = String(norm(finalRot).toFixed(1));
              else this.fovRotX.value = String(norm(finalRot).toFixed(1));
              this.rebuildFovLive();
          }
@@ -1756,7 +1765,13 @@ os.makedirs('/phantom/averaged', exist_ok=True)
             this.syncFovLabels(); 
          }
          if (this.isDraggingFov) { this.isDraggingFov = false; this.nv.opts.dragMode = this.savedDragMode; this.setStatus("FOV Drag finished"); this.syncFovLabels(); }
-         if (this.isRotatingFov) { this.isRotatingFov = false; this.nv.opts.dragMode = this.savedDragMode; this.setStatus("FOV Rotate finished"); this.syncFovLabels(); }
+         if (this.isRotatingFov) {
+            this.isRotatingFov = false;
+            this.fovRotateAxCorSag = null;
+            this.nv.opts.dragMode = this.savedDragMode;
+            this.setStatus("FOV Rotate finished");
+            this.syncFovLabels();
+         }
   }
 
   handleWheel(e) {
@@ -1799,6 +1814,13 @@ os.makedirs('/phantom/averaged', exist_ok=True)
           }
       }
       return -1;
+  }
+
+  /** 0=axial→Z rot, 1=coronal→Y, 2=sagittal→X; null if tile index invalid. */
+  _paneFromScreenSliceTile(tileIndex) {
+    if (tileIndex < 0) return null;
+    const s = this.nv?.screenSlices?.[tileIndex];
+    return typeof s?.axCorSag === "number" ? s.axCorSag : null;
   }
 
   getMouseMm(e, tileIndex = -1) {
