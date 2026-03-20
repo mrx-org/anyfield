@@ -26,8 +26,8 @@ Modular medical imaging component for 3D/orthographic NIfTI visualization and in
 - **FOV mesh**: Built by `getFovGeometry()` which transforms FOV corner voxels to world coordinates using `voxToMmFactory`. The mesh is displayed as a semi-transparent overlay in the 3D/slice views.
 
 ## Default phantom (lab shell)
-- **Bundled path**: `data/bundled_phantoms/brain_default_1mm_gz/` (`brain_default.json` + PD / dB0 / B1+ NIfTIs). Same content can be mirrored from `data/tool_phantomlib_flyio/` (that tree may be a nested git repo). Loaded on startup via `loadBundledDefaultPhantom()` (see `index.html`). **Default phantom** button reloads the same bundle after `resetViewer()`.
-- **`.gitignore`**: `*.nii.gz` is ignored except the three default-phantom files (explicit `!` rules).
+- **Bundled path**: `data/brain_default_1mm_gz/` (`brain_default.json` + PD / dB0 / B1+ NIfTIs). A copy may also exist under `data/tool_phantomlib_flyio/data/` (nested repo); keep in sync if you maintain both. Loaded on startup via `loadBundledDefaultPhantom()` (see `index.html`). **Default phantom** button reloads the same bundle after `resetViewer()`.
+- **`.gitignore`**: `*.nii.gz` is ignored except the three default-phantom files in `data/brain_default_1mm_gz/` (explicit `!` rules).
 
 ## Phantom Load Reset Flow
 Loading a new phantom (Default phantom, Add Folder, or file-with-JSON) triggers a full reset:

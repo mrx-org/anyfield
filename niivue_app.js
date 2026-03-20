@@ -102,7 +102,7 @@ export class NiivueModule {
     
     /** Relative to page URL; JSON + NIfTIs for bundled default phantom (replaces MNI152 demo). */
     this.defaultPhantomBaseUrl =
-      options.defaultPhantomBaseUrl ?? "data/bundled_phantoms/brain_default_1mm_gz";
+      options.defaultPhantomBaseUrl ?? "data/brain_default_1mm_gz";
     this.FOV_RGBA255 = new Uint8Array([255, 220, 0, 255]);
     this.isInitialized = false;
     this.volumeGroups = [];
