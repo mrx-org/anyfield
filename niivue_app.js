@@ -730,7 +730,7 @@ export class NiivueModule {
             <div class="sliderRow">
               <div>Mask Z</div>
               <div class="input-sync">
-                <input id="maskZVal-${this.instanceId}" type="number" class="num-input" step="1" value="3" />
+                <input id="maskZVal-${this.instanceId}" type="number" class="num-input" step="1" value="1" />
                 <input id="maskZ-${this.instanceId}" type="range" min="1" max="512" step="1" value="1" />
               </div>
             </div>
