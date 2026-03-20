@@ -25,11 +25,15 @@ Modular medical imaging component for 3D/orthographic NIfTI visualization and in
 - **Click-to-offset pipeline**: Screen click -> RAS world mm (via Niivue slice geometry) -> voxel (via probe-and-invert) -> offset `(vx - centerVox) * spacing`.
 - **FOV mesh**: Built by `getFovGeometry()` which transforms FOV corner voxels to world coordinates using `voxToMmFactory`. The mesh is displayed as a semi-transparent overlay in the 3D/slice views.
 
+## Default phantom (lab shell)
+- **Bundled path**: `data/bundled_phantoms/brain_default_1mm_gz/` (`brain_default.json` + PD / dB0 / B1+ NIfTIs). Same content can be mirrored from `data/tool_phantomlib_flyio/` (that tree may be a nested git repo). Loaded on startup via `loadBundledDefaultPhantom()` (see `index.html`). **Default phantom** button reloads the same bundle after `resetViewer()`.
+- **`.gitignore`**: `*.nii.gz` is ignored except the three default-phantom files (explicit `!` rules).
+
 ## Phantom Load Reset Flow
-Loading a new phantom (Load Demo, Add Folder, or file-with-JSON) triggers a full reset:
+Loading a new phantom (Default phantom, Add Folder, or file-with-JSON) triggers a full reset:
 1. **Confirmation dialog**: Warns the user that all volumes, scans, and masks will be removed.
 2. **`resetViewer()`**: Removes FOV mesh, clears all Niivue volumes, resets internal state (volumeGroups, spacing, fullFovMm, etc.).
-3. **Load new data**: Via `loadUrl` or `loadMultiPhantomFromFiles`.
+3. **Load new data**: Via `loadBundledDefaultPhantom`, `loadUrl`, or `loadMultiPhantomFromFiles`.
 4. **`refreshFovForNewVolume()`**: Re-reads volume info from the new phantom, recalculates voxel spacing and full FOV extent, resets offset sliders to (0, 0, 0) (centered), enables FOV checkbox, triggers mesh rebuild and debug panel update.
 
 ## FOV Export

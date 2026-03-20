@@ -500,7 +500,10 @@
 
                 const mainViewerEl = document.getElementById('nv-viewer-container');
                 if (mainViewerEl) mainViewerEl.classList.add('viewer-waiting-demo');
-                const phantomReady = nvModule.loadUrl(nvModule.DEMO_URL, "mni152.nii.gz", true).then(() => {
+                const phantomReady = nvModule.loadBundledDefaultPhantom().then(() => {
+                    if (mainViewerEl) mainViewerEl.classList.remove('viewer-waiting-demo');
+                }).catch((err) => {
+                    console.error('Default phantom load failed:', err);
                     if (mainViewerEl) mainViewerEl.classList.remove('viewer-waiting-demo');
                 });
 

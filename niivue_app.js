@@ -100,7 +100,9 @@ export class NiivueModule {
     this.btnAddFolder = null;
     this.resampleToFovBtn = null;
     
-    this.DEMO_URL = "https://niivue.github.io/niivue-demo-images/mni152.nii.gz";
+    /** Relative to page URL; JSON + NIfTIs for bundled default phantom (replaces MNI152 demo). */
+    this.defaultPhantomBaseUrl =
+      options.defaultPhantomBaseUrl ?? "data/bundled_phantoms/brain_default_1mm_gz";
     this.FOV_RGBA255 = new Uint8Array([255, 220, 0, 255]);
     this.isInitialized = false;
     this.volumeGroups = [];
@@ -317,7 +319,7 @@ export class NiivueModule {
             <div style="display: flex; gap: 4px; flex-wrap: wrap;">
               <button id="btn-add-file-${this.instanceId}" class="btn btn-secondary btn-sm btn-flex">Add File</button>
               <button id="btn-add-folder-${this.instanceId}" class="btn btn-secondary btn-sm btn-flex" title="Select folder with JSON + NIfTIs">Add Folder</button>
-              <button id="load-demo-${this.instanceId}" class="btn btn-secondary btn-sm btn-flex">Load demo</button>
+              <button id="load-demo-${this.instanceId}" class="btn btn-secondary btn-sm btn-flex" title="Reload bundled brain default phantom">Default phantom</button>
               <input id="file-${this.instanceId}" type="file" accept=".nii,.nii.gz,.gz,.json" multiple style="display: none;" />
               <input id="dir-${this.instanceId}" type="file" webkitdirectory directory multiple style="display: none;" />
             </div>
@@ -1428,8 +1430,7 @@ os.makedirs('/phantom/averaged', exist_ok=True)
     this.btnDemo.onclick = async () => {
       if (!await this.confirmPhantomReset()) return;
       this.resetViewer();
-      await this.loadUrl(this.DEMO_URL, "mni152.nii.gz", true);
-      this.refreshFovForNewVolume();
+      await this.loadBundledDefaultPhantom();
       if (this.options.showJsonTab) this.updateJsonTab();
     };
     this.fileInput.onchange = async (e) => {
@@ -2944,6 +2945,37 @@ os.makedirs('/phantom/averaged', exist_ok=True)
     }
   }
 
+  /**
+   * Fetch bundled nifti_phantom_v1 folder (JSON + NIfTIs) and load like Add File / Add Folder.
+   * Paths are relative to the current page (works with static hosting / GitHub Pages).
+   */
+  async loadBundledDefaultPhantom() {
+    await this.waitForInit();
+    const root = new URL(
+      `${String(this.defaultPhantomBaseUrl || "").replace(/\/?$/, "/")}`,
+      typeof window !== "undefined" ? window.location.href : "http://localhost/"
+    );
+    const names = [
+      "brain_default.json",
+      "brain_default_PD.nii.gz",
+      "brain_default_dB0.nii.gz",
+      "brain_default_B1+.nii.gz",
+    ];
+    const files = [];
+    for (const n of names) {
+      const res = await fetch(new URL(n, root));
+      if (!res.ok) throw new Error(`Default phantom: ${n} → ${res.status} ${res.statusText}`);
+      const blob = await res.blob();
+      files.push(new File([blob], n, { type: "application/octet-stream" }));
+    }
+    const jsonFile = files.find((f) => f.name.toLowerCase().endsWith(".json"));
+    const niftiFiles = files.filter((f) => /\.nii(\.gz)?$/i.test(f.name));
+    if (!jsonFile || niftiFiles.length === 0) throw new Error("Default phantom: missing JSON or NIfTIs");
+    await this.loadMultiPhantomFromFiles(jsonFile, niftiFiles);
+    this.jsonTabCurrentName = jsonFile.name;
+    if (this.options.showJsonTab) this.updateJsonTab();
+  }
+
   async loadMultiPhantomFromFiles(jsonFile, niftiFiles) {
     await this.waitForInit();
     try {
@@ -3219,7 +3251,11 @@ export async function initNiivueApp(containerId, options = {}) {
   module.renderFull(containerId);
   // Do not await initPyodide here, it can run in background
   module.initPyodide();
-  // Load demo volume on startup
-  module.loadUrl(module.DEMO_URL, "mni152.nii.gz", true);
-  return { nv: module.nv, loadUrl: module.loadUrl.bind(module), setStatus: module.setStatus.bind(module) };
+  module.loadBundledDefaultPhantom().catch((e) => console.warn("Bundled default phantom:", e));
+  return {
+    nv: module.nv,
+    loadUrl: module.loadUrl.bind(module),
+    loadBundledDefaultPhantom: module.loadBundledDefaultPhantom.bind(module),
+    setStatus: module.setStatus.bind(module),
+  };
 }
