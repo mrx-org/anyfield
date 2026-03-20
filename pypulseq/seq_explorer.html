@@ -85,7 +85,7 @@
                     }, (index + 1) * 1000);
                 });
             }
-            await micropip.install(['pypulseq']);
+            await micropip.install(['pypulseq==1.4.2.post2']);
             
             // Configure matplotlib
             await pyodide.runPythonAsync(`

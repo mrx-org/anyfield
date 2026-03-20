@@ -754,7 +754,7 @@ await micropip.install('mrseq', deps=False)
                 
                 statusEl.innerText = 'Installing pypulseq...';
                 log('Installing pypulseq and ismrmrd via micropip (this may take a minute)...');
-                await micropip.install(['pypulseq', 'ismrmrd']);
+                await micropip.install(['pypulseq==1.4.2.post2', 'ismrmrd']);
                 
                 // Install optimized seq_plot function using LineCollection and decimation
                 statusEl.innerText = 'Installing optimized plot function...';
