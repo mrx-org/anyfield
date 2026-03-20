@@ -635,16 +635,19 @@ if os.path.exists(_p):
         job.status = 'scanning';
         this.updateQueueUI();
         try {
-            // FOV contract: build the Pulseq file so seq.definitions (FOV, matrix, etc.) match the
-            // viewer FOV tab — same physical box (mm), rotation, and mask grid (mask X/Y/Z) as
-            // generateFovMaskNifti(). Resampling, the ref NIfTI for PyNUFFT (nx, ny, affine), and
-            // trajex k-space (1/m) are only self-consistent if the sequence matches that UI geometry.
+            // FOV contract: **Pulseq seq.definitions FOV** (m) is authoritative for physical size (mm).
+            // Sequence must run *before* generateFovMaskNifti() so executeFunction can emit sequence_fov_dims
+            // and the viewer FOV sliders update first; mask grid (mask X/Y/Z), offsets, rotation stay as in UI.
+            // Resampling + PyNUFFT ref then match the same geometry the user sees after seq sync.
             // Ensure run_resampling / run_resampling_serial3d_to_4d are defined.
             await nvMod.initPyodide();
             const activeGroup = nvMod.volumeGroups?.find(g => g.volumes?.length && !String(g.jsonName || '').endsWith('_resampled') && !String(g.jsonName || '').endsWith('_averaged'));
             if (!activeGroup) throw new Error("No phantom group with JSON found. Load phantom via Add Folder/Add File first.");
 
-            // 1) Resample each map to UI FOV in memory only — do not add to Niivue or /phantom (sim pipeline staging).
+            // 1) Silent seq execute + protocol snapshot + sequence_fov_dims → Niivue FOV mm from seq.definitions
+            const seqText = await this._prepareCurrentSeqForTools(job);
+
+            // 2) Ref mask / grid from viewer (now includes seq FOV mm on sliders)
             const resampledEntries = [];
             const ref = nvMod.generateFovMaskNifti();
             nvMod.pyodide.globals.set("reference_bytes", ref);
@@ -669,8 +672,7 @@ if os.path.exists(_p):
             }
             if (!resampledEntries.length) throw new Error("Resampling failed: no volumes produced.");
 
-            // 2) prepare sequence and convert phantom payload (temp FS dir, deleted after)
-            const seqText = await this._prepareCurrentSeqForTools(job);
+            // 3) Phantom dict for toolapi (temp FS dir, deleted after)
             const phantomPayload = await this._convertResampledGroupToToolPhantom(nvMod, {
                 jsonName: activeGroup.jsonName,
                 jsonFileName: activeGroup.jsonFileName,
@@ -678,7 +680,7 @@ if os.path.exists(_p):
                 resampledEntries,
             });
 
-            // 3) JS tools: conseq + trajex + sim backend (rapisim or tool-mr0sim)
+            // 4) JS tools: conseq + trajex + sim backend (rapisim or tool-mr0sim)
             const call = await this._ensureToolApi();
             const seq = await call(TOOL_CONSEQ, { Dict: { seq_file: { Str: seqText }, exact_trajectory: { Bool: false } } }, (m) => this._toolOnMessage(m));
             if (seq?.Error || seq?.err) throw new Error(seq.Error || seq.err || 'conseq failed');
@@ -695,7 +697,7 @@ if os.path.exists(_p):
             const signal = this._signalFromResult(signalResult);
             if (!signal?.length) throw new Error(`${job.noSignalName || 'Simulation'} returned no signal.`);
 
-            // 4) PyNUFFT recon: output size & world space = ref mask; om = k_phys * voxel_size (rad/m · m)
+            // 5) PyNUFFT recon: output size & world space = ref mask; om = k_phys * voxel_size (rad/m · m)
             await nvMod.pyodide.loadPackage(["micropip"]);
             await nvMod.pyodide.runPythonAsync(`
 import micropip
@@ -716,8 +718,7 @@ signal = np.array([complex(float(r), float(i)) for r,i in raw], dtype=np.complex
 ref_bytes = sim_ref_bytes.to_py() if hasattr(sim_ref_bytes, 'to_py') else sim_ref_bytes
 ref_fh = nib.FileHolder(fileobj=io.BytesIO(ref_bytes))
 ref_img = nib.Nifti1Image.from_file_map({'header': ref_fh, 'image': ref_fh})
-# Full 3D FOV grid (same as generateFovMaskNifti): recon lives in 3D NIfTI so Niivue + FOV sync see nz>=1.
-# 2D readout today: fill one slice (center); future 3D sequences: replace mag3d with full volume from recon.
+# Full 3D FOV grid (same as generateFovMaskNifti). If nz_ref>1 and traj is 2D, use 3D NUFFT with ω_z=0 (kz zero-fill).
 shp = tuple(int(x) for x in ref_img.shape)
 if len(shp) == 2:
     nx, ny, nz_ref = shp[0], shp[1], 1
@@ -733,36 +734,42 @@ dy_mm = float(zooms_full[1]) if len(zooms_full) > 1 and zooms_full[1] and float(
 dz_mm = float(zooms_full[2]) if len(zooms_full) > 2 and zooms_full[2] and float(zooms_full[2]) > 0 else 1.0
 dx_m = dx_mm * 1e-3
 dy_m = dy_mm * 1e-3
+dz_m = dz_mm * 1e-3
+fov_x_m = nx * dx_m
+fov_y_m = ny * dy_m
+fov_z_m = max(nz_ref, 1) * dz_m
+kmax_x = nx / (2.0 * fov_x_m)
+kmax_y = ny / (2.0 * fov_y_m)
+kmax_z = max(nz_ref, 1) / (2.0 * fov_z_m) if fov_z_m > 1e-30 else 1.0
+nz_use = max(int(nz_ref), 1)
+# Always 3-column ω + 3D NUFFT grid (nz_use==1 → singleton z) so output is never “2D NIfTI”; avoids FOV/view glitches.
 om = None
 if traj and len(traj) > 0:
     t = np.asarray(traj, dtype=np.float64)
     if t.ndim == 2 and t.shape[1] >= 2:
         kxy = t[:, :2]
-        # Tie k to UI matrix + FOV: FOV_m = N * Δ (mask ref header).
-        # Half-width in k (symmetric -kmax..+kmax): kmax = N / (2 * FOV) [1/m], not N/FOV.
-        # PyNUFFT ω in [-π, π]: ω_d = (k_d / kmax_d) * π — per-axis.
-        # Trajex k must match that k convention (same as seq/UI FOV).
-        fov_x_m = nx * dx_m
-        fov_y_m = ny * dy_m
-        kmax_x = nx / (2.0 * fov_x_m)
-        kmax_y = ny / (2.0 * fov_y_m)
+        kz_col = t[:, 2].astype(np.float64) if t.shape[1] >= 3 else None
         if kmax_x > 1e-30 and kmax_y > 1e-30 and np.abs(kxy).max() > 1e-18:
-            om = np.stack([
+            oz = np.zeros(kxy.shape[0], dtype=np.float64)
+            if kz_col is not None and kmax_z > 1e-30:
+                oz = (kz_col / kmax_z) * np.pi
+            om2 = np.stack([
                 (kxy[:, 0] / kmax_x) * np.pi,
                 (kxy[:, 1] / kmax_y) * np.pi,
             ], axis=-1)
+            om = np.column_stack([om2[:, 0], om2[:, 1], oz])
 if om is None:
     kx = np.linspace(-np.pi, np.pi, nx, endpoint=False)
     ky = np.linspace(-np.pi, np.pi, ny, endpoint=False)
     kxg, kyg = np.meshgrid(kx, ky, indexing='xy')
-    om = np.stack([kxg.ravel(), kyg.ravel()], axis=-1)
+    kzg = np.zeros_like(kxg, dtype=np.float64)
+    om = np.stack([kxg.ravel(), kyg.ravel(), kzg.ravel()], axis=-1)
 n = min(signal.size, om.shape[0]); signal = signal[:n]; om = om[:n]
-A = NUFFT(); A.plan(om, (nx, ny), (2*nx, 2*ny), (8, 8))
-reco = A.adjoint(signal).reshape(nx, ny)
-mag = np.abs(reco).astype(np.float32)
-mag3d = np.zeros((nx, ny, nz_ref), dtype=np.float32)
-z_sl = (nz_ref - 1) // 2
-mag3d[:, :, z_sl] = mag
+A = NUFFT()
+Kz = max(2 * nz_use, 4)
+A.plan(om, (nx, ny, nz_use), (2 * nx, 2 * ny, Kz), (8, 8, 8))
+reco = A.adjoint(signal).reshape(nx, ny, nz_use)
+mag3d = np.abs(reco).astype(np.float32)
 # Flip voxel data on all axes for display alignment; affine unchanged (same world↔index as ref mask).
 mag3d = np.ascontiguousarray(np.flip(mag3d, axis=(0, 1, 2)))
 # Compensate ~1-voxel shift (NUFFT / grid centering vs NIfTI voxel centers): roll +1 along each dim.
@@ -783,7 +790,7 @@ out_path
             const recoBytes = nvMod.pyodide.FS.readFile(String(recoPath));
             try { nvMod.pyodide.FS.unlink(String(recoPath)); } catch (_) {}
 
-            // 5) show in Niivue (scan-like naming/path)
+            // 6) show in Niivue (scan-like naming/path)
             job.niftiUrl = URL.createObjectURL(new Blob([recoBytes], { type: "application/octet-stream" }));
             job.seqUrl = URL.createObjectURL(new Blob([seqText], { type: "text/plain" }));
             job.status = 'done';

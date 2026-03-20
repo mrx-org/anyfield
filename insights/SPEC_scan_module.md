@@ -29,6 +29,13 @@ The module bridges the gap between **Planning** (Sequence Explorer/Niivue) and *
 ## SIM pipeline (`runSimPipeline`)
 Uses `executeFunction` and prepares `/outputs/<baseName>.seq` for the external sim tools; queue items get VIEW SEQ / download where applicable.
 
+**Order (FOV / grid contract):**
+1. **`_prepareCurrentSeqForTools`** — silent `executeFunction` with `protocolName` (protocol snapshot + sequence build). Sequence Explorer emits **`sequence_fov_dims`** from **`seq.definitions` FOV** (m→mm) so Niivue FOV **size** matches the built Pulseq sequence.
+2. **`generateFovMaskNifti()`** — ref mask and voxel grid **after** seq FOV is on the sliders; matrix dimensions, offset, rotation still come from the FOV tab UI.
+3. Resample phantom volumes to that ref → conseq / trajex → sim tool → PyNUFFT on the **same** ref grid.
+
+If step 2 ran before step 1, recon used a stale FOV while the UI later jumped to seq FOV — yellow box and NIfTI appeared to shrink or grow until queue load resynced.
+
 ## Interface & Workflow
 - **CUT Button**: Resample-to-FOV only (see above).
 - **Queue Item**: Shows the job number, label, and 24h timestamp (`${scanNumber}. ${name}`). **CUT** jobs always use label **`cut`** (e.g. `1. cut`, `2. cut`); SIM jobs use the sequence-derived name.

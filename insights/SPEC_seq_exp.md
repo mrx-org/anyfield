@@ -120,7 +120,13 @@ Protocol files are generated with:
 - TOML header with `kind = "protocol"`, `seq_func_file` and `seq_func` set to the **call target** (the base sequence), plus dependencies.
 - An import for the base sequence and a `def prot_*(...): return seq_func(**kwargs)` that forwards parameters. No protocol file path or `prot_*` name is written into the TOML.
 
-**Automatic protocol on scan:** When the user scans, the Scan Module calls `executeFunction(silent=true, protocolName)` with the scan number as `protocolName`. The Sequence Explorer then creates a protocol snapshot with a scan-number prefix (e.g. `1_prot_gre.py`, `2_prot_gre.py`) and registers it under User Protocols. The new protocol always calls the **base sequence** (from `seq_func_file` / `seq_func`), not a previous protocol. As part of this scan-triggered silent execution, the explorer also inspects `SourceManager._last_sequence.definitions` and, if a `FOV`/`fov` definition is present, emits `sequence_fov_dims` so Niivue’s FOV dimension sliders (X/Y/Z in mm) are kept in sync with the currently executed sequence.
+**Automatic protocol on SIM:** The Scan Module calls `executeFunction(silent=true, protocolName)` with the scan number as `protocolName`. The Sequence Explorer creates a protocol snapshot with a scan-number prefix (e.g. `1_prot_gre.py`) and registers it under User Protocols; the protocol always calls the **base sequence**.
+
+**FOV from Pulseq (authoritative for mm size):** After a successful silent execute with `protocolName`, the explorer reads **`seq.definitions['FOV']`** from the last built sequence (`SourceManager._last_sequence` / `__main__.seq`), converts **m → mm**, and emits **`sequence_fov_dims`** on the event hub. Niivue applies this to the FOV **size** sliders (`applySequenceFovDimensions`). **Why:** the sequence run defines the true acquisition FOV; traj / k-space and recon must use the same physical extent. **Mask matrix (X/Y/Z), offsets, and rotation** remain whatever the user set in the FOV tab — only the **mm box size** is overwritten from the sequence.
+
+**Order with SIM (fixes mesh vs recon mismatch):** `runSimPipeline` must call this silent execute **before** `generateFovMaskNifti()`. If the mask is built with old slider FOV and the sequence later pushes different mm values, the ref grid and PyNUFFT output no longer match the yellow box until `loadJob` resyncs — that looked like grow/shrink. With seq-first order, mask + recon + on-screen FOV stay aligned.
+
+**Manual sync:** **`getFovFromSequence()`** still exists for explicitly re-running the sequence and pushing FOV without starting a full SIM job.
 
 **Protocol source enrichment:** When parsing protocol files (`user/prot/...`), the stored source is enriched with `seq_func_file` and `seq_func` from the file’s TOML. That way the base sequence is known even after reload, so re-scanning or loading the protocol later still resolves the correct call target.
 

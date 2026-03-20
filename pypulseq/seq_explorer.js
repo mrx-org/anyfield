@@ -2307,7 +2307,8 @@ json.dumps(_result)
             
             this.showStatus(resultObj.message || 'Function executed successfully', 'success');
 
-            // If this was a scan-triggered silent execution, emit FOV dimensions to Niivue (seq -> Niivue only)
+            // SIM prep: silent execute with protocolName — push Pulseq seq.definitions FOV (m → mm) to Niivue.
+            // Scan pipeline runs this *before* generateFovMaskNifti() so mask voxel size × matrix matches seq FOV.
             if (silent && protocolName != null) {
                 try {
                     const fovScript = `
@@ -2321,7 +2322,6 @@ if seq is None and hasattr(__main__, 'seq'):
 
 fov_vals = None
 if seq is not None:
-    # Prefer seq.definitions keys if available, match case-insensitively on 'fov'
     defs = getattr(getattr(seq, 'definitions', None), 'keys', lambda: [])()
     for k in defs:
         try:
@@ -2382,7 +2382,7 @@ json.dumps(out)
                     console.error('Error emitting FOV after scan execution:', e);
                 }
             }
-            
+
         } catch (error) {
             console.error('Error executing function:', error);
             // Extract the most useful error message from the stack trace

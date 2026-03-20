@@ -729,7 +729,7 @@ export class NiivueModule {
               <div>Mask Z</div>
               <div class="input-sync">
                 <input id="maskZVal-${this.instanceId}" type="number" class="num-input" step="1" value="3" />
-                <input id="maskZ-${this.instanceId}" type="range" min="1" max="512" step="1" value="3" />
+                <input id="maskZ-${this.instanceId}" type="range" min="1" max="512" step="1" value="1" />
               </div>
             </div>
           </div>
@@ -1992,9 +1992,17 @@ os.makedirs('/phantom/averaged', exist_ok=True)
     if (!affine || !dims || dims.length < 3) return [];
     const [nx, ny, nz] = [Number(dims[0]), Number(dims[1]), Number(dims[2])];
     const vox2world = this.voxelToWorldFactory(affine);
+    // Voxel **face** bounds in continuous index space (−½ … n−½), not voxel-center corners (0 … n−1).
+    // Center-to-center edges underestimate extent by one voxel step → FOV sliders shrank after each sync.
     const corners = [
-      [0, 0, 0], [nx - 1, 0, 0], [0, ny - 1, 0], [0, 0, nz - 1],
-      [nx - 1, ny - 1, 0], [nx - 1, 0, nz - 1], [0, ny - 1, nz - 1], [nx - 1, ny - 1, nz - 1]
+      [-0.5, -0.5, -0.5],
+      [nx - 0.5, -0.5, -0.5],
+      [-0.5, ny - 0.5, -0.5],
+      [-0.5, -0.5, nz - 0.5],
+      [nx - 0.5, ny - 0.5, -0.5],
+      [nx - 0.5, -0.5, nz - 0.5],
+      [-0.5, ny - 0.5, nz - 0.5],
+      [nx - 0.5, ny - 0.5, nz - 0.5],
     ];
     return corners.map(([x, y, z]) => vox2world(x, y, z));
   }
