@@ -234,6 +234,10 @@
   font-weight: 600;
   border-left: 2px solid var(--accent);
 }
+/* Hint that JSON config is available on hover (native title tooltip) */
+.niivue-app .volume-group-parent.has-json-tooltip {
+  cursor: help;
+}
 .niivue-app .volume-group-sub {
   font-weight: normal;
 }

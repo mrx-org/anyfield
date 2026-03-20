@@ -93,15 +93,12 @@ export class ScanModule {
         const now = new Date();
         const pad = (n) => String(n).padStart(2, '0');
         const baseName = `scan_${this.scanCounter}_cut`;
-        const seqLabel = this.currentSequence
-            ? ((this.currentSequence.displayName || this.currentSequence.name) || "CUT")
-            : "CUT";
 
         const job = {
             id: 'job_' + now.getTime(),
             scanNumber: this.scanCounter,
             baseName: baseName,
-            name: seqLabel,
+            name: "cut",
             protocol: "CUT (FOV)",
             cutOnly: true,
             status: 'pending',

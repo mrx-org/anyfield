@@ -1,6 +1,14 @@
 import { Niivue, NVMesh, NVImage, SLICE_TYPE, MULTIPLANAR_TYPE, DRAG_MODE, SHOW_RENDER } from "https://unpkg.com/@niivue/niivue@0.65.0/dist/index.js";
 import { eventHub } from "./event_hub.js";
 
+/**
+ * Remote base URL for the bundled default nifti_phantom (JSON + NIfTIs), served from GitHub `raw`.
+ * In-repo mirror: `data/brain_default_1mm_gz/`. Override via `NiivueModule({ defaultPhantomBaseUrl })`
+ * or `window.NV_DEFAULT_PHANTOM_BASE` (set before app init).
+ */
+export const DEFAULT_PHANTOM_REMOTE_BASE =
+  "https://raw.githubusercontent.com/mrx-org/nofield/main/data/brain_default_1mm_gz";
+
 export class NiivueModule {
   constructor(options = {}) {
     this.instanceId = Math.random().toString(36).substr(2, 5);
@@ -100,9 +108,12 @@ export class NiivueModule {
     this.btnAddFolder = null;
     this.resampleToFovBtn = null;
     
-    /** Relative to page URL; JSON + NIfTIs for bundled default phantom (replaces MNI152 demo). */
+    /** Absolute `https://` (remote) or path relative to the page. Default: GitHub raw `DEFAULT_PHANTOM_REMOTE_BASE`. */
     this.defaultPhantomBaseUrl =
-      options.defaultPhantomBaseUrl ?? "data/brain_default_1mm_gz";
+      options.defaultPhantomBaseUrl ??
+      (typeof window !== "undefined" && window.NV_DEFAULT_PHANTOM_BASE
+        ? String(window.NV_DEFAULT_PHANTOM_BASE)
+        : DEFAULT_PHANTOM_REMOTE_BASE);
     this.FOV_RGBA255 = new Uint8Array([255, 220, 0, 255]);
     this.isInitialized = false;
     this.volumeGroups = [];
@@ -2809,6 +2820,18 @@ os.makedirs('/phantom/averaged', exist_ok=True)
       const expanded = !this.collapsedGroups.has(group.id);
       const row = document.createElement("div");
       row.className = "volume-row volume-group-parent";
+      // Native tooltip: phantom JSON (truncated — very long configs would overwhelm the UI / browser)
+      const JSON_TOOLTIP_MAX = 14000;
+      if (group.jsonContent) {
+        row.classList.add("has-json-tooltip");
+        const raw = String(group.jsonContent);
+        row.title =
+          raw.length > JSON_TOOLTIP_MAX
+            ? `${raw.slice(0, JSON_TOOLTIP_MAX)}\n… (${raw.length - JSON_TOOLTIP_MAX} more characters — use JSON tab for full file)`
+            : raw;
+      } else if (group.jsonFileName) {
+        row.title = `No JSON text in memory (${group.jsonFileName})`;
+      }
       const toggle = document.createElement("span");
       toggle.className = "group-toggle";
       toggle.textContent = expanded ? "▼" : "▶";
@@ -2947,14 +2970,14 @@ os.makedirs('/phantom/averaged', exist_ok=True)
 
   /**
    * Fetch bundled nifti_phantom_v1 folder (JSON + NIfTIs) and load like Add File / Add Folder.
-   * Paths are relative to the current page (works with static hosting / GitHub Pages).
+   * Base URL may be absolute (GitHub raw) or relative to the current page.
    */
   async loadBundledDefaultPhantom() {
     await this.waitForInit();
-    const root = new URL(
-      `${String(this.defaultPhantomBaseUrl || "").replace(/\/?$/, "/")}`,
-      typeof window !== "undefined" ? window.location.href : "http://localhost/"
-    );
+    const base = String(this.defaultPhantomBaseUrl || "").trim().replace(/\/?$/, "/");
+    const root = /^https?:\/\//i.test(base)
+      ? new URL(base)
+      : new URL(base, typeof window !== "undefined" ? window.location.href : "http://localhost/");
     const names = [
       "brain_default.json",
       "brain_default_PD.nii.gz",

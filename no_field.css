@@ -134,6 +134,10 @@
     border-left: 3px solid var(--accent);
 }
 
+.volume-row.volume-group-parent.has-json-tooltip {
+    cursor: help;
+}
+
 .volume-row-info {
     flex: 1;
     display: flex;

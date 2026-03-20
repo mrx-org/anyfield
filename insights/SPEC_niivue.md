@@ -8,7 +8,7 @@ Modular medical imaging component for 3D/orthographic NIfTI visualization and in
 - **FOV Planning**: Interactive 3D box manipulation to define physical scanner coordinates (size, offset, rotation).
 - **Coordinate Math**: Logic for voxel-to-world (mm) mapping using NIfTI Q-form/S-form headers.
 - **Shared State**: Emits real-time `fov_changed` events via a central hub.
-- **Volume Management**: Session-aware volume list with reverse chronological ordering, unique numbering, and Title+Meta styling.
+- **Volume Management**: Session-aware volume list with reverse chronological ordering, unique numbering, and Title+Meta styling. Multi-phantom **group parent** rows (`volume-group-parent`) show the phantom **JSON** in the native hover tooltip (`title`), truncated after ~14k characters; `cursor: help` when JSON is present.
 - **Visual Feedback**: Green pulse highlight on the viewer and volume list when new data is added.
 - **Interactions**: 
   - Standardized mouse gestures: Ctrl+Left (Move FOV), Ctrl+Right (Rotate FOV), Ctrl+Scroll (Resize FOV), Ctrl+Middle Drag (Zoom).
@@ -26,7 +26,7 @@ Modular medical imaging component for 3D/orthographic NIfTI visualization and in
 - **FOV mesh**: Built by `getFovGeometry()` which transforms FOV corner voxels to world coordinates using `voxToMmFactory`. The mesh is displayed as a semi-transparent overlay in the 3D/slice views.
 
 ## Default phantom (lab shell)
-- **Bundled path**: `data/brain_default_1mm_gz/` (`brain_default.json` + PD / dB0 / B1+ NIfTIs). A copy may also exist under `data/tool_phantomlib_flyio/data/` (nested repo); keep in sync if you maintain both. Loaded on startup via `loadBundledDefaultPhantom()` (see `index.html`). **Default phantom** button reloads the same bundle after `resetViewer()`.
+- **Default phantom (remote)**: Startup uses **`DEFAULT_PHANTOM_REMOTE_BASE`** in `niivue_app.js` — GitHub **`raw.githubusercontent.com/mrx-org/nofield/main/data/brain_default_1mm_gz/`** (JSON + PD / dB0 / B1+ NIfTIs). Same files live in-repo under `data/brain_default_1mm_gz/` for version control; **fetch always uses the remote URL** unless overridden (`NiivueModule({ defaultPhantomBaseUrl })` or `window.NV_DEFAULT_PHANTOM_BASE`). **Default phantom** button reloads the same bundle after `resetViewer()`.
 - **`.gitignore`**: `*.nii.gz` is ignored except the three default-phantom files in `data/brain_default_1mm_gz/` (explicit `!` rules).
 
 ## Phantom Load Reset Flow

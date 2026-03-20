@@ -31,7 +31,7 @@ Uses `executeFunction` and prepares `/outputs/<baseName>.seq` for the external s
 
 ## Interface & Workflow
 - **CUT Button**: Resample-to-FOV only (see above).
-- **Queue Item**: Shows the job number (e.g., `1.`), label, and 24h timestamp.
+- **Queue Item**: Shows the job number, label, and 24h timestamp (`${scanNumber}. ${name}`). **CUT** jobs always use label **`cut`** (e.g. `1. cut`, `2. cut`); SIM jobs use the sequence-derived name.
 - **Visual Feedback**: Uses a color-coded left border (Green: Done, Yellow: Scanning, Red: Error).
 - **Actions**:
     - **VIEW SCAN**: Loads the NIfTI into Niivue, hides other scans, and switches to **Planning Mode**.
