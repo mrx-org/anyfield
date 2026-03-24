@@ -20,8 +20,23 @@ export class ScanModule {
         this._toolApiCall = null;
         /** Set during runSimPipeline for _toolOnMessage tagging */
         this._simPipelineJob = null;
+        /** Set after `recon.py` is written into Pyodide FS (once per session). */
+        this._simReconPyMounted = false;
 
         this.setupEventListeners();
+    }
+
+    /**
+     * Load `scan_zero/recon.py` into Pyodide VFS so SIM recon runs as normal Python (debuggable).
+     */
+    async _ensureSimReconPy(nvMod) {
+        if (this._simReconPyMounted) return;
+        const url = new URL("./recon.py", import.meta.url);
+        const text = await (await fetch(url)).text();
+        const py = nvMod.pyodide;
+        py.FS.mkdirTree("/scan_zero");
+        py.FS.writeFile("/scan_zero/recon.py", text);
+        this._simReconPyMounted = true;
     }
 
     setupEventListeners() {
@@ -278,6 +293,7 @@ export class ScanModule {
         console.log(`${tag} tool:`, msg);
         return true;
     }
+
 
     _trajectoryFromResult(result) {
         if (!result) return null;
@@ -581,6 +597,7 @@ def make_vol(arr, aff):
     }
 tissues = {}
 first = None
+all_tissues = list(cfg.get('tissues', {}).values())
 for n,t in cfg.get('tissues',{}).items():
     if first is None: first = t
     dfn,didx = parse_ref(t['density'])
@@ -600,13 +617,35 @@ for n,t in cfg.get('tissues',{}).items():
         "adc": prop('ADC', 0.0),
     }
 b1_tx=[]; b1_rx=[]
-if first:
-    for p in first.get('B1+', [1.0]):
-        if isinstance(p,(int,float)):
-            arr=np.ones_like(dens)*float(p); v=make_vol(arr, aff); b1_tx.append(v)
-    for p in first.get('B1-', [1.0]):
-        if isinstance(p,(int,float)):
-            arr=np.ones_like(dens)*float(p); v=make_vol(arr, aff); b1_rx.append(v)
+def _first_nonempty_b1(key):
+    # Prefer first non-empty tissue-level B1 list across all tissues.
+    for tt in all_tissues:
+        if not isinstance(tt, dict):
+            continue
+        vals = tt.get(key, None)
+        if isinstance(vals, list) and len(vals) > 0:
+            return vals
+    return None
+tx_vals = _first_nonempty_b1('B1+')
+rx_vals = _first_nonempty_b1('B1-')
+if tx_vals is None and first:
+    tx_vals = first.get('B1+', [1.0])
+if rx_vals is None and first:
+    rx_vals = first.get('B1-', [1.0])
+for p in (tx_vals or [1.0]):
+    if isinstance(p,(int,float)):
+        arr=np.ones_like(dens)*float(p); v=make_vol(arr, aff); b1_tx.append(v)
+for p in (rx_vals or [1.0]):
+    if isinstance(p,(int,float)):
+        arr=np.ones_like(dens)*float(p); v=make_vol(arr, aff); b1_rx.append(v)
+# MR0SIM expects at least one TX map; keep parity with phantomlib-style defaults.
+if len(b1_tx) == 0:
+    arr = np.ones_like(dens) * 1.0
+    b1_tx.append(make_vol(arr, aff))
+# Also keep RX non-empty for robustness.
+if len(b1_rx) == 0:
+    arr = np.ones_like(dens) * 1.0
+    b1_rx.append(make_vol(arr, aff))
 {"tissues": tissues, "b1_tx": b1_tx, "b1_rx": b1_rx}
         `);
         } finally {
@@ -697,7 +736,7 @@ if os.path.exists(_p):
             const signal = this._signalFromResult(signalResult);
             if (!signal?.length) throw new Error(`${job.noSignalName || 'Simulation'} returned no signal.`);
 
-            // 5) PyNUFFT recon: output size & world space = ref mask; om = k_phys * voxel_size (rad/m · m)
+            // 5) PyNUFFT recon: logic in scan_zero/recon.py (run_sim_recon)
             await nvMod.pyodide.loadPackage(["micropip"]);
             await nvMod.pyodide.runPythonAsync(`
 import micropip
@@ -706,84 +745,15 @@ try:
 except Exception:
     await micropip.install('pynufft')
             `);
+            await this._ensureSimReconPy(nvMod);
             nvMod.pyodide.globals.set("sim_signal_pairs", signal);
             nvMod.pyodide.globals.set("sim_traj_points", traj || []);
             nvMod.pyodide.globals.set("sim_ref_bytes", ref);
             const recoPathRes = await nvMod.pyodide.runPythonAsync(`
-import numpy as np, nibabel as nib, io
-from pynufft import NUFFT
-raw = sim_signal_pairs.to_py() if hasattr(sim_signal_pairs, 'to_py') else sim_signal_pairs
-traj = sim_traj_points.to_py() if hasattr(sim_traj_points, 'to_py') else sim_traj_points
-signal = np.array([complex(float(r), float(i)) for r,i in raw], dtype=np.complex64).ravel()
-ref_bytes = sim_ref_bytes.to_py() if hasattr(sim_ref_bytes, 'to_py') else sim_ref_bytes
-ref_fh = nib.FileHolder(fileobj=io.BytesIO(ref_bytes))
-ref_img = nib.Nifti1Image.from_file_map({'header': ref_fh, 'image': ref_fh})
-# Full 3D FOV grid (same as generateFovMaskNifti). If nz_ref>1 and traj is 2D, use 3D NUFFT with ω_z=0 (kz zero-fill).
-shp = tuple(int(x) for x in ref_img.shape)
-if len(shp) == 2:
-    nx, ny, nz_ref = shp[0], shp[1], 1
-elif len(shp) >= 3:
-    nx, ny, nz_ref = shp[0], shp[1], max(1, shp[2])
-else:
-    nx, ny, nz_ref = int(ref_img.shape[0]), int(ref_img.shape[1]), 1
-zooms_full = list(ref_img.header.get_zooms())
-while len(zooms_full) < 3:
-    zooms_full.append(zooms_full[-1] if zooms_full else 1.0)
-dx_mm = float(zooms_full[0]) if zooms_full[0] and float(zooms_full[0]) > 0 else 1.0
-dy_mm = float(zooms_full[1]) if len(zooms_full) > 1 and zooms_full[1] and float(zooms_full[1]) > 0 else dx_mm
-dz_mm = float(zooms_full[2]) if len(zooms_full) > 2 and zooms_full[2] and float(zooms_full[2]) > 0 else 1.0
-dx_m = dx_mm * 1e-3
-dy_m = dy_mm * 1e-3
-dz_m = dz_mm * 1e-3
-fov_x_m = nx * dx_m
-fov_y_m = ny * dy_m
-fov_z_m = max(nz_ref, 1) * dz_m
-kmax_x = nx / (2.0 * fov_x_m)
-kmax_y = ny / (2.0 * fov_y_m)
-kmax_z = max(nz_ref, 1) / (2.0 * fov_z_m) if fov_z_m > 1e-30 else 1.0
-nz_use = max(int(nz_ref), 1)
-# Always 3-column ω + 3D NUFFT grid (nz_use==1 → singleton z) so output is never “2D NIfTI”; avoids FOV/view glitches.
-om = None
-if traj and len(traj) > 0:
-    t = np.asarray(traj, dtype=np.float64)
-    if t.ndim == 2 and t.shape[1] >= 2:
-        kxy = t[:, :2]
-        kz_col = t[:, 2].astype(np.float64) if t.shape[1] >= 3 else None
-        if kmax_x > 1e-30 and kmax_y > 1e-30 and np.abs(kxy).max() > 1e-18:
-            oz = np.zeros(kxy.shape[0], dtype=np.float64)
-            if kz_col is not None and kmax_z > 1e-30:
-                oz = (kz_col / kmax_z) * np.pi
-            om2 = np.stack([
-                (kxy[:, 0] / kmax_x) * np.pi,
-                (kxy[:, 1] / kmax_y) * np.pi,
-            ], axis=-1)
-            om = np.column_stack([om2[:, 0], om2[:, 1], oz])
-if om is None:
-    kx = np.linspace(-np.pi, np.pi, nx, endpoint=False)
-    ky = np.linspace(-np.pi, np.pi, ny, endpoint=False)
-    kxg, kyg = np.meshgrid(kx, ky, indexing='xy')
-    kzg = np.zeros_like(kxg, dtype=np.float64)
-    om = np.stack([kxg.ravel(), kyg.ravel(), kzg.ravel()], axis=-1)
-n = min(signal.size, om.shape[0]); signal = signal[:n]; om = om[:n]
-A = NUFFT()
-Kz = max(2 * nz_use, 4)
-A.plan(om, (nx, ny, nz_use), (2 * nx, 2 * ny, Kz), (8, 8, 8))
-reco = A.adjoint(signal).reshape(nx, ny, nz_use)
-mag3d = np.abs(reco).astype(np.float32)
-# Flip voxel data on all axes for display alignment; affine unchanged (same world↔index as ref mask).
-mag3d = np.ascontiguousarray(np.flip(mag3d, axis=(0, 1, 2)))
-# Compensate ~1-voxel shift (NUFFT / grid centering vs NIfTI voxel centers): roll +1 along each dim.
-for _ax in (0, 1, 2):
-    mag3d = np.roll(mag3d, 1, axis=_ax)
-mag3d = np.ascontiguousarray(mag3d)
-# Fresh header from array shape + mask zooms (avoids 2D / nz=0 dim[] from stale header.copy()).
-out = nib.Nifti1Image(np.asarray(mag3d, dtype=np.float32), ref_img.affine)
-out.header.set_zooms((dx_mm, dy_mm, dz_mm))
-out.set_sform(ref_img.affine, code=2)
-out.set_qform(ref_img.affine, code=2)
-out_path = '/tmp/__sim_pipeline_reco.nii'
-nib.save(out, out_path)
-out_path
+import sys
+sys.path.insert(0, '/scan_zero')
+from recon import run_sim_recon
+run_sim_recon(sim_signal_pairs, sim_traj_points, sim_ref_bytes)
             `);
             const recoPath = (recoPathRes && recoPathRes.toJs) ? recoPathRes.toJs() : recoPathRes;
             if (recoPathRes?.destroy) recoPathRes.destroy();

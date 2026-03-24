@@ -34,10 +34,22 @@ Uses `executeFunction` and prepares `/outputs/<baseName>.seq` for the external s
 2. **`generateFovMaskNifti()`** — ref mask and voxel grid **after** seq FOV is on the sliders; matrix dimensions, offset, rotation still come from the FOV tab UI.
 3. Resample phantom volumes to that ref → conseq / trajex → sim tool → PyNUFFT on the **same** ref grid.
 
+**PyNUFFT:** Implemented in **`scan_zero/recon.py`** (`run_sim_recon`). On SIM, the file is fetched and written to Pyodide as `/scan_zero/recon.py` once per session, then imported (keeps recon out of inline JS strings).
+
+**MR0 compatibility fix:** The in-app translated phantom path now resolves `B1+` / `B1-` robustly across all tissue entries (not only the first tissue) and guarantees non-empty TX/RX map lists with fallback `1.0` maps if needed. This keeps `SCAN▶` (`tool-mr0sim`) on the same local phantom conversion path as `SCAN▶▶` (rapisim), without a separate debug button.
+
 If step 2 ran before step 1, recon used a stale FOV while the UI later jumped to seq FOV — yellow box and NIfTI appeared to shrink or grow until queue load resynced.
+
+## NIfTI -> toolapi phantom conversion
+- **Source**: Resampled NIfTI volumes are staged in Pyodide temp FS (`/tmp/__sim_phantom_staging`) together with the active phantom JSON.
+- **Loader behavior**: JSON tissue refs like `file.nii.gz[idx]` are resolved; each referenced 3D map is loaded from the staged files (4D inputs split by index). Misnamed plain `.nii` files with `.nii.gz` extension are handled via a temporary fallback load path.
+- **Per-tissue fields**: For each tissue, conversion creates `density` and `db0` as full `Volume` grids, plus scalar `t1`, `t2`, `t2dash`, `adc` (density-weighted averages when properties are map-backed).
+- **B1 handling**: `b1_tx`/`b1_rx` are built from `B1+`/`B1-` entries (searched across tissues); if missing/empty, fallback constant maps are inserted so toolapi payloads are never TX/RX-empty.
+- **Wire format**: JS encodes the plain dict to toolapi `SegmentedPhantom` with `Volume.data` serialized as `TypedList::Float` (`{ Float: [...] }`) to match toolapi-wasm expectations.
 
 ## Interface & Workflow
 - **CUT Button**: Resample-to-FOV only (see above).
+- **MR0 Button**: **`SCAN▶`** uses the in-app translated/resampled phantom path (with robust B1 TX/RX handling).
 - **Queue Item**: Shows the job number, label, and 24h timestamp (`${scanNumber}. ${name}`). **CUT** jobs always use label **`cut`** (e.g. `1. cut`, `2. cut`); SIM jobs use the sequence-derived name.
 - **Visual Feedback**: Uses a color-coded left border (Green: Done, Yellow: Scanning, Red: Error).
 - **Actions**:
