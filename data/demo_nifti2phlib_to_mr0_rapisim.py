@@ -15,6 +15,7 @@ nifit_json_fn = Path(__file__).resolve().parent / "brain_default_1mm_single_slic
 
 
 # @title Define tools
+import numpy as np
 import toolapi
 from functools import cache
 
@@ -72,6 +73,107 @@ def sim_mr0(sequence, phantom):
         phantom=phantom,
     )
 
+
+def _to_py(obj):
+    if hasattr(obj, "to_py"):
+        return obj.to_py()
+    return obj
+
+
+def _sequence_for_trajex(seq):
+    """Match scan_module.js: wrap conseq output for tool-trajex."""
+    seq = _to_py(seq)
+    if isinstance(seq, dict) and seq.get("Ok") is not None:
+        seq = seq["Ok"]
+    if isinstance(seq, dict):
+        tl = seq.get("TypedList")
+        if isinstance(tl, dict) and tl.get("InstantSeqEvent") is not None:
+            return {"TypedList": {"InstantSeqEvent": tl["InstantSeqEvent"]}}
+    return seq
+
+
+def trajex(sequence):
+    """k-space trajectory from tool-trajex (sequence only; phantom unused in tool)."""
+    return call(
+        "wss://tool-trajex.fly.dev/tool",
+        sequence=_sequence_for_trajex(sequence),
+        t1=1.0,
+        t2=0.1,
+        min_mag=1e-3,
+    )
+
+
+def _to_arr(x):
+    if x is None:
+        return []
+    x = _to_py(x)
+    if isinstance(x, (list, tuple)):
+        return list(x)
+    if isinstance(x, np.ndarray):
+        return x.ravel().tolist()
+    if hasattr(x, "__len__") and not isinstance(x, (str, bytes)):
+        try:
+            return list(x)
+        except TypeError:
+            return []
+    return []
+
+
+def _trajectory_from_trajex_result(result) -> np.ndarray | None:
+    """Parse trajex return; mirrors scan_module.js _trajectoryFromResult → (N,3) k in 1/m."""
+    result = _to_py(result)
+    if not result:
+        return None
+    if isinstance(result, dict):
+        if result.get("Ok") is not None:
+            result = result["Ok"]
+        if result.get("Error"):
+            return None
+        if result.get("Trajectory") is not None:
+            result = result["Trajectory"]
+        tl = result.get("TypedList")
+        if isinstance(tl, dict):
+            v4 = tl.get("Vec4")
+            if v4 is not None:
+                arr = _to_arr(v4)
+                out = []
+                for v in arr:
+                    v = _to_py(v)
+                    if isinstance(v, dict):
+                        kx = v.get("k_x", v.get("kx", v.get("x", v.get(0, 0))))
+                        ky = v.get("k_y", v.get("ky", v.get("y", v.get(1, 0))))
+                        kz = v.get("k_z", v.get("kz", v.get("z", v.get(2, 0))))
+                        out.append([float(kx), float(ky), float(kz)])
+                    elif isinstance(v, (list, tuple)) and len(v) >= 2:
+                        out.append([float(v[0]), float(v[1]), float(v[2]) if len(v) > 2 else 0.0])
+                if out:
+                    return np.asarray(out, dtype=np.float64)
+            kx = _to_arr(tl.get("k_x", tl.get("kx", tl.get(0))))
+            ky = _to_arr(tl.get("k_y", tl.get("ky", tl.get(1))))
+            kz = _to_arr(tl.get("k_z", tl.get("kz", tl.get(2))))
+            if kx or ky:
+                n = max(len(kx), len(ky), len(kz) if kz else 0)
+                kx = (kx + [0.0] * n)[:n]
+                ky = (ky + [0.0] * n)[:n]
+                kz = (kz + [0.0] * n)[:n] if kz else [0.0] * n
+                return np.stack([np.asarray(kx), np.asarray(ky), np.asarray(kz)], axis=1)
+    # Colab-style list of objects with .data
+    if isinstance(result, (list, tuple)) and result:
+        first = _to_py(result[0])
+        if hasattr(first, "data"):
+            rows = []
+            for kt in result:
+                kt = _to_py(kt)
+                d = getattr(kt, "data", None)
+                if d is not None:
+                    rows.append(np.asarray(_to_py(d), dtype=np.float64).ravel())
+            if rows:
+                return np.stack(rows, axis=0)
+        if isinstance(first, (list, tuple, np.ndarray)):
+            return np.asarray(result, dtype=np.float64)
+    return None
+
+
 # @title NIfTI phantom to toolapi conversion code
 
 import json
@@ -79,7 +181,6 @@ import re
 import tempfile
 
 import nibabel as nib
-import numpy as np
 from nibabel.filebasedimages import ImageFileError
 
 from toolapi.value import Volume, PhantomTissue, SegmentedPhantom
@@ -235,7 +336,152 @@ def load_phantom_from_nifti(config_path: str | Path) -> SegmentedPhantom:
     return SegmentedPhantom(tissues=tissues, b1_tx=b1_tx, b1_rx=b1_rx)
 
 # @title **load .seq + load phantom + run sim** |  _with tools hosted on fly.io_
+import sys
+
 import matplotlib.pyplot as plt
+
+_REPO_ROOT = Path(__file__).resolve().parents[1]
+if str(_REPO_ROOT) not in sys.path:
+    sys.path.insert(0, str(_REPO_ROOT))
+
+
+def _phantom_grid_fov_m(phantom: SegmentedPhantom) -> tuple[int, int, int, float, float, float]:
+    """Image shape and FOV (m) from first tissue density (axis-aligned voxel steps)."""
+    t0 = next(iter(phantom.tissues.values()))
+    sh = t0.density.shape
+    nx, ny = int(sh[0]), int(sh[1])
+    nz = int(sh[2]) if len(sh) > 2 else 1
+    aff = t0.density.affine
+    dx = abs(float(aff[0][0]))
+    dy = abs(float(aff[1][1]))
+    dz = abs(float(aff[2][2])) if len(aff) > 2 else dx
+
+    def step_m(s: float) -> float:
+        if s > 0.05:
+            return s * 1e-3
+        return float(s)
+
+    dx_m, dy_m, dz_m = step_m(dx), step_m(dy), step_m(dz)
+    return nx, ny, nz, nx * dx_m, ny * dy_m, max(nz, 1) * dz_m
+
+
+def recon_signal_traj_to_image(
+    signal_1d: np.ndarray,
+    traj_nxm: np.ndarray,
+    nx: int,
+    ny: int,
+    nz: int,
+    fov_x_m: float,
+    fov_y_m: float,
+    fov_z_m: float,
+) -> tuple[np.ndarray, str]:
+    """
+    Reconstruct complex image from 1D k-space samples and trajectory (k in 1/m),
+    using the same Cartesian / PyNUFFT / DCF logic as ``scan_zero/recon.py`` ``run_sim_recon``
+    (no reference NIfTI; no NIfTI export).
+    """
+    from pynufft import NUFFT
+
+    from scan_zero.recon import (
+        _GRID_TOL,
+        _per_axis_cartesian_and_offsets,
+        _recon_cartesian_ifft,
+        _recon_full_nufft,
+    )
+
+    signal = np.asarray(signal_1d, dtype=np.complex128).ravel()
+    tr_np = np.asarray(traj_nxm, dtype=np.float64)
+    if tr_np.ndim != 2 or tr_np.shape[1] < 2:
+        raise ValueError("traj must be (N, 2+) with kx, ky [, kz] in 1/m")
+    if tr_np.shape[1] == 2:
+        tr_np = np.column_stack(
+            [tr_np, np.zeros(tr_np.shape[0], dtype=np.float64)]
+        )
+
+    nz_use = max(int(nz), 1)
+    kmax_x = nx / (2.0 * fov_x_m)
+    kmax_y = ny / (2.0 * fov_y_m)
+    kmax_z = max(nz_use, 1) / (2.0 * fov_z_m) if fov_z_m > 1e-30 else 1.0
+
+    axis_ok, offsets_xyz = _per_axis_cartesian_and_offsets(
+        tr_np, fov_x_m, fov_y_m, fov_z_m, nx, ny, nz_use, tol=_GRID_TOL
+    )
+
+    if all(axis_ok):
+        n_cart = min(int(signal.size), int(tr_np.shape[0]))
+        reco = _recon_cartesian_ifft(
+            signal[:n_cart].astype(np.complex64),
+            tr_np[:n_cart],
+            nx,
+            ny,
+            nz_use,
+            fov_x_m,
+            fov_y_m,
+            fov_z_m,
+            offset_n=offsets_xyz,
+        )
+        return reco, "Cartesian IFFT"
+
+    if kmax_x > 1e-30 and kmax_y > 1e-30 and np.abs(tr_np[:, :2]).max() > 1e-18:
+        n_full = min(int(signal.size), int(tr_np.shape[0]))
+        reco, _ = _recon_full_nufft(
+            signal[:n_full].astype(np.complex64),
+            tr_np[:n_full],
+            nx,
+            ny,
+            nz_use,
+            kmax_x,
+            kmax_y,
+            kmax_z,
+            apply_dcf=True,
+        )
+        return reco, "PyNUFFT + Pipe-Menon DCF"
+
+    om = None
+    use_2d_plan = int(nz_use) == 1
+    kxy = tr_np[:, :2]
+    kz_col = tr_np[:, 2].astype(np.float64) if tr_np.shape[1] >= 3 else None
+    if kmax_x > 1e-30 and kmax_y > 1e-30 and np.abs(kxy).max() > 1e-18:
+        oz = np.zeros(kxy.shape[0], dtype=np.float64)
+        if kz_col is not None and kmax_z > 1e-30:
+            oz = (kz_col / kmax_z) * np.pi
+            use_2d_plan = not np.any(np.abs(kz_col) > 1e-18) and int(nz_use) == 1
+        om2 = np.stack(
+            [
+                (kxy[:, 0] / kmax_x) * np.pi,
+                (kxy[:, 1] / kmax_y) * np.pi,
+            ],
+            axis=-1,
+        )
+        om = np.column_stack([om2[:, 0], om2[:, 1], oz])
+    if om is None:
+        kx = np.linspace(-np.pi, np.pi, nx, endpoint=False)
+        ky = np.linspace(-np.pi, np.pi, ny, endpoint=False)
+        kxg, kyg = np.meshgrid(kx, ky, indexing="xy")
+        kzg = np.zeros_like(kxg, dtype=np.float64)
+        om = np.stack([kxg.ravel(), kyg.ravel(), kzg.ravel()], axis=-1)
+
+    n = min(int(signal.size), int(om.shape[0]))
+    signal_n = signal[:n].astype(np.complex64)
+    om_n = om[:n]
+    a = NUFFT()
+    if use_2d_plan:
+        a.plan(om_n[:, :2], (nx, ny), (2 * nx, 2 * ny), (6, 6))
+        reco = np.asarray(a.adjoint(signal_n)).reshape(nx, ny, 1)
+    else:
+        kz_plan = max(2 * nz_use, 4)
+        a.plan(om_n, (nx, ny, nz_use), (2 * nx, 2 * ny, kz_plan), (4, 4, 4))
+        reco = np.asarray(a.adjoint(signal_n)).reshape(nx, ny, nz_use)
+    return reco.astype(np.complex64), "PyNUFFT (fallback ω)"
+
+
+def _reco_2d_slice(reco: np.ndarray) -> np.ndarray:
+    a = np.asarray(reco)
+    if a.ndim == 3:
+        z = a.shape[2] // 2
+        return a[:, :, z]
+    return a
+
 
 def _to_complex_np(sig):
     """Convert tool output to np.complex64 array."""
@@ -269,18 +515,174 @@ signal_mr0 = _to_complex_np(sim_mr0(seq, phantom))
 print("running rapisim simulation")
 signal_rapi = _to_complex_np(sim_spdg(seq, phantom))
 
+print("running trajex")
+traj_raw = trajex(seq)
+tr_np_full = _trajectory_from_trajex_result(traj_raw)
 
 n_sig = min(signal_rapi.size, signal_mr0.size)
-s1 = signal_rapi[:n_sig]
-s2 = signal_mr0[:n_sig]
+if tr_np_full is not None and tr_np_full.size:
+    n_sig = min(n_sig, int(tr_np_full.shape[0]))
+s_rapi = signal_rapi[:n_sig]
+s_mr0 = signal_mr0[:n_sig]
+tr_np = tr_np_full[:n_sig] if tr_np_full is not None else None
 
-plt.figure(figsize=(10, 4))
-plt.plot(np.abs(s1), label="rapisim |s|")
-plt.plot(np.abs(s2), label="mr0sim |s|", alpha=0.85)
-plt.xlabel("readout index")
-plt.ylabel("|signal|")
-plt.title("Simulated signal magnitude")
-plt.grid(True)
-plt.legend()
+# --- one figure: row0 log|kspace|, row1 |img|, row2 angle(img); col0 mr0, col1 rapi, col2 diff ---
+_eps = 1e-30
+log_k_mr0 = np.log10(np.abs(s_mr0) + _eps)
+log_k_rapi = np.log10(np.abs(s_rapi) + _eps)
+lk_lo = float(min(log_k_mr0.min(), log_k_rapi.min()))
+lk_hi = float(max(log_k_mr0.max(), log_k_rapi.max()))
+lk_span = max(lk_hi - lk_lo, 1e-12)
+lk_diff_lim = 0.1 * lk_span
+
+im_mr0 = im_rapi = None
+label_mr0 = label_rapi = ""
+have_recon = tr_np is not None and tr_np.size > 0
+if have_recon:
+    gx, gy, gz, fovx, fovy, fovz = _phantom_grid_fov_m(phantom)
+    try:
+        reco_mr0, label_mr0 = recon_signal_traj_to_image(
+            s_mr0, tr_np, gx, gy, gz, fovx, fovy, fovz
+        )
+        reco_rapi, label_rapi = recon_signal_traj_to_image(
+            s_rapi, tr_np, gx, gy, gz, fovx, fovy, fovz
+        )
+        print(f"recon mr0sim: {label_mr0}")
+        print(f"recon rapisim: {label_rapi}")
+        im_mr0 = _reco_2d_slice(reco_mr0)
+        im_rapi = _reco_2d_slice(reco_rapi)
+    except ImportError as exc:
+        print("PyNUFFT or scan_zero.recon unavailable — install pynufft and run from repo root:", exc)
+        have_recon = False
+    except Exception as exc:
+        print("PyNUFFT recon failed:", exc)
+        have_recon = False
+else:
+    print("trajex: no usable trajectory; figure shows k-space row only.")
+
+nrows = 3 if have_recon and im_mr0 is not None and im_rapi is not None else 1
+fig_w, fig_h = 11, 3.2 * nrows
+fig, axes = plt.subplots(nrows, 3, figsize=(fig_w, fig_h), squeeze=False)
+
+def _kstrip(a: np.ndarray) -> np.ndarray:
+    return np.asarray(a, dtype=np.float64).reshape(1, -1)
+
+extent_k = [0, n_sig, 0, 1]
+_use_kscatter = (
+    tr_np is not None
+    and tr_np.size
+    and tr_np.shape[0] >= n_sig
+    and tr_np.shape[1] >= 2
+)
+if _use_kscatter:
+    kx = np.asarray(tr_np[:n_sig, 0], dtype=np.float64)
+    ky = np.asarray(tr_np[:n_sig, 1], dtype=np.float64)
+    pt = max(4, min(40, int(16000 / max(n_sig, 1))))
+    for ax, c, ttl, cmap, vmin, vmax in (
+        (axes[0, 0], log_k_mr0, "log10 |kspace| mr0sim", "viridis", lk_lo, lk_hi),
+        (axes[0, 1], log_k_rapi, "log10 |kspace| rapisim", "viridis", lk_lo, lk_hi),
+        (
+            axes[0, 2],
+            log_k_mr0 - log_k_rapi,
+            "Δ log10|k| (mr0 − rapi)",
+            "RdBu_r",
+            -lk_diff_lim,
+            lk_diff_lim,
+        ),
+    ):
+        ax.scatter(
+            kx,
+            ky,
+            c=c,
+            s=pt,
+            cmap=cmap,
+            vmin=vmin,
+            vmax=vmax,
+            linewidths=0,
+            alpha=0.9,
+        )
+        ax.set_aspect("equal")
+        ax.set_xlabel(r"$k_x$ (1/m)")
+        ax.set_ylabel(r"$k_y$ (1/m)")
+        ax.set_title(ttl)
+else:
+    axes[0, 0].imshow(
+        _kstrip(log_k_mr0),
+        aspect="auto",
+        extent=extent_k,
+        origin="lower",
+        vmin=lk_lo,
+        vmax=lk_hi,
+        cmap="viridis",
+    )
+    axes[0, 0].set_title("log10 |kspace| mr0sim (no traj — sample index)")
+    axes[0, 0].set_yticks([])
+    axes[0, 0].set_xlabel("sample")
+    axes[0, 1].imshow(
+        _kstrip(log_k_rapi),
+        aspect="auto",
+        extent=extent_k,
+        origin="lower",
+        vmin=lk_lo,
+        vmax=lk_hi,
+        cmap="viridis",
+    )
+    axes[0, 1].set_title("log10 |kspace| rapisim (no traj — sample index)")
+    axes[0, 1].set_yticks([])
+    axes[0, 1].set_xlabel("sample")
+    axes[0, 2].imshow(
+        _kstrip(log_k_mr0 - log_k_rapi),
+        aspect="auto",
+        extent=extent_k,
+        origin="lower",
+        vmin=-lk_diff_lim,
+        vmax=lk_diff_lim,
+        cmap="RdBu_r",
+    )
+    axes[0, 2].set_title("Δ log10|k| (mr0 − rapi)")
+    axes[0, 2].set_yticks([])
+    axes[0, 2].set_xlabel("sample")
+
+if have_recon and im_mr0 is not None and im_rapi is not None:
+    abs_mr0 = np.abs(im_mr0)
+    abs_rapi = np.abs(im_rapi)
+    v_img = float(max(abs_mr0.max(), abs_rapi.max()))
+    span_img = max(v_img, 1e-12)
+    img_diff_lim = 0.1 * span_img
+
+    axes[1, 0].imshow(abs_mr0, origin="lower", vmin=0, vmax=v_img, cmap="gray")
+    axes[1, 0].set_title(f"|image| mr0sim ({label_mr0})")
+    axes[1, 0].axis("off")
+
+    axes[1, 1].imshow(abs_rapi, origin="lower", vmin=0, vmax=v_img, cmap="gray")
+    axes[1, 1].set_title(f"|image| rapisim ({label_rapi})")
+    axes[1, 1].axis("off")
+
+    axes[1, 2].imshow(
+        abs_mr0 - abs_rapi,
+        origin="lower",
+        vmin=-img_diff_lim,
+        vmax=img_diff_lim,
+        cmap="RdBu_r",
+    )
+    axes[1, 2].set_title("Δ |image| (mr0 − rapi)")
+    axes[1, 2].axis("off")
+
+    ph_mr0 = np.angle(im_mr0)
+    ph_rapi = np.angle(im_rapi)
+    ph_diff = np.angle(im_mr0 * np.conj(im_rapi))
+
+    for j, (dat, ttl) in enumerate(
+        [
+            (ph_mr0, "angle mr0sim"),
+            (ph_rapi, "angle rapisim"),
+            (ph_diff, "Δ phase (mr0 vs rapi)"),
+        ]
+    ):
+        axes[2, j].imshow(dat, origin="lower", vmin=-np.pi, vmax=np.pi, cmap="twilight")
+        axes[2, j].set_title(ttl)
+        axes[2, j].axis("off")
+
+fig.suptitle("mr0sim vs rapisim — k-space, magnitude, phase", fontsize=11, y=1.02)
 plt.tight_layout()
 plt.show()
