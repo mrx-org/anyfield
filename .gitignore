@@ -4,6 +4,10 @@
 !data/brain_default_1mm_gz/brain_default_PD.nii.gz
 !data/brain_default_1mm_gz/brain_default_dB0.nii.gz
 !data/brain_default_1mm_gz/brain_default_B1+.nii.gz
+# Single-slice variant (tracked despite *.nii.gz)
+!data/brain_default_1mm_single_slice/brain_default_PD.nii.gz
+!data/brain_default_1mm_single_slice/brain_default_dB0.nii.gz
+!data/brain_default_1mm_single_slice/brain_default_B1+.nii.gz
 *.stl
 niivue_/
 node_modules/
