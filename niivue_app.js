@@ -453,6 +453,15 @@ export class NiivueModule {
     if (el) el.textContent = msg || '';
   }
 
+  /** Keep scan/sim pipeline (uses volumeGroups[].jsonContent) aligned with VFS / editor. */
+  _syncJsonContentToVolumeGroups(jsonFileName, raw) {
+    if (!jsonFileName || raw == null) return;
+    const s = String(raw);
+    for (const g of this.volumeGroups) {
+      if (g.jsonFileName === jsonFileName) g.jsonContent = s;
+    }
+  }
+
   handleJsonSave() {
     const raw = this.getJsonEditorValue();
     if (!raw.trim()) {
@@ -476,6 +485,7 @@ export class NiivueModule {
     }
     try {
       this.pyodide.FS.writeFile(`/phantom/${name}`, raw);
+      this._syncJsonContentToVolumeGroups(name, raw);
       this.setJsonTabStatus('Saved.');
     } catch (e) {
       this.setJsonTabStatus(`Save failed: ${e.message}`);
@@ -504,6 +514,7 @@ export class NiivueModule {
       if (!fileName) return;
       try {
         this.pyodide.FS.writeFile(`/phantom/${fileName}`, raw);
+        this._syncJsonContentToVolumeGroups(fileName, raw);
         if (this.options.showJsonTab) this.updateJsonTab();
         this.setJsonTabStatus(`Saved as ${fileName}.`);
       } catch (e) {
@@ -577,6 +588,7 @@ export class NiivueModule {
     try {
       const content = this.pyodide.FS.readFile(`/phantom/${name}`, { encoding: 'utf8' });
       this.setJsonEditorValue(content);
+      this._syncJsonContentToVolumeGroups(name, content);
       this.setJsonTabStatus('Reverted to saved version.');
     } catch (e) {
       this.setJsonTabStatus(`Revert failed: ${e.message}`);

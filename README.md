@@ -15,11 +15,14 @@ For more insights see insights SPEC_no_field.md
 
 ## Release notes
 
+**v0.1.3**
+- renamed to Any-Field Scanner
+- fixed json execute
 
 **v0.1.2**
 - fixed pynufft recon + simple density compensation
 - still blurry but roughly functional
-- fixed json execute
+
 
 **v0.1.1**
 
