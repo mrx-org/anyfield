@@ -577,7 +577,7 @@ _use_kscatter = (
 if _use_kscatter:
     kx = np.asarray(tr_np[:n_sig, 0], dtype=np.float64)
     ky = np.asarray(tr_np[:n_sig, 1], dtype=np.float64)
-    pt = max(4, min(40, int(16000 / max(n_sig, 1))))
+    pt = max(5.2, min(52.0, 20800 / max(n_sig, 1)))
     for ax, c, ttl, cmap, vmin, vmax in (
         (axes[0, 0], log_k_mr0, "log10 |kspace| mr0sim", "viridis", lk_lo, lk_hi),
         (axes[0, 1], log_k_rapi, "log10 |kspace| rapisim", "viridis", lk_lo, lk_hi),
