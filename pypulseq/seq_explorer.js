@@ -663,6 +663,49 @@ json.dumps(versions)
     }
 
     /**
+     * Write an uploaded .seq file into Pyodide VFS and return path.
+     * @param {File} file
+     * @returns {Promise<string|null>}
+     */
+    async writeUploadedSeqToVfs(file) {
+        const pyodide = this.config.pyodide;
+        if (!pyodide?.FS || !file) return null;
+        const baseDir = '/uploads';
+        try {
+            if (!pyodide.FS.analyzePath(baseDir).exists) {
+                pyodide.FS.mkdir(baseDir);
+            }
+        } catch (err) {
+            if (err.code !== 'EEXIST') throw err;
+        }
+        const safeName = file.name
+            .replace(/[/\\:?*\[\]"]/g, '_')
+            .replace(/_+/g, '_')
+            .replace(/^_|_$/g, '') || 'uploaded.seq';
+        const vfsPath = `${baseDir}/${safeName}`;
+        const buffer = await file.arrayBuffer();
+        pyodide.FS.writeFile(vfsPath, new Uint8Array(buffer), { encoding: 'binary' });
+        return vfsPath;
+    }
+
+    /**
+     * Return installed PyPulseq version if known.
+     * Falls back to app-pinned version when the versions panel is not ready yet.
+     * @returns {string}
+     */
+    getInstalledPyPulseqVersion() {
+        const fallbackVersion = '1.4.2.post2';
+        const root = this.consoleTarget || this.container || document;
+        const versionEl = root ? root.querySelector('#seq-pypulseq-version') : null;
+        const version = versionEl?.textContent?.trim();
+        const normalize = (v) => String(v).replace(/\.post\d+$/i, '');
+        if (!version || version === 'loading...' || version === 'unknown') {
+            return normalize(fallbackVersion);
+        }
+        return normalize(version);
+    }
+
+    /**
      * Resolve config type (file | folder | module) to internal loader type.
      * Config must set type; no inference.
      */
@@ -2000,7 +2043,22 @@ json.dumps(_result)
             // Label cell
             const labelCell = document.createElement('td');
             labelCell.className = "params-table-label-cell";
-            labelCell.textContent = param.name;
+            if (param.type === 'file' && param.name === 'seq_file') {
+                const currentLabel = document.createElement('div');
+                currentLabel.className = 'seq-label-row seq-label-row-current';
+                currentLabel.textContent = 'Current .seq-file';
+                const newLabel = document.createElement('div');
+                newLabel.className = 'seq-label-row seq-label-row-new';
+                newLabel.textContent = 'New .seq-file';
+                const noteLabel = document.createElement('div');
+                noteLabel.className = 'seq-label-row seq-label-row-note';
+                noteLabel.textContent = 'Note';
+                labelCell.appendChild(currentLabel);
+                labelCell.appendChild(newLabel);
+                labelCell.appendChild(noteLabel);
+            } else {
+                labelCell.textContent = param.name;
+            }
             if (paramDocs[param.name]) {
                 labelCell.title = paramDocs[param.name];
             } else {
@@ -2028,6 +2086,8 @@ json.dumps(_result)
                 wrapper.style.display = 'flex';
                 wrapper.style.gap = '0.25rem';
                 wrapper.style.alignItems = 'center';
+                wrapper.style.flexDirection = 'column';
+                wrapper.style.alignItems = 'stretch';
                 input = document.createElement('input');
                 input.type = 'text';
                 input.className = "params-input";
@@ -2050,12 +2110,12 @@ json.dumps(_result)
                     const uploadBtn = document.createElement('button');
                     uploadBtn.type = 'button';
                     uploadBtn.className = "params-upload-btn";
-                    uploadBtn.innerHTML = '<i class="bi bi-upload" aria-hidden="true"></i>';
+                    uploadBtn.innerHTML = '<i class="bi bi-folder2-open" aria-hidden="true"></i>';
                     uploadBtn.style.flexShrink = '0';
                     uploadBtn.style.padding = '0.25rem 0.5rem';
                     uploadBtn.style.fontSize = '0.75rem';
                     uploadBtn.style.cursor = 'pointer';
-                    uploadBtn.title = 'Upload new .seq file.';
+                    uploadBtn.title = 'Choose .seq file.';
                     uploadBtn.addEventListener('click', () => {
                         const fileInput = document.createElement('input');
                         fileInput.type = 'file';
@@ -2064,45 +2124,93 @@ json.dumps(_result)
                         fileInput.onchange = async (e) => {
                             const file = e.target.files?.[0];
                             if (!file) return;
-                            const pyodide = this.config.pyodide;
-                            if (!pyodide?.FS) {
+                            if (!this.config.pyodide?.FS) {
                                 console.warn('Pyodide FS not available for upload');
                                 return;
                             }
-                            const baseDir = '/uploads';
                             try {
-                                if (!pyodide.FS.analyzePath(baseDir).exists) {
-                                    pyodide.FS.mkdir(baseDir);
+                                const vfsPath = await this.writeUploadedSeqToVfs(file);
+                                if (vfsPath) {
+                                    input.value = vfsPath;
                                 }
-                            } catch (err) {
-                                if (err.code !== 'EEXIST') throw err;
+                            } catch (writeErr) {
+                                console.error('Failed to write uploaded file to VFS:', writeErr);
                             }
-                            const safeName = file.name
-                                .replace(/[/\\:?*\[\]"]/g, '_')
-                                .replace(/_+/g, '_')
-                                .replace(/^_|_$/g, '') || 'uploaded.seq';
-                            const vfsPath = `${baseDir}/${safeName}`;
-                            const reader = new FileReader();
-                            reader.onload = (ev) => {
-                                try {
-                                    const buf = ev.target?.result;
-                                    if (buf instanceof ArrayBuffer) {
-                                        pyodide.FS.writeFile(vfsPath, new Uint8Array(buf), { encoding: 'binary' });
-                                        input.value = vfsPath;
-                                    }
-                                } catch (writeErr) {
-                                    console.error('Failed to write uploaded file to VFS:', writeErr);
-                                }
-                            };
-                            reader.readAsArrayBuffer(file);
                             fileInput.remove();
                         };
                         document.body.appendChild(fileInput);
                         fileInput.click();
                     });
-                    wrapper.appendChild(uploadBtn);
+                    if (param.name === 'seq_file') {
+                        uploadBtn.classList.add('seq-file-chooser-btn');
+                        wrapper.dataset.hasSeqChooser = 'true';
+                        wrapper._seqUploadBtn = uploadBtn;
+                    } else {
+                        wrapper.appendChild(uploadBtn);
+                    }
                 }
                 inputCell.appendChild(wrapper);
+
+                if (param.type === 'file' && param.name === 'seq_file') {
+                    const uploadRow = document.createElement('div');
+                    uploadRow.className = 'seq-upload-row';
+                    const dropZone = document.createElement('div');
+                    dropZone.className = 'seq-dropzone';
+                    dropZone.textContent = 'drag & drop seq file here';
+                    const setDragState = (isDragOver) => {
+                        dropZone.classList.toggle('drag-over', isDragOver);
+                    };
+                    ['dragenter', 'dragover'].forEach((eventName) => {
+                        dropZone.addEventListener(eventName, (evt) => {
+                            evt.preventDefault();
+                            evt.stopPropagation();
+                            setDragState(true);
+                        });
+                    });
+                    ['dragleave', 'dragend'].forEach((eventName) => {
+                        dropZone.addEventListener(eventName, (evt) => {
+                            evt.preventDefault();
+                            evt.stopPropagation();
+                            setDragState(false);
+                        });
+                    });
+                    dropZone.addEventListener('drop', async (evt) => {
+                        evt.preventDefault();
+                        evt.stopPropagation();
+                        setDragState(false);
+                        const file = evt.dataTransfer?.files?.[0];
+                        if (!file) return;
+                        if (!file.name.toLowerCase().endsWith('.seq')) {
+                            console.warn('Dropped file is not a .seq file:', file.name);
+                            return;
+                        }
+                        if (!this.config.pyodide?.FS) {
+                            console.warn('Pyodide FS not available for upload');
+                            return;
+                        }
+                        try {
+                            const vfsPath = await this.writeUploadedSeqToVfs(file);
+                            if (vfsPath) {
+                                input.value = vfsPath;
+                            }
+                        } catch (writeErr) {
+                            console.error('Failed to handle dropped .seq file:', writeErr);
+                        }
+                    });
+                    uploadRow.appendChild(dropZone);
+                    const chooseLabel = document.createElement('span');
+                    chooseLabel.className = 'seq-upload-or-label';
+                    chooseLabel.textContent = 'or select file:';
+                    uploadRow.appendChild(chooseLabel);
+                    if (wrapper._seqUploadBtn) {
+                        uploadRow.appendChild(wrapper._seqUploadBtn);
+                    }
+                    inputCell.appendChild(uploadRow);
+                    const noteText = document.createElement('div');
+                    noteText.className = 'seq-file-note';
+                    noteText.textContent = `We are currently restricted to Pulseq version ${this.getInstalledPyPulseqVersion()}`;
+                    inputCell.appendChild(noteText);
+                }
             } else {
                 input = document.createElement('input');
                 input.className = "params-input";

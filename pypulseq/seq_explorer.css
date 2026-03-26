@@ -436,6 +436,77 @@ body {
     cursor: not-allowed;
 }
 
+.seq-dropzone {
+    margin-top: 0.15rem;
+    border: 1px dashed rgba(59, 130, 246, 0.45);
+    border-radius: 6px;
+    padding: 1.35rem 0.6rem;
+    font-size: 0.8rem;
+    font-weight: 400;
+    line-height: 1.2;
+    color: var(--muted);
+    text-align: center;
+    background: rgba(59, 130, 246, 0.06);
+    transition: all 0.2s ease;
+}
+
+.seq-dropzone.drag-over {
+    border-color: var(--accent);
+    background: rgba(59, 130, 246, 0.18);
+    color: var(--text);
+}
+
+.seq-upload-row {
+    margin-top: 0.35rem;
+    display: flex;
+    align-items: center;
+    gap: 0.5rem;
+}
+
+.seq-upload-row .seq-dropzone {
+    margin-top: 0;
+    flex: 1;
+}
+
+.seq-upload-or-label {
+    font-size: 0.8rem;
+    font-weight: 400;
+    color: var(--muted);
+    line-height: 1.2;
+    white-space: nowrap;
+}
+
+.seq-file-chooser-btn {
+    white-space: nowrap;
+    font-size: 0.8rem !important;
+    line-height: 1.2;
+}
+
+.seq-label-row {
+    font-size: 0.8rem;
+    font-weight: bold;
+    color: var(--muted);
+    letter-spacing: 0.05em;
+    line-height: 1.2;
+    white-space: nowrap;
+}
+
+.seq-label-row-new {
+    margin-top: 2.1rem;
+}
+
+.seq-label-row-note {
+    margin-top: 1.1rem;
+}
+
+.seq-file-note {
+    margin-top: 0.35rem;
+    font-size: 0.8rem;
+    font-weight: 400;
+    color: var(--muted);
+    line-height: 1.2;
+}
+
 .btn {
     display: inline-flex;
     align-items: center;
