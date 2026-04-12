@@ -39,7 +39,8 @@ def seq_RARE_2D(
     r_spoil=2,  # @param {type: "slider", min: 0, max: 3}
     PE_grad_on=True,  # @param {type: "boolean"}
     RO_grad_on=True,  # @param {type: "boolean"}
-    dwell=50e-6*2
+    dwell=50e-6*2,
+    dTE=0.0,
 ):
     """
     2D RARE sequence function following MRzero standard.
@@ -61,6 +62,12 @@ def seq_RARE_2D(
         PE_grad_on: bool - enable phase encoding gradients
         RO_grad_on: bool - enable readout gradients
         dwell: float - ADC dwell time
+        dTE: float - asymmetric excitation (seconds). Shifts the excitation earlier relative to
+            the refocusing train by lengthening the delay after excitation and before the first
+            refocusing pulse by dTE. Off-resonance spins then accrue extra phase (e.g. ~90° for fat
+            at 3 T when dTE ~ 0.6–0.7 ms and Δf_fat–water ~ 420–440 Hz), which breaks CPMG symmetry;
+            combined with excitation phase (e.g. 90° on rf1) this can yield fat-selective contrast
+            without a separate fat-sat prep. Use 0 for symmetric excitation.
 
     Returns:
         pp.Sequence: PyPulseq sequence object
@@ -121,13 +128,19 @@ def seq_RARE_2D(
     TE_val = float(TE)
     TEd = round(max(0, (TE_val/2 - minTE2))/10e-5)*10e-5  # round to raster time
 
+    # Asymmetric excitation: extra evolution between excitation and first refocus (acqP.dTE)
+    dTE_val = round(max(0.0, float(dTE)) / 10e-5) * 10e-5
+
     if TEd == 0:
         print('echo time set to minTE [ms]', 2*(minTE2 + TEd)*1000)
     else:
         print('TE [ms]', 2*(minTE2 + TEd)*1000)
+    if dTE_val > 0:
+        print('asymmetric excitation dTE [ms]', dTE_val * 1000)
 
-    # Add delay between excitation and first ref pulse
-    seq.add_block(pp.make_delay((minTE2 + TEd) - pp.calc_duration(gz1) - pp.calc_duration(gx_pre0)))
+    # Add delay between excitation and first ref pulse (includes optional dTE)
+    pre_ref_delay = (minTE2 + TEd) - pp.calc_duration(gz1) - pp.calc_duration(gx_pre0) + dTE_val
+    seq.add_block(pp.make_delay(pre_ref_delay))
 
     # RARE echo train
     for ii in range(-Nphase // 2, Nphase // 2):  # e.g. -64:63
@@ -205,7 +218,32 @@ def prot_RARE_2D(
     PE_grad_on=True,
     RO_grad_on=True,
     dwell=50e-6 * 2,
+    dTE=0.0,
 ):
+    kwargs = locals().copy()
+
+    return seq_RARE_2D(**kwargs)
+
+
+def prot_RARE_2D_asym_ex(
+    fov_xy=(200e-3, 200e-3),
+    Nread=32,
+    Nphase=32,
+    Npart=1,
+    FA=90 * np.pi / 180,
+    FA_ref=180 * np.pi / 180,
+    TE=5e-3,
+    slice_thickness=8e-3,
+    experiment_id="RARE_2D_asym_ex",
+    system=None,
+    TI_s=0,
+    r_spoil=2,
+    PE_grad_on=True,
+    RO_grad_on=True,
+    dwell=50e-6 * 2,
+    dTE=0.0087,
+):
+    """Same as prot_RARE_2D but with asymmetric excitation enabled by default (dTE = 0.0087 s)."""
     kwargs = locals().copy()
 
     return seq_RARE_2D(**kwargs)

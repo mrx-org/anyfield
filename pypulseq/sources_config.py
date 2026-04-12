@@ -19,6 +19,13 @@ sources = [
     {
         'type': 'file',
         'name': 'Built-in',
+        'path': 'built_in_seq/mr0_tse_2d_seq.py',
+        'seq_func': 'seq_TSE_2D',
+        'dependencies': ['pypulseq']
+    },
+    {
+        'type': 'file',
+        'name': 'Built-in',
         'path': 'built_in_seq/seq_pulseq_interpreter.py',
         'seq_func': 'seq_pulseq_interpreter',
         'dependencies': ['pypulseq']
