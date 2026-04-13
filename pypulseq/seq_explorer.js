@@ -619,8 +619,12 @@ json.dumps(versions)
         console.log(`Loaded ${totalFunctions} functions from ${fileCount} files`);
         if (totalFunctions > 0) {
             this.showStatus(`Loaded ${totalFunctions} functions from ${fileCount} files`, 'success');
-            // Auto-select the first sequence on startup
-            this.selectFirstSequence();
+            try {
+                await this.selectInitialSequence();
+            } catch (err) {
+                console.error('[init_prot] selectInitialSequence failed:', err);
+                this.selectFirstSequence();
+            }
         } else {
             this.showStatus('No sequences found. Check console for errors.', 'error');
         }
@@ -815,15 +819,233 @@ result
 `.trim();
     }
 
+    /** Default initial selection when ?init_prot= is absent (Pulseq interpreter). */
+    static DEFAULT_INIT_PROT = 'builtin/seq_pulseq_interpreter:seq_pulseq_interpreter';
+
+    /**
+     * Parse init_prot token: namespace/file_stem:function_name
+     * @param {string} token
+     * @returns {{ namespace: string, fileStem: string, functionName: string } | null}
+     */
+    parseInitProt(token) {
+        const t = String(token || '').trim();
+        const colon = t.lastIndexOf(':');
+        if (colon <= 0) return null;
+        const functionName = t.slice(colon + 1).trim();
+        const left = t.slice(0, colon).trim();
+        const slash = left.indexOf('/');
+        if (slash <= 0) return null;
+        const namespace = left.slice(0, slash).trim().toLowerCase();
+        const fileStem = left.slice(slash + 1).trim();
+        if (!namespace || !fileStem || !functionName) return null;
+        const allowed = ['builtin', 'mrseq', 'pypulseq'];
+        if (!allowed.includes(namespace)) {
+            console.warn('init_prot: unsupported namespace:', namespace);
+            return null;
+        }
+        return { namespace, fileStem, functionName };
+    }
+
+    /**
+     * Package prefix for GitHub folder sources (same rule as loadFolder: folderKey + '_examples').
+     * Uses the folder source named "pypulseq" from config when present.
+     * @returns {string}
+     */
+    getPypulseqExamplesPackagePrefix() {
+        for (const s of this.config.sources || []) {
+            if (s.type === 'folder' && s.name) {
+                const folderKey = (s.name || 'folder').replace(/[^a-zA-Z0-9_.-]/g, '_').replace(/^_+|_+$/g, '') || 'folder';
+                if (String(s.name).toLowerCase() === 'pypulseq' || folderKey === 'pypulseq') {
+                    return `${folderKey}_examples`;
+                }
+            }
+        }
+        return 'pypulseq_examples';
+    }
+
+    /**
+     * Map init_prot namespace + file stem to this.sequences key.
+     * @param {string} namespace
+     * @param {string} fileStem
+     * @returns {string|null}
+     */
+    resolveInitProtToSequenceKey(namespace, fileStem) {
+        const ns = String(namespace).toLowerCase();
+        if (ns === 'builtin') {
+            const norm = (k) => String(k || '').replace(/\\/g, '/');
+            const key = `built_in_seq/${fileStem}.py`;
+            if (this.sequences[key]) return key;
+            const keys = Object.keys(this.sequences);
+            const byExactStem = keys.find((k) => norm(k) === norm(key));
+            if (byExactStem) return byExactStem;
+            const byStemSuffix = keys.find((k) => norm(k).endsWith(`/${fileStem}.py`));
+            if (byStemSuffix) return byStemSuffix;
+            const fuzzy = keys.find((k) => norm(k).includes(`${fileStem}.py`) && norm(k).includes('built_in'));
+            if (fuzzy) return fuzzy;
+            return null;
+        }
+        if (ns === 'mrseq') {
+            const norm = (k) => String(k || '').replace(/\\/g, '/');
+            const key = `mrseq.scripts.${fileStem}.py`;
+            if (this.sequences[key]) return key;
+            const keys = Object.keys(this.sequences);
+            const found = keys.find((k) => {
+                const n = norm(k);
+                return (
+                    n === norm(key) ||
+                    n.replace(/\.py$/i, '') === `mrseq.scripts.${fileStem}` ||
+                    (n.includes('mrseq.scripts') && n.endsWith(`.${fileStem}.py`))
+                );
+            });
+            if (!found) {
+                const mrseqKeys = keys.filter((k) => norm(k).includes('mrseq.scripts'));
+                const stems = mrseqKeys.map((k) => {
+                    const m = norm(k).match(/mrseq\.scripts\.(.+?)\.py$/i);
+                    return m ? m[1] : norm(k);
+                });
+                console.warn(
+                    '[init_prot] mrseq: no module mrseq.scripts.' + fileStem + ' — use file stem from the tree (e.g. radial_flash, not radial_gre). Loaded stems sample:',
+                    stems.slice(0, 20)
+                );
+            }
+            return found || null;
+        }
+        if (ns === 'pypulseq') {
+            const pkg = this.getPypulseqExamplesPackagePrefix();
+            const norm = (k) => String(k || '').replace(/\\/g, '/');
+            const key = `${pkg}.scripts.${fileStem}`;
+            if (this.sequences[key]) return key;
+            const suffix = `.scripts.${fileStem}`;
+            const keys = Object.keys(this.sequences);
+            const found = keys.find((k) => {
+                const n = norm(k);
+                return (
+                    n === norm(key) ||
+                    n.endsWith(suffix) ||
+                    n.endsWith(`${suffix}.py`) ||
+                    (n.includes('.scripts.') && n.split('.scripts.').pop()?.replace(/\.py$/i, '') === fileStem)
+                );
+            });
+            return found || null;
+        }
+        return null;
+    }
+
+    /**
+     * Programmatically select a sequence like a tree click (updates tree highlight, params, eventHub).
+     * @param {string} fileName - key in this.sequences
+     * @param {string} functionName
+     * @returns {Promise<boolean>}
+     */
+    async selectSequenceByFileAndFunction(fileName, functionName) {
+        const fileData = this.sequences[fileName];
+        if (!fileData) {
+            console.warn('init_prot: no file', fileName);
+            return false;
+        }
+        const func = fileData.functions.find((f) => f.name === functionName);
+        if (!func) {
+            console.warn('init_prot: no function', functionName, 'in', fileName);
+            return false;
+        }
+        const treeEl = this.treeTarget || (this.container ? this.container.querySelector('#seq-tree') : null);
+        if (treeEl) {
+            treeEl.querySelectorAll('.seq-function-item').forEach((i) => i.classList.remove('selected'));
+            const item = Array.from(treeEl.querySelectorAll('.seq-function-item')).find(
+                (el) => el.dataset.file === fileName && el.dataset.function === functionName
+            );
+            if (item) item.classList.add('selected');
+        }
+        const src = fileData.source;
+        const displayName = src?.displayName
+            || this.getProtocolDisplayNameFromSeqFuncFile(this.getPathForDisplayName(fileName, src))
+            || (src?.path || fileName).split('/').pop().replace(/\.py$/, '');
+        this.selectedSequence = { fileName, functionName, displayName, ...func, source: fileData.source };
+        this.updateSequenceNameDisplay();
+        if (this.config.onSequenceSelect) {
+            this.config.onSequenceSelect(this.selectedSequence);
+        }
+        eventHub.emit('sequenceSelected', this.selectedSequence);
+        try {
+            await this.loadFunctionParameters(this.selectedSequence);
+        } catch (e) {
+            console.error('[init_prot] loadFunctionParameters threw (selection will be treated as failed)', fileName, functionName, e);
+            return false;
+        }
+        return true;
+    }
+
+    /**
+     * After loadSequences: apply ?init_prot= or default Pulseq interpreter; fallback to first item.
+     */
+    async selectInitialSequence() {
+        const raw = this.config.initialProt;
+        const useExplicit = raw != null && String(raw).trim() !== '';
+        const token = useExplicit ? String(raw).trim() : SequenceExplorer.DEFAULT_INIT_PROT;
+        const allKeys = Object.keys(this.sequences);
+        console.log('[init_prot] start', {
+            useExplicit,
+            token,
+            initialProtRaw: raw,
+            sequenceFileCount: allKeys.length,
+            builtinLikeKeys: allKeys.filter((k) => String(k).replace(/\\/g, '/').includes('built_in_seq')),
+        });
+        const parsed = this.parseInitProt(token);
+        if (!parsed) {
+            console.warn('[init_prot] parse failed', { token });
+            await this.tryFallbackInit(useExplicit, 'parse_failed');
+            return;
+        }
+        let fileName = this.resolveInitProtToSequenceKey(parsed.namespace, parsed.fileStem);
+        console.log('[init_prot] resolved', { parsed, fileName, found: !!fileName });
+        if (!fileName && useExplicit) {
+            console.warn('[init_prot] could not resolve file key for token', token, 'built_in candidates:', allKeys.filter((k) => String(k).includes('built_in')));
+        }
+        if (fileName) {
+            const fds = this.sequences[fileName];
+            const names = fds ? fds.functions.map((f) => f.name) : [];
+            console.log('[init_prot] file entry', { fileName, functionCount: names.length, functionNames: names.slice(0, 20) });
+        }
+        if (fileName && await this.selectSequenceByFileAndFunction(fileName, parsed.functionName)) {
+            console.log('[init_prot] OK selected', token);
+            return;
+        }
+        console.warn('[init_prot] primary selection failed → fallback', { token, fileName, wantedFunc: parsed.functionName });
+        await this.tryFallbackInit(useExplicit, 'primary_failed');
+    }
+
+    /** Fallback: builtin interpreter, then first tree item. */
+    async tryFallbackInit(explicitInitFailed, reason = '') {
+        const fbKey = this.resolveInitProtToSequenceKey('builtin', 'seq_pulseq_interpreter');
+        console.log('[init_prot] tryFallbackInit', { explicitInitFailed, reason, fbKey, hasFile: fbKey ? !!this.sequences[fbKey] : false });
+        if (fbKey && await this.selectSequenceByFileAndFunction(fbKey, 'seq_pulseq_interpreter')) {
+            if (explicitInitFailed) console.log('[init_prot] fell back to default Pulseq interpreter');
+            return;
+        }
+        if (!fbKey) {
+            console.warn('[init_prot] fallback: no built_in seq_pulseq_interpreter key. Keys sample:', Object.keys(this.sequences).slice(0, 30));
+        } else {
+            const fds = this.sequences[fbKey];
+            const hasFn = fds && fds.functions.some((f) => f.name === 'seq_pulseq_interpreter');
+            console.warn('[init_prot] fallback: could not select interpreter', { fbKey, hasFn, funcNames: fds ? fds.functions.map((f) => f.name) : [] });
+        }
+        this.selectFirstSequence();
+    }
+
     selectFirstSequence() {
         // Find the first visible function item in the tree and select it
         const treeEl = this.treeTarget || (this.container ? this.container.querySelector('#seq-tree') : null);
-        if (!treeEl) return;
-        
+        if (!treeEl) {
+            console.warn('[init_prot] selectFirstSequence: no #seq-tree (treeTarget unset?)');
+            return;
+        }
+
         const firstItem = treeEl.querySelector('.seq-function-item');
         if (firstItem) {
             firstItem.click();
-            console.log('Auto-selected first sequence:', firstItem.dataset.function);
+            console.log('[init_prot] Auto-selected first sequence (fallback):', firstItem.dataset.file, firstItem.dataset.function);
+        } else {
+            console.warn('[init_prot] selectFirstSequence: no .seq-function-item in tree');
         }
     }
     
@@ -1636,33 +1858,9 @@ json.dumps(functions)
         // Event listeners for function items (selection)
         treeEl.querySelectorAll('.seq-function-item').forEach(item => {
             item.addEventListener('click', () => {
-                // Remove previous selection
-                treeEl.querySelectorAll('.seq-function-item').forEach(i => i.classList.remove('selected'));
-                
-                // Add selection to clicked item
-                item.classList.add('selected');
-                
                 const fileName = item.dataset.file;
                 const functionName = item.dataset.function;
-                const fileData = this.sequences[fileName];
-                const func = fileData.functions.find(f => f.name === functionName);
-                const src = fileData.source;
-                const displayName = src?.displayName || this.getProtocolDisplayNameFromSeqFuncFile(this.getPathForDisplayName(fileName, src)) || (src?.path || fileName).split('/').pop().replace(/\.py$/, '');
-                this.selectedSequence = { fileName, functionName, displayName, ...func, source: fileData.source };
-                
-                // Update sequence name display immediately
-                this.updateSequenceNameDisplay();
-                
-                // Call callback if provided
-                if (this.config.onSequenceSelect) {
-                    this.config.onSequenceSelect(this.selectedSequence);
-                }
-                
-                // Notify other modules via eventHub
-                eventHub.emit('sequenceSelected', this.selectedSequence);
-                
-                // Load parameters for the selected function
-                this.loadFunctionParameters(this.selectedSequence);
+                void this.selectSequenceByFileAndFunction(fileName, functionName);
             });
         });
     }
@@ -3161,10 +3359,8 @@ _result if _result else json.dumps({'error': 'No result returned from Python cod
         // Load sequences from all sources
         this.config.sources = sources;
         
+        // loadSequences() already renders the tree and runs selectInitialSequence(); do not render again here or the tree is rebuilt and initial selection is lost.
         await this.loadSequences();
-        
-        // Render the tree
-        this.renderTree();
     }
     
     async getDefaultSourcesConfig() {

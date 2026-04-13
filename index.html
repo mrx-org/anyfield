@@ -218,7 +218,7 @@
     <div class="lab-shell">
         <header>
             <div class="header-content">
-                <div class="header-title">Any-Field <span class="header-subtitle">Scanner</span><span class="app-version" aria-label="Version v0.1.3">v0.1.3</span></div>
+                <div class="header-title">Any-Field <span class="header-subtitle">Scanner</span><span class="app-version" aria-label="Version v0.2.0">v0.2.0</span></div>
                 <button type="button" id="credits-btn" class="credits-btn" title="Credits &amp; dependencies"><i class="bi bi-award" aria-hidden="true"></i></button>
             </div>
         </header>
@@ -291,9 +291,18 @@
         import { ScanModule } from './scan_zero/scan_module.js';
         import { eventHub } from './event_hub.js';
 
-        // URL flag: ?pro=1 enables pro/debug behavior. Modules (seq_explorer, niivue_app, scan_module) can check window.pro
+        // URL flags: ?pro=1 pro/debug; readable deep link ?s_category=&s_file=&s_func= or legacy ?init_prot=
         const urlParams = new URLSearchParams(window.location.search);
         window.pro = /^1|true|yes$/i.test(urlParams.get('pro') || '');
+        const sCat = (urlParams.get('s_category') || '').trim();
+        const sFile = (urlParams.get('s_file') || '').trim();
+        const sFunc = (urlParams.get('s_func') || '').trim();
+        const hasSplitInit = sCat !== '' && sFile !== '' && sFunc !== '';
+        const initialProtFromSplit = hasSplitInit ? `${sCat}/${sFile}:${sFunc}` : undefined;
+        const initialProtRaw = urlParams.get('init_prot');
+        const initialProtFromLegacy =
+            initialProtRaw != null && String(initialProtRaw).trim() !== '' ? String(initialProtRaw).trim() : undefined;
+        const initialProt = initialProtFromSplit ?? initialProtFromLegacy;
 
         class ViewManager {
             constructor(nvModule, seqExplorer, scanModule, scanPreview) {
@@ -478,6 +487,7 @@
 
                 const explorer = new SequenceExplorer(null, {
                     sources: [],
+                    initialProt,
                     onFunctionStart: () => {
                         if (window.viewManager) {
                             window.viewManager.setMode('sequence');
