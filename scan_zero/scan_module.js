@@ -269,7 +269,9 @@ export class ScanModule {
             job.niftiUrl = URL.createObjectURL(new Blob([niftiBytes], {type: "application/octet-stream"}));
 
             job.status = 'done';
-            this.loadJob(job.id);
+            // Auto-load: don't resync FOV — preserve any in-progress FOV planning the user is doing
+            // for the next scan. Explicit VIEW SCAN clicks still sync (default `syncFov=true`).
+            this.loadJob(job.id, false);
             
         } catch (e) {
             console.error("Scan simulation failed:", e);
@@ -686,9 +688,17 @@ if os.path.exists(_p):
             // 1) Silent seq execute + protocol snapshot + sequence_fov_dims → Niivue FOV mm from seq.definitions
             const seqText = await this._prepareCurrentSeqForTools(job);
 
-            // 2) Ref mask / grid from viewer (now includes seq FOV mm on sliders)
+            // 1b) Freeze FOV geometry for this job. Seq-authoritative mm size is already on sliders;
+            // user-authoritative offsets/rotations too. Any later slider mutation (user input,
+            // `syncFovFromScanVolume` after a prior scan, etc.) must not affect this in-flight pipeline.
+            job.fovSnapshot = nvMod.captureFovSnapshot();
+            console.log(`${job.simLogLabel || 'SIM'} fovSnapshot:`, job.fovSnapshot);
+
+            // 2) Build phantom and recon FOV mask refs up-front from the same frozen snapshot.
+            // Different matrix grids (phantom vs recon) share identical mm box + placement.
+            const phantomRef = nvMod.generateFovMaskNiftiFromSnapshot(job.fovSnapshot, nvMod.getPhantomMatrixDims());
+            const reconRef = nvMod.generateFovMaskNiftiFromSnapshot(job.fovSnapshot, nvMod.getReconMatrixDims());
             const resampledEntries = [];
-            const phantomRef = nvMod.generateFovMaskNifti(nvMod.getPhantomMatrixDims());
             nvMod.pyodide.globals.set("reference_bytes", phantomRef);
             for (const vol of activeGroup.volumes) {
                 const hdr = vol.hdr ?? vol.header;
@@ -736,9 +746,8 @@ if os.path.exists(_p):
             const signal = this._signalFromResult(signalResult);
             if (!signal?.length) throw new Error(`${job.noSignalName || 'Simulation'} returned no signal.`);
 
-            // 5) PyNUFFT recon: use the recon matrix directly; phantom resampling
-            // stays on the separate phantom matrix.
-            const reconRef = nvMod.generateFovMaskNifti(nvMod.getReconMatrixDims());
+            // 5) PyNUFFT recon: reconRef was built up-front from the same frozen fovSnapshot as
+            // the phantom ref (step 2); no late re-read of the live FOV sliders here.
 
             // 6) PyNUFFT recon: logic in scan_zero/recon.py (run_sim_recon)
             await nvMod.pyodide.loadPackage(["micropip"]);
@@ -768,7 +777,9 @@ run_sim_recon(sim_signal_pairs, sim_traj_points, sim_ref_bytes)
             job.niftiUrl = URL.createObjectURL(new Blob([recoBytes], { type: "application/octet-stream" }));
             job.seqUrl = URL.createObjectURL(new Blob([seqText], { type: "text/plain" }));
             job.status = 'done';
-            this.loadJob(job.id);
+            // Auto-load: don't resync FOV — preserve any in-progress FOV planning the user is doing
+            // for the next scan. Explicit VIEW SCAN clicks still sync (default `syncFov=true`).
+            this.loadJob(job.id, false);
         } catch (e) {
             console.error(`${job.simLogLabel || 'SIM'} failed:`, e);
             job.status = 'error';
@@ -902,7 +913,15 @@ data
         }
     }
 
-    async loadJob(jobId) {
+    /**
+     * Focus a completed job's scan volume.
+     * @param {string} jobId
+     * @param {boolean} [syncFov=true] Whether to also sync the FOV sliders/mesh from the scan's affine.
+     *   Default `true` matches the old behavior (explicit **VIEW SCAN** click expects the FOV box to
+     *   follow the scan). Auto-load right after completion passes `false` so the user's in-progress
+     *   FOV planning (slice positioning for the next scan) is preserved.
+     */
+    async loadJob(jobId, syncFov = true) {
         const job = this.queue.find(j => j.id === jobId);
         if (job && job.status === 'done' && window.nvModule) {
             // Switch to planning mode if we are in sequence mode
@@ -917,9 +936,11 @@ data
             let volumeIndex = nvMod.nv.volumes.findIndex(v => v.name === targetName);
             
             if (volumeIndex === -1) {
-                // 2. Load if not found
+                // 2. Load if not found.
+                // Pass `syncFovOnScan=syncFov` so auto-load (`syncFov=false`) does NOT let
+                // `loadUrl` internally overwrite the user's in-progress FOV planning.
                 console.log("ScanModule: Loading NIfTI for the first time:", targetName);
-                await nvMod.loadUrl(job.niftiUrl, targetName, true);
+                await nvMod.loadUrl(job.niftiUrl, targetName, true, syncFov);
                 // Re-find the index after loading
                 volumeIndex = nvMod.nv.volumes.findIndex(v => v.name === targetName);
             } else {
@@ -955,8 +976,10 @@ data
                     nvMod.updatePreviewFromSelection();
                 }
 
-                // Match volume-list scan click: FOV box from this scan's NIfTI (CROP + SIM)
-                if (typeof nvMod.syncFovFromScanVolume === 'function') {
+                // Match volume-list scan click: FOV box from this scan's NIfTI (CROP + SIM).
+                // Skipped on auto-load after scan completion (`syncFov=false`) so the user's
+                // in-progress FOV planning for the next scan is not overwritten.
+                if (syncFov && typeof nvMod.syncFovFromScanVolume === 'function') {
                     nvMod.syncFovFromScanVolume(targetVol);
                 }
             }

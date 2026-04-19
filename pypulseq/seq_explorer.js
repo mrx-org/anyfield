@@ -1226,29 +1226,64 @@ else:
         const response = await fetch(this.resolvePath(source.path) + '?t=' + Date.now());
         if (!response.ok) throw new Error(`Failed to fetch ${source.path}`);
         const code = await response.text();
-        // Mirror built-in files into a package-like path for imports
-        if (this.config.pyodide && source.path && source.path.startsWith('built_in_seq/')) {
-            const fileBase = source.path.split('/').pop();
-            await this.config.pyodide.runPythonAsync(`
-import os
-pkg_dir = '/built_in_seq'
-if not os.path.exists(pkg_dir):
-    os.makedirs(pkg_dir)
-init_path = os.path.join(pkg_dir, '__init__.py')
-if not os.path.exists(init_path):
-    with open(init_path, 'w', encoding='utf-8') as f:
-        f.write('')
-with open(os.path.join(pkg_dir, '${fileBase}'), 'w', encoding='utf-8') as f:
-    f.write(${JSON.stringify(code)})
-`);
+        // Mirror local Python files into Pyodide FS so module import works for parameter extraction/execution.
+        if (this.config.pyodide && source.path && source.path.endsWith('.py')) {
+            await this.mirrorLocalPythonModuleToPyodide(source.path, code);
+            await this.mirrorRelativeLocalImports(source.path, code, new Set([source.path]));
         }
         const path = source.path || source.name;
         let sourceToPass = source;
-        if (path && (path.startsWith('built_in_seq/') || path.startsWith('user/seq/') || path.startsWith('user/prot/'))) {
+        if (path && path.endsWith('.py')) {
             const fullModulePath = path.replace(/\.py$/i, '').replace(/\//g, '.');
             sourceToPass = { ...source, fullModulePath };
         }
         await this.parseFile(path, code, sourceToPass);
+    }
+
+    async mirrorLocalPythonModuleToPyodide(filePath, code) {
+        if (!this.config.pyodide || !filePath || !filePath.endsWith('.py')) return;
+        const normPath = String(filePath).replace(/^\/+/, '');
+        const parts = normPath.split('/').filter(Boolean);
+        if (parts.length === 0) return;
+        const fileBase = parts[parts.length - 1];
+        const dirs = parts.slice(0, -1);
+        let curr = '';
+        const py = ['import os'];
+        for (const d of dirs) {
+            curr += `/${d}`;
+            py.push(`os.makedirs(${JSON.stringify(curr)}, exist_ok=True)`);
+            py.push(`init_path = os.path.join(${JSON.stringify(curr)}, '__init__.py')`);
+            py.push(`if not os.path.exists(init_path):\n    with open(init_path, 'w', encoding='utf-8') as f:\n        f.write('')`);
+        }
+        const parentDir = dirs.length ? `/${dirs.join('/')}` : '/';
+        py.push(`with open(os.path.join(${JSON.stringify(parentDir)}, ${JSON.stringify(fileBase)}), 'w', encoding='utf-8') as f:\n    f.write(${JSON.stringify(code)})`);
+        await this.config.pyodide.runPythonAsync(py.join('\n'));
+    }
+
+    async mirrorRelativeLocalImports(filePath, code, visited, depth = 0) {
+        if (!this.config.pyodide || depth > 2) return;
+        const baseDir = String(filePath).replace(/\\/g, '/').replace(/\/[^/]*$/, '');
+        const importRe = /^\s*from\s+\.(\w+)\s+import\s+|^\s*import\s+\.(\w+)/gm;
+        const modules = new Set();
+        let match;
+        while ((match = importRe.exec(code)) !== null) {
+            const mod = match[1] || match[2];
+            if (mod) modules.add(mod);
+        }
+        for (const mod of modules) {
+            const depPath = `${baseDir}/${mod}.py`;
+            if (visited.has(depPath)) continue;
+            visited.add(depPath);
+            try {
+                const resp = await fetch(this.resolvePath(depPath) + '?t=' + Date.now());
+                if (!resp.ok) continue;
+                const depCode = await resp.text();
+                await this.mirrorLocalPythonModuleToPyodide(depPath, depCode);
+                await this.mirrorRelativeLocalImports(depPath, depCode, visited, depth + 1);
+            } catch (e) {
+                console.warn('Could not mirror relative import dependency:', depPath, e);
+            }
+        }
     }
     
     async loadGitHubRaw(source) {

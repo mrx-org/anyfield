@@ -31,14 +31,15 @@ Uses `executeFunction` and prepares `/outputs/<baseName>.seq` for the external s
 
 **Order (FOV / grid contract):**
 1. **`_prepareCurrentSeqForTools`** — silent `executeFunction` with `protocolName` (protocol snapshot + sequence build). Sequence Explorer emits **`sequence_fov_dims`** from **`seq.definitions` FOV** (m→mm) so Niivue FOV **size** matches the built Pulseq sequence.
-2. **`generateFovMaskNifti()`** — ref mask and voxel grid **after** seq FOV is on the sliders; matrix dimensions, offset, rotation still come from the FOV tab UI.
-3. Resample phantom volumes to that ref → conseq / trajex → sim tool → PyNUFFT on the **same** ref grid.
+2. **`captureFovSnapshot()`** — freeze FOV geometry for this job into `job.fovSnapshot` (`{ centerWorld, sizeMm, rotationDeg }` in RAS mm). Seq-authoritative size and user-authoritative offsets/rotations are both now on the sliders, so this is the correct capture moment.
+3. **`generateFovMaskNiftiFromSnapshot(job.fovSnapshot, …)`** — build **both** phantom ref (`getPhantomMatrixDims`) and recon ref (`getReconMatrixDims`) up-front from the same frozen snapshot. Phantom and recon grids differ in matrix resolution but share identical mm box + world placement.
+4. Resample phantom volumes to the phantom ref → conseq / trajex → sim tool → PyNUFFT on the recon ref.
+
+**Why the snapshot:** the recon reference determines the output NIfTI's affine/zooms (see `run_sim_recon` in `scan_zero/recon.py`). Previously it was re-derived from live sliders *after* the long-running toolapi calls, so any FOV change in between (user input, `syncFovFromScanVolume` after a prior scan completing, `applySequenceFovDimensions` from a subsequent seq prep) desynced the recon grid from the phantom grid — signal encoded old FOV, output stamped with new affine. The per-job snapshot isolates each in-flight pipeline from later slider mutations. Because `centerWorld` is stored in absolute RAS mm, swapping the "selected" volume mid-pipeline does not shift the snapshot.
 
 **PyNUFFT:** Implemented in **`scan_zero/recon.py`** (`run_sim_recon`). On SIM, the file is fetched and written to Pyodide as `/scan_zero/recon.py` once per session, then imported (keeps recon out of inline JS strings).
 
 **MR0 compatibility fix:** The in-app translated phantom path now resolves `B1+` / `B1-` robustly across all tissue entries (not only the first tissue) and guarantees non-empty TX/RX map lists with fallback `1.0` maps if needed. This keeps `(▶)` / tool-mr0sim on the same local phantom conversion path as `(▶▶)` / rapisim, without a separate debug button.
-
-If step 2 ran before step 1, recon used a stale FOV while the UI later jumped to seq FOV — yellow box and NIfTI appeared to shrink or grow until queue load resynced.
 
 ## NIfTI -> toolapi phantom conversion
 - **Source**: Resampled NIfTI volumes are staged in Pyodide temp FS (`/tmp/__sim_phantom_staging`) together with the active phantom JSON.
@@ -54,9 +55,11 @@ If step 2 ran before step 1, recon used a stale FOV while the UI later jumped to
 - **Queue Item**: Shows the job number, label, and 24h timestamp (`${scanNumber}. ${name}`). **CROP** jobs use label **`crop`**. **SIM** jobs use the sequence display name plus **`(▶)`** (MR0) or **`(▶▶)`** (rapisim) in the title; `job.protocol` matches **`(▶)`** / **`(▶▶)`**.
 - **Visual Feedback**: Uses a color-coded left border (Green: Done, Yellow: Scanning, Red: Error).
 - **Actions**:
-    - **VIEW SCAN**: Loads the NIfTI into Niivue, hides other scans, and switches to **Planning Mode**.
+    - **VIEW SCAN**: Loads the NIfTI into Niivue, hides other scans, switches to **Planning Mode**, and syncs the FOV sliders/mesh to the scan's affine (`loadJob(jobId)`, default `syncFov=true`).
     - **VIEW SEQ** / **Download (↓)**: Shown for SIM (and any future jobs with `vfsSeqPath` / `seqUrl`), not for CROP (`cropOnly`).
     - **Remove (×)**: Deletes the job from the session queue.
+
+**Auto-load after completion (`loadJob(jobId, false)`):** CROP and SIM pipelines call `loadJob` with `syncFov=false` so the user's in-progress FOV planning (slice positioning for the next scan) is *not* overwritten by the just-completed scan's affine. The flag is threaded through to `nvMod.loadUrl(..., syncFovOnScan=false)` so Niivue's internal per-scan FOV sync (the `if (isScan) syncFovFromScanVolume(...)` path in `loadUrl`) is also skipped. The volume is still selected, opacity updated, and preview refreshed; only the FOV sliders/mesh are left untouched. Explicit **VIEW SCAN** clicks remain default `syncFov=true` (both `loadUrl` and `loadJob` sync).
 
 ## Integration Points (eventHub)
 - `sequenceSelected`: Updates the "Ready" sequence name.

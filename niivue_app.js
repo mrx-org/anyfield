@@ -2499,10 +2499,46 @@ os.makedirs('/phantom/averaged', exist_ok=True)
     numInput.addEventListener("input", () => { if (numInput.value !== "") { slider.value = numInput.value; if (callback) callback(); } });
   }
 
-  /** Binary mask NIfTI for the current FOV box + chosen grid. */
-  generateFovMaskNifti(matrixDims = null) {
-    const geometry = this.getFovGeometry();
-    const fovCenterWorld = geometry.centerWorld, fovSizeMm = geometry.sizeMm, fovRotDeg = geometry.rotationDeg;
+  /**
+   * Snapshot the current FOV geometry as a JSON-serializable object (pure read, no side effects).
+   * Used by the SIM pipeline to freeze FOV placement at scan-start so subsequent slider changes
+   * (user input, `syncFovFromScanVolume`, `applySequenceFovDimensions` during a later scan) cannot
+   * misalign the phantom resample and recon reference of an in-flight job.
+   * `centerWorld` is absolute RAS mm and therefore independent of which volume is later selected.
+   */
+  captureFovSnapshot() {
+    const { vol, dim3, affine } = this.getVolumeInfo();
+    if (!vol || !dim3) throw new Error("captureFovSnapshot: no volume loaded.");
+    const [dx, dy, dz] = dim3;
+    const spacing = this.voxelSpacingMm ?? [1, 1, 1];
+    const sxMm = spacing[0], syMm = spacing[1], szMm = spacing[2];
+    const fovMmX = Number(this.fovX.value), fovMmY = Number(this.fovY.value), fovMmZ = Number(this.fovZ.value);
+    const offMmX = Number(this.fovOffX.value), offMmY = Number(this.fovOffY.value), offMmZ = Number(this.fovOffZ.value);
+    const rotX = Number(this.fovRotX.value), rotY = Number(this.fovRotY.value), rotZ = Number(this.fovRotZ.value);
+    const cx = (dx-1)/2 + offMmX/sxMm;
+    const cy = (dy-1)/2 + offMmY/syMm;
+    const cz = (dz-1)/2 + offMmZ/szMm;
+    const vox2mmDef = this.voxToMmFactory(vol, affine);
+    const centerWorld = vox2mmDef(cx, cy, cz);
+    return {
+      centerWorld: [Number(centerWorld[0]), Number(centerWorld[1]), Number(centerWorld[2])],
+      sizeMm: [fovMmX, fovMmY, fovMmZ],
+      rotationDeg: [rotX, rotY, rotZ],
+    };
+  }
+
+  /**
+   * Build a binary FOV mask NIfTI directly from a captured snapshot (no slider / volume reads).
+   * Shared core of `generateFovMaskNifti`; lets the SIM pipeline produce phantom and recon refs
+   * at different matrix resolutions from the same frozen geometry.
+   */
+  generateFovMaskNiftiFromSnapshot(snapshot, matrixDims = null) {
+    if (!snapshot || !snapshot.centerWorld || !snapshot.sizeMm || !snapshot.rotationDeg) {
+      throw new Error("generateFovMaskNiftiFromSnapshot: invalid snapshot");
+    }
+    const fovCenterWorld = snapshot.centerWorld;
+    const fovSizeMm = snapshot.sizeMm;
+    const fovRotDeg = snapshot.rotationDeg;
     const mDims = Array.isArray(matrixDims) && matrixDims.length >= 3
       ? [
           Math.max(1, Math.round(Number(matrixDims[0]) || 1)),
@@ -2522,6 +2558,22 @@ os.makedirs('/phantom/averaged', exist_ok=True)
     const maskData = new Uint8Array(mDims[0]*mDims[1]*mDims[2]).fill(1);
     let niftiBytes = NVImage.createNiftiArray(mDims, vSpacing, affineRow, 2, maskData);
     return this.setNiftiQform(niftiBytes, affineRow, 2);
+  }
+
+  /**
+   * Binary mask NIfTI for the current FOV box + chosen grid.
+   * Goes through `getFovGeometry()` (which also refreshes the 3D FOV mesh data and emits
+   * `fov_changed`) to preserve the side effects legacy callers expect, then delegates to
+   * `generateFovMaskNiftiFromSnapshot`.
+   */
+  generateFovMaskNifti(matrixDims = null) {
+    const geometry = this.getFovGeometry();
+    const snapshot = {
+      centerWorld: [geometry.centerWorld[0], geometry.centerWorld[1], geometry.centerWorld[2]],
+      sizeMm: [geometry.sizeMm[0], geometry.sizeMm[1], geometry.sizeMm[2]],
+      rotationDeg: [geometry.rotationDeg[0], geometry.rotationDeg[1], geometry.rotationDeg[2]],
+    };
+    return this.generateFovMaskNiftiFromSnapshot(snapshot, matrixDims);
   }
 
   getVolumeNifti(vol) {
@@ -3226,7 +3278,16 @@ os.makedirs('/phantom/averaged', exist_ok=True)
     }
   }
 
-  async loadUrl(url, name, isAdding = false) {
+  /**
+   * @param {string} url
+   * @param {string} [name]
+   * @param {boolean} [isAdding=false]
+   * @param {boolean} [syncFovOnScan=true] When loading a `scan_*` volume, also sync the FOV
+   *   sliders/mesh from its header. Default `true` preserves behavior for user-initiated imports
+   *   (drag-drop, file picker, deep-link). Set to `false` for auto-load right after a scan completes
+   *   so the user's in-progress FOV planning is not overwritten (see `ScanModule.loadJob`).
+   */
+  async loadUrl(url, name, isAdding = false, syncFovOnScan = true) {
     await this.waitForInit();
     try {
       this.setStatus(`loading: ${name??url}`);
@@ -3256,13 +3317,17 @@ os.makedirs('/phantom/averaged', exist_ok=True)
       }
       this.updateVolumeList(); 
       
-      // If a scan was loaded, select it and sync FOV from its header (also when importing scan_*.nii)
+      // If a scan was loaded, select it and optionally sync FOV from its header.
+      // Auto-load after completion passes `syncFovOnScan=false` so the user's in-progress
+      // FOV planning survives the arrival of the scan result.
       if (isScan) {
           const loadedVol = this.nv.volumes.find(v => v.name === (name??"vol"));
           if (loadedVol) {
               this.selectedVolume = loadedVol;
               this.updateVolumeList(); // Re-render to show selection
-              this.syncFovFromScanVolume(loadedVol);
+              if (syncFovOnScan) {
+                  this.syncFovFromScanVolume(loadedVol);
+              }
           }
       }
       
