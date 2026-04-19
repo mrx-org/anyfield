@@ -123,10 +123,6 @@ print(f"Matplotlib backend: {plt.get_backend()}")
                 explorer.log('Installing optimized plot function...', 'info');
                 await explorer.installOptimizedPlotFunction();
                 explorer.log('Optimized plot function installed', 'success');
-                
-                // Detect and display versions
-                await explorer.detectVersions();
-                explorer.log('Version detection complete', 'info');
             } catch (error) {
                 console.warn('Failed to install optimized plot function:', error);
                 explorer.log(`Failed to install optimized plot function: ${error.message}`, 'error');

@@ -476,95 +476,6 @@ plt.rcParams['font.size'] = 8`;
         console.log(`[${type}] ${msg}`);
     }
     
-    async detectVersions() {
-        if (!this.config.pyodide) {
-            return;
-        }
-        
-        const pyodide = this.config.pyodide;
-        
-        try {
-            const pyodideVersion = pyodide.version || 'unknown';
-            const versions = await pyodide.runPythonAsync(`
-import json
-import sys
-
-versions = {}
-versions['pyodide'] = ${JSON.stringify(pyodideVersion)}
-
-try:
-    import numpy
-    versions['numpy'] = numpy.__version__
-except:
-    versions['numpy'] = 'unknown'
-
-try:
-    import matplotlib
-    versions['matplotlib'] = matplotlib.__version__
-except:
-    versions['matplotlib'] = 'loading...'
-
-try:
-    import pypulseq
-    versions['pypulseq'] = pypulseq.__version__
-except:
-    try:
-        import pypulseq.version
-        versions['pypulseq'] = pypulseq.version.__version__
-    except:
-        versions['pypulseq'] = 'unknown'
-
-try:
-    import mrseq
-    # Try different ways to get mrseq version
-    if hasattr(mrseq, '__version__'):
-        versions['mrseq'] = mrseq.__version__
-    elif hasattr(mrseq, 'version'):
-        versions['mrseq'] = mrseq.version
-    elif hasattr(mrseq, '__file__'):
-        # Try to read version from package metadata
-        import importlib.metadata
-        try:
-            versions['mrseq'] = importlib.metadata.version('mrseq')
-        except:
-            versions['mrseq'] = 'installed'
-    else:
-        versions['mrseq'] = 'installed'
-except Exception as e:
-    # If import fails, mrseq is not available
-    versions['mrseq'] = 'not installed'
-
-try:
-    import ismrmrd
-    versions['ismrmrd'] = ismrmrd.__version__
-except:
-    try:
-        import importlib.metadata
-        versions['ismrmrd'] = importlib.metadata.version('ismrmrd')
-    except:
-        versions['ismrmrd'] = 'unknown'
-
-json.dumps(versions)
-`);
-            
-            const versionData = JSON.parse(versions);
-            const root = this.consoleTarget || this.container;
-            const setVer = (id, val) => {
-                const el = root ? root.querySelector(`#${id}`) : document.getElementById(id);
-                if (el) el.textContent = val || 'unknown';
-            };
-            
-            setVer('seq-pyodide-version', versionData.pyodide);
-            setVer('seq-numpy-version', versionData.numpy);
-            setVer('seq-matplotlib-version', versionData.matplotlib);
-            setVer('seq-pypulseq-version', versionData.pypulseq);
-            setVer('seq-mrseq-version', versionData.mrseq);
-            setVer('seq-ismrmrd-version', versionData.ismrmrd);
-        } catch (error) {
-            console.warn('Failed to detect versions:', error);
-        }
-    }
-    
     async loadSequences() {
         console.log('Loading sequences from', this.config.sources.length, 'sources...');
         this.showStatus('Loading sequences...', 'info');
@@ -619,12 +530,13 @@ json.dumps(versions)
         console.log(`Loaded ${totalFunctions} functions from ${fileCount} files`);
         if (totalFunctions > 0) {
             this.showStatus(`Loaded ${totalFunctions} functions from ${fileCount} files`, 'success');
-            try {
-                await this.selectInitialSequence();
-            } catch (err) {
+            // Run selectInitialSequence in the background — parameter loading imports pypulseq
+            // which takes several seconds, and we don't want to block the loader overlay on it.
+            // The tree is already visible; the parameter panel will fill in asynchronously.
+            Promise.resolve().then(() => this.selectInitialSequence()).catch((err) => {
                 console.error('[init_prot] selectInitialSequence failed:', err);
                 this.selectFirstSequence();
-            }
+            });
         } else {
             this.showStatus('No sequences found. Check console for errors.', 'error');
         }
@@ -1465,28 +1377,93 @@ for d in ('/${modulePackageName}', '${moduleScriptsDir}'):
         
         const fileFilter = source.fileFilter || (file => file.name.endsWith('.py'));
         
-        let loadedCount = 0;
-        for (const file of files) {
-            if (file.type === 'file' && fileFilter(file)) {
+        // Fetch all file contents in parallel
+        const pyFiles = files.filter(f => f.type === 'file' && fileFilter(f));
+        const fetched = (await Promise.all(
+            pyFiles.map(async (file) => {
                 try {
-                    const fileResponse = await fetch(file.download_url);
-                    if (fileResponse.ok) {
-                        const code = await fileResponse.text();
-                        if (this.config.pyodide) {
-                            const vfsPath = `${moduleScriptsDir}/${file.name}`;
-                            await this.config.pyodide.runPythonAsync(`
-with open(${JSON.stringify(vfsPath)}, 'w', encoding='utf-8') as f:
-    f.write(${JSON.stringify(code)})
-`);
-                        }
-                        const fullModulePath = `${modulePackageName}.scripts.${file.name.replace(/\.py$/i, '')}`;
-                        await this.parseFile(fullModulePath, code, { ...source, path: fullModulePath, filePath: file.path, fullModulePath });
-                        loadedCount++;
-                    } else {
-                        console.warn(`Failed to fetch ${file.name}: ${fileResponse.status} ${fileResponse.statusText}`);
+                    const r = await fetch(file.download_url);
+                    if (!r.ok) {
+                        console.warn(`Failed to fetch ${file.name}: ${r.status} ${r.statusText}`);
+                        return null;
                     }
-                } catch (error) {
-                    console.warn(`Failed to load ${file.name}:`, error);
+                    return { file, code: await r.text() };
+                } catch (err) {
+                    console.warn(`Failed to load ${file.name}:`, err);
+                    return null;
+                }
+            })
+        )).filter(Boolean);
+
+        let loadedCount = 0;
+        if (fetched.length > 0) {
+            // Build module path maps up-front
+            const entries = fetched.map(({ file, code }) => {
+                const fullModulePath = `${modulePackageName}.scripts.${file.name.replace(/\.py$/i, '')}`;
+                const vfsPath = `${moduleScriptsDir}/${file.name}`;
+                return { file, code, fullModulePath, vfsPath };
+            });
+
+            if (this.config.pyodide) {
+                // Single Python call: write all VFS files AND parse all functions
+                const codeMap = {};
+                const vfsPathMap = {};
+                for (const { fullModulePath, vfsPath, code } of entries) {
+                    codeMap[fullModulePath] = code;
+                    vfsPathMap[fullModulePath] = vfsPath;
+                }
+                await this.ensureSourceManager();
+                const batchResult = await this.config.pyodide.runPythonAsync(`
+import json, os
+from seq_source_manager import SourceManager
+
+_code_map = ${JSON.stringify(codeMap)}
+_vfs_map  = ${JSON.stringify(vfsPathMap)}
+
+for _mod, _vp in _vfs_map.items():
+    os.makedirs(os.path.dirname(_vp), exist_ok=True)
+    with open(_vp, 'w', encoding='utf-8') as _f:
+        _f.write(_code_map[_mod])
+
+_manager = SourceManager()
+_results = {}
+for _mod, _code in _code_map.items():
+    _results[_mod] = _manager.parse_file_functions(_code, filter_seq_prefix=False)
+json.dumps(_results)
+`);
+                const allParsed = JSON.parse(batchResult);
+                for (const { file, code, fullModulePath } of entries) {
+                    const functions = allParsed[fullModulePath] || [];
+                    if (!this.sequences[fullModulePath]) {
+                        this.sequences[fullModulePath] = {
+                            functions: [],
+                            source: { ...source, path: fullModulePath, filePath: file.path, fullModulePath },
+                            code,
+                        };
+                    } else {
+                        this.sequences[fullModulePath].code = code;
+                    }
+                    for (const func of functions) {
+                        this.sequences[fullModulePath].functions.push({
+                            name: func.name,
+                            doc: func.doc || '',
+                            source: { ...source, path: fullModulePath, filePath: file.path, fullModulePath },
+                        });
+                    }
+                    console.log(`Parsed ${functions.length} functions from ${fullModulePath}`);
+                    loadedCount++;
+                }
+            } else {
+                // No pyodide: fall back to JS-side parsing is unavailable; just register stubs
+                for (const { file, fullModulePath, code } of entries) {
+                    if (!this.sequences[fullModulePath]) {
+                        this.sequences[fullModulePath] = {
+                            functions: [],
+                            source: { ...source, path: fullModulePath, filePath: file.path, fullModulePath },
+                            code,
+                        };
+                    }
+                    loadedCount++;
                 }
             }
         }
@@ -1512,14 +1489,16 @@ with open(${JSON.stringify(vfsPath)}, 'w', encoding='utf-8') as f:
         
         try {
             if (isPackageSubmodule) {
-                // Load all modules in the package using SourceManager
+                // Load all modules in the package using SourceManager.
+                // Use get_functions_from_package_noexec (AST-only) to avoid triggering
+                // slow module-level imports (e.g. import pypulseq) during startup.
                 await this.ensureSourceManager();
                 const result = await pyodide.runPythonAsync(`
 import json
 from seq_source_manager import SourceManager
 
 manager = SourceManager()
-all_functions = manager.get_functions_from_package('${modulePath}', filter_seq_prefix=False)
+all_functions = manager.get_functions_from_package_noexec('${modulePath}')
 json.dumps(all_functions)
 `);
             
@@ -1539,7 +1518,7 @@ json.dumps(all_functions)
                 const functions = moduleData.functions;
                 
                 if (!this.sequences[fileName]) {
-                    this.sequences[fileName] = { functions: [], source: { ...source, moduleName: moduleName, fullModulePath: fullModulePath } };
+                    this.sequences[fileName] = { functions: [], source: { ...source, path: fullModulePath, moduleName: moduleName, fullModulePath: fullModulePath } };
                 }
                 
                 for (const func of functions) {
@@ -1547,7 +1526,7 @@ json.dumps(all_functions)
                         name: func.name,
                         doc: func.doc,
                         signature: func.signature,
-                        source: { ...source, moduleName: moduleName, fullModulePath: fullModulePath }
+                        source: { ...source, path: fullModulePath, moduleName: moduleName, fullModulePath: fullModulePath }
                     });
                 }
             }
@@ -1955,6 +1934,32 @@ json.dumps(functions)
             }
             const modulePath = source.fullModulePath || source.module || source.path;
             await this.ensureSourceManager();
+
+            // For file-type sources (built-in, private), use AST extraction to avoid
+            // triggering 'import pypulseq' which takes ~11s cold.
+            if (source.type === 'file' && fileName) {
+                const noexecResult = await pyodide.runPythonAsync(`
+import json
+from seq_source_manager import SourceManager
+manager = SourceManager()
+result = manager.extract_function_parameters_noexec('/${fileName}', '${functionName}')
+json.dumps(result)
+`);
+                const { params, doc } = JSON.parse(noexecResult);
+                this.functionParams = params;
+                if (doc && doc.trim()) {
+                    this.selectedSequence.doc = doc;
+                    const fileData = this.sequences[fileName];
+                    if (fileData) {
+                        const func = fileData.functions.find(f => f.name === functionName);
+                        if (func) func.doc = doc;
+                    }
+                }
+                this.renderParameterControls(params);
+                executeBtn.disabled = false;
+                return;
+            }
+
             const paramsJson = await pyodide.runPythonAsync(`
 import json
 from seq_source_manager import SourceManager

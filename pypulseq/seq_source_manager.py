@@ -168,7 +168,54 @@ class SourceManager:
             return all_functions
         except Exception as e:
             return {'error': str(e)}
-    
+
+    def get_functions_from_package_noexec(self, package_path):
+        """
+        Find and AST-parse functions from an installed package WITHOUT importing
+        any module.  Locates the package directory by scanning sys.path, then reads
+        each .py file and parses with ast.parse — no importlib.import_module calls,
+        so module-level side-effects (e.g. importing pypulseq) are never triggered.
+
+        Args:
+            package_path: Dotted package path (e.g. 'mrseq.scripts')
+
+        Returns:
+            Dict mapping module_basename -> {'functions': [...], 'full_module_path': str}
+            or {'error': str} on failure.
+        """
+        parts = package_path.split('.')
+        results = {}
+
+        # Locate the package directory by scanning sys.path — no imports at all.
+        pkg_dir = None
+        for base in sys.path:
+            candidate = os.path.join(base, *parts)
+            if os.path.isdir(candidate):
+                pkg_dir = candidate
+                break
+        if pkg_dir is None:
+            return {'error': f'Package directory for {package_path!r} not found in sys.path'}
+
+        for fn in sorted(os.listdir(pkg_dir)):
+            if not fn.endswith('.py') or fn.startswith('_'):
+                continue
+            mod_stem = fn[:-3]
+            full_mod_path = f'{package_path}.{mod_stem}'
+            try:
+                with open(os.path.join(pkg_dir, fn), 'r', encoding='utf-8', errors='replace') as f:
+                    code = f.read()
+                functions = self.parse_file_functions(code, filter_seq_prefix=False)
+                if functions:
+                    results[mod_stem] = {
+                        'functions': functions,
+                        'full_module_path': full_mod_path,
+                    }
+            except Exception as e:
+                print(f'Warning: could not parse {fn}: {e}', file=sys.stderr)
+                continue
+
+        return results
+
     def parse_file_functions(self, code, filter_seq_prefix=False):
         """
         Parse Python code and extract function definitions.
@@ -239,6 +286,132 @@ class SourceManager:
         
         return functions
     
+    def extract_function_parameters_noexec(self, file_path, function_name):
+        """
+        Extract parameters AND docstring from a function using AST only — no module import.
+        Reads the file from the Pyodide VFS and parses it with ast.parse, so module-level
+        side-effects (e.g. 'import pypulseq') are never triggered.
+
+        Args:
+            file_path: Absolute or root-relative VFS path (e.g. '/built_in_seq/mr0_tse_2d_seq.py')
+            function_name: Name of the function to extract from
+
+        Returns:
+            Dict {'params': [...], 'doc': str}
+            params items: {'name': str, 'default': value, 'type': str}
+        """
+        import ast, math, operator as op_mod
+
+        # Resolve path — prepend '/' if needed
+        if not os.path.isabs(file_path):
+            file_path = '/' + file_path.lstrip('/')
+        if not os.path.exists(file_path):
+            raise FileNotFoundError(f"VFS file not found: {file_path}")
+
+        with open(file_path, 'r', encoding='utf-8', errors='replace') as fh:
+            code = fh.read()
+
+        tree = ast.parse(code)
+
+        # Find the target function (top-level only)
+        func_node = None
+        for node in tree.body:
+            if isinstance(node, ast.FunctionDef) and node.name == function_name:
+                func_node = node
+                break
+        if func_node is None:
+            raise AttributeError(f"Function '{function_name}' not found in {file_path}")
+
+        # Extract docstring
+        doc = ast.get_docstring(func_node) or ''
+
+        # Build arg-index → default-node mapping
+        args_list = func_node.args.args
+        defaults = func_node.args.defaults
+        n = len(args_list)
+        d = len(defaults)
+        default_map = {n - d + i: defaults[i] for i in range(d)}
+
+        # numpy constant substitutions (covers common seq defaults)
+        NP = {'pi': math.pi, 'e': math.e, 'inf': math.inf, 'nan': float('nan'),
+              'pi_2': math.pi / 2}
+
+        def _eval(node):
+            """Recursively evaluate a simple AST expression."""
+            if isinstance(node, ast.Constant):
+                return node.value
+            if isinstance(node, (ast.Tuple, ast.List)):
+                return [_eval(el) for el in node.elts]
+            if isinstance(node, ast.UnaryOp):
+                v = _eval(node.operand)
+                return -v if isinstance(node.op, ast.USub) else +v
+            if isinstance(node, ast.BinOp):
+                lv, rv = _eval(node.left), _eval(node.right)
+                ops = {ast.Add: op_mod.add, ast.Sub: op_mod.sub,
+                       ast.Mult: op_mod.mul, ast.Div: op_mod.truediv,
+                       ast.Pow: op_mod.pow, ast.Mod: op_mod.mod}
+                fn = ops.get(type(node.op))
+                if fn is None:
+                    raise ValueError
+                return fn(lv, rv)
+            if isinstance(node, ast.Attribute):
+                if isinstance(node.value, ast.Name) and node.value.id in ('np', 'numpy', 'math'):
+                    v = getattr(math, node.attr, NP.get(node.attr))
+                    if v is None:
+                        raise ValueError
+                    return v
+            if isinstance(node, ast.Name):
+                if node.id in ('True', 'False', 'None'):
+                    return {'True': True, 'False': False, 'None': None}[node.id]
+                if node.id in NP:
+                    return NP[node.id]
+            raise ValueError(f"Cannot evaluate: {ast.dump(node)}")
+
+        def _type_name(val):
+            if isinstance(val, bool):   return 'bool'
+            if isinstance(val, int):    return 'int'
+            if isinstance(val, float):  return 'float'
+            if isinstance(val, str):    return 'str'
+            if isinstance(val, (list, tuple)): return 'list'
+            return type(val).__name__
+
+        params = []
+        for i, arg in enumerate(args_list):
+            name = arg.arg
+            if name == 'system':
+                continue
+
+            val, type_name = None, 'None'
+
+            if i in default_map:
+                try:
+                    val = _eval(default_map[i])
+                    if isinstance(val, (list, tuple)):
+                        val = list(val)
+                    type_name = _type_name(val)
+                except Exception:
+                    try:
+                        val = ast.unparse(default_map[i])
+                        type_name = 'unknown'
+                    except Exception:
+                        val = None
+
+            # Check for Annotated[str, "file"] / Annotated[str, "url"] type hints
+            if arg.annotation is not None:
+                try:
+                    ann_src = ast.unparse(arg.annotation)
+                    if 'Annotated' in ann_src:
+                        if '"file"' in ann_src or "'file'" in ann_src:
+                            type_name = 'file'
+                        elif '"url"' in ann_src or "'url'" in ann_src:
+                            type_name = 'url'
+                except Exception:
+                    pass
+
+            params.append({'name': name, 'default': val, 'type': type_name})
+
+        return {'params': params, 'doc': doc}
+
     def extract_function_parameters(self, module_path, function_name):
         """
         Extract parameters from a function using inspect (requires import).

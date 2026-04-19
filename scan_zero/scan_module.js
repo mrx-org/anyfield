@@ -249,6 +249,7 @@ export class ScanModule {
             nvMod.pyodide.globals.set("reference_bytes", refBytes);
 
             await nvMod.initPyodide();
+            await nvMod._ensureNibabelReady();
             // 4) run_resampling* returns a VFS path string, not raw bytes — read file (same as SIM / Resample to FOV)
             const v0 = nvMod.nv.volumes[0];
             const hdr = v0.hdr ?? v0.header;
@@ -482,9 +483,12 @@ export class ScanModule {
     }
 
     async _prepareCurrentSeqForTools(job) {
+        const _t = (label) => console.log(`[SEQ-PREP] ${label}: ${performance.now().toFixed(1)}ms`);
+        _t('start');
         if (window.seqExplorer) {
             await window.seqExplorer.executeFunction(true, this.scanCounter);
         }
+        _t('after executeFunction');
         const nvMod = window.nvModule;
         const isInterpreter = this.currentSequence && (this.currentSequence.functionName === 'seq_pulseq_interpreter');
         let sourceSeqPath = null;
@@ -494,8 +498,13 @@ export class ScanModule {
             if (input && input.value && input.value.trim()) sourceSeqPath = input.value.trim();
         }
         const sourceSeqPathPy = sourceSeqPath != null ? JSON.stringify(sourceSeqPath) : 'None';
+        // Record time just before executeFunction so we can detect .seq files written by the sequence
+        // script itself (e.g. mrseq writes to /home/pyodide/output/ internally).  We pass this as a
+        // Pyodide global so the Python snippet below can skip a second seq.write() and just copy.
+        const preExecTimeSec = (Date.now() / 1000) - 2; // 2s buffer for clock skew
+        nvMod.pyodide.globals.set('_pre_exec_mtime', preExecTimeSec);
         const saveResult = await nvMod.pyodide.runPythonAsync(`
-import os, shutil, __main__
+import os, shutil, __main__, time as _time
 from seq_source_manager import SourceManager
 os.makedirs('/outputs', exist_ok=True)
 vfs_path = '/outputs/${job.baseName}.seq'
@@ -505,24 +514,63 @@ if source_seq_path is not None and os.path.exists(source_seq_path):
     shutil.copy2(source_seq_path, vfs_path)
     _final_status = "success"
 else:
-    seq = getattr(SourceManager, '_last_sequence', None) or getattr(__main__, 'seq', None)
-    if seq:
-        seq.write(vfs_path)
+    # If the sequence script (e.g. mrseq) already wrote a .seq file during executeFunction,
+    # copy it instead of calling seq.write() again — avoids a second ~14s serialisation.
+    _wrote_path = None
+    for _dir in ('/home/pyodide/output', '/home/pyodide'):
+        if not os.path.isdir(_dir):
+            continue
+        try:
+            _candidates = [
+                (_mt, os.path.join(_dir, _f))
+                for _f in os.listdir(_dir)
+                if _f.endswith('.seq')
+                for _mt in [os.path.getmtime(os.path.join(_dir, _f))]
+                if _mt >= _pre_exec_mtime
+            ]
+        except Exception:
+            _candidates = []
+        if _candidates:
+            _candidates.sort(reverse=True)
+            _wrote_path = _candidates[0][1]
+            break
+    if _wrote_path:
+        _t0 = _time.perf_counter()
+        shutil.copy2(_wrote_path, vfs_path)
+        _t1 = _time.perf_counter()
+        _size = os.path.getsize(vfs_path)
+        print(f"[SEQ-PREP] copy from script output ({os.path.basename(_wrote_path)}): {(_t1-_t0)*1000:.1f}ms, {_size/1024:.1f}KB", flush=True)
         _final_status = "success"
+    else:
+        seq = getattr(SourceManager, '_last_sequence', None) or getattr(__main__, 'seq', None)
+        if seq:
+            _t0 = _time.perf_counter()
+            seq.write(vfs_path)
+            _t1 = _time.perf_counter()
+            _size = os.path.getsize(vfs_path)
+            print(f"[SEQ-PREP] seq.write(): {(_t1-_t0)*1000:.1f}ms, {_size/1024:.1f}KB", flush=True)
+            _final_status = "success"
 _final_status
         `);
+        _t('after seq.write (Python)');
         if (saveResult === "success") {
             job.vfsSeqPath = `/outputs/${job.baseName}.seq`;
-            // Must return file text as last expression — bare f.read() inside `with` does not propagate to JS.
+            // Read as bytes — Pyodide transfers bytes as a shared ArrayBuffer (zero-copy),
+            // whereas reading as str copies every character through the WASM boundary.
             const seqPy = await nvMod.pyodide.runPythonAsync(`
-with open('${job.vfsSeqPath}', 'r', encoding='utf-8', errors='ignore') as f:
-    _sim_seq_text = f.read()
-_sim_seq_text
+with open('${job.vfsSeqPath}', 'rb') as f:
+    _sim_seq_bytes = f.read()
+_sim_seq_bytes
             `);
-            const seqText = (seqPy && seqPy.toJs) ? seqPy.toJs() : seqPy;
+            _t('after VFS read (Python→JS boundary)');
+            const bytes = (seqPy && seqPy.toJs) ? seqPy.toJs() : seqPy;
+            _t('after toJs()');
             if (seqPy?.destroy) seqPy.destroy();
-            const text = String(seqText || "").trim();
-            if (!text) {
+            const text = (bytes instanceof Uint8Array)
+                ? new TextDecoder('utf-8').decode(bytes)
+                : String(bytes || '');
+            _t(`after TextDecoder (${(text.length/1024).toFixed(1)}KB)`);
+            if (!text.trim()) {
                 throw new Error("Prepared .seq file is empty. Run/plot the sequence in the explorer so seq.write() produces content, or use a valid .seq path for the interpreter.");
             }
             return text;
@@ -675,6 +723,7 @@ if os.path.exists(_p):
         this._simPipelineJob = job;
         job.status = 'scanning';
         this.updateQueueUI();
+        const _tPipeline = performance.now();
         try {
             // FOV contract: **Pulseq seq.definitions FOV** (m) is authoritative for physical size (mm).
             // Sequence must run *before* generateFovMaskNifti() so executeFunction can emit sequence_fov_dims
@@ -682,11 +731,14 @@ if os.path.exists(_p):
             // Resampling + PyNUFFT ref then match the same geometry the user sees after seq sync.
             // Ensure run_resampling / run_resampling_serial3d_to_4d are defined.
             await nvMod.initPyodide();
+            await nvMod._ensureNibabelReady();
             const activeGroup = nvMod.volumeGroups?.find(g => g.volumes?.length && !String(g.jsonName || '').endsWith('_resampled') && !String(g.jsonName || '').endsWith('_averaged'));
             if (!activeGroup) throw new Error("No phantom group with JSON found. Load phantom via Add Folder/Add File first.");
 
             // 1) Silent seq execute + protocol snapshot + sequence_fov_dims → Niivue FOV mm from seq.definitions
+            const _t0 = performance.now();
             const seqText = await this._prepareCurrentSeqForTools(job);
+            console.log(`[SIM] _prepareCurrentSeqForTools: ${(performance.now()-_t0).toFixed(0)}ms, seqText ${(seqText.length/1024).toFixed(1)}KB`);
 
             // 1b) Freeze FOV geometry for this job. Seq-authoritative mm size is already on sliders;
             // user-authoritative offsets/rotations too. Any later slider mutation (user input,
@@ -696,6 +748,7 @@ if os.path.exists(_p):
 
             // 2) Build phantom and recon FOV mask refs up-front from the same frozen snapshot.
             // Different matrix grids (phantom vs recon) share identical mm box + placement.
+            const _t2 = performance.now();
             const phantomRef = nvMod.generateFovMaskNiftiFromSnapshot(job.fovSnapshot, nvMod.getPhantomMatrixDims());
             const reconRef = nvMod.generateFovMaskNiftiFromSnapshot(job.fovSnapshot, nvMod.getReconMatrixDims());
             const resampledEntries = [];
@@ -720,28 +773,35 @@ if os.path.exists(_p):
                 resampledEntries.push({ name: vol.name, bytes: new Uint8Array(outU8) });
             }
             if (!resampledEntries.length) throw new Error("Resampling failed: no volumes produced.");
+            console.log(`[SIM] FOV mask + resampling: ${(performance.now()-_t2).toFixed(0)}ms`);
 
             // 3) Phantom dict for toolapi (temp FS dir, deleted after)
+            const _t3 = performance.now();
             const phantomPayload = await this._convertResampledGroupToToolPhantom(nvMod, {
                 jsonName: activeGroup.jsonName,
                 jsonFileName: activeGroup.jsonFileName,
                 jsonContent: activeGroup.jsonContent,
                 resampledEntries,
             });
+            console.log(`[SIM] _convertResampledGroupToToolPhantom: ${(performance.now()-_t3).toFixed(0)}ms`);
 
             // 4) JS tools: conseq + trajex + sim backend (rapisim or tool-mr0sim)
+            const _t4 = performance.now();
             const call = await this._ensureToolApi();
             const seq = await call(TOOL_CONSEQ, { Dict: { seq_file: { Str: seqText }, exact_trajectory: { Bool: false } } }, (m) => this._toolOnMessage(m));
+            console.log(`[SIM] TOOL_CONSEQ: ${(performance.now()-_t4).toFixed(0)}ms`);
             if (seq?.Error || seq?.err) throw new Error(seq.Error || seq.err || 'conseq failed');
             const ev = seq?.TypedList?.InstantSeqEvent;
             const events = ev
                 ? { TypedList: { InstantSeqEvent: ev } }
                 : seq;
             const phantomForSim = this._encodeSegmentedPhantomForToolapi(phantomPayload);
+            const _t5 = performance.now();
             const [trajResult, signalResult] = await Promise.all([
                 call(TOOL_TRAJEX, { Dict: { sequence: events, t1: { Float: 1.0 }, t2: { Float: 0.1 }, min_mag: { Float: 0.001 } } }, (m) => this._toolOnMessage(m)),
                 call(simToolUrl, { Dict: { sequence: seq, phantom: phantomForSim } }, (m) => this._toolOnMessage(m)),
             ]);
+            console.log(`[SIM] TOOL_TRAJEX + sim backend (parallel): ${(performance.now()-_t5).toFixed(0)}ms`);
             const traj = this._trajectoryFromResult(trajResult);
             const signal = this._signalFromResult(signalResult);
             if (!signal?.length) throw new Error(`${job.noSignalName || 'Simulation'} returned no signal.`);
@@ -750,6 +810,7 @@ if os.path.exists(_p):
             // the phantom ref (step 2); no late re-read of the live FOV sliders here.
 
             // 6) PyNUFFT recon: logic in scan_zero/recon.py (run_sim_recon)
+            const _t6 = performance.now();
             await nvMod.pyodide.loadPackage(["micropip"]);
             await nvMod.pyodide.runPythonAsync(`
 import micropip
@@ -768,6 +829,7 @@ sys.path.insert(0, '/scan_zero')
 from recon import run_sim_recon
 run_sim_recon(sim_signal_pairs, sim_traj_points, sim_ref_bytes)
             `);
+            console.log(`[SIM] PyNUFFT recon: ${(performance.now()-_t6).toFixed(0)}ms`);
             const recoPath = (recoPathRes && recoPathRes.toJs) ? recoPathRes.toJs() : recoPathRes;
             if (recoPathRes?.destroy) recoPathRes.destroy();
             const recoBytes = nvMod.pyodide.FS.readFile(String(recoPath));
@@ -777,6 +839,7 @@ run_sim_recon(sim_signal_pairs, sim_traj_points, sim_ref_bytes)
             job.niftiUrl = URL.createObjectURL(new Blob([recoBytes], { type: "application/octet-stream" }));
             job.seqUrl = URL.createObjectURL(new Blob([seqText], { type: "text/plain" }));
             job.status = 'done';
+            console.log(`[SIM] *** TOTAL pipeline: ${(performance.now()-_tPipeline).toFixed(0)}ms ***`);
             // Auto-load: don't resync FOV — preserve any in-progress FOV planning the user is doing
             // for the next scan. Explicit VIEW SCAN clicks still sync (default `syncFov=true`).
             this.loadJob(job.id, false);

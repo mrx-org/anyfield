@@ -470,13 +470,13 @@
                     const py = await loadPyodide({
                         indexURL: "https://cdn.jsdelivr.net/pyodide/v0.29.0/full/",
                     });
-                    await py.loadPackage(['numpy', 'scipy', 'micropip']);
-                    const micropip = py.pyimport("micropip");
+                    await py.loadPackage(['numpy', 'micropip', 'matplotlib', 'scipy']);
                     // Pin pypulseq: conseq rejects Pulseq file format 1.5.x; 1.4.2.post2 writes an older version line.
-                    await Promise.all([
-                        micropip.install('pypulseq==1.4.2.post2'),
-                        micropip.install('nibabel')
-                    ]);
+                    // deps=False: numpy already loaded; matplotlib/scipy loaded on demand — skips ~3s of transitive dep downloads.
+                    await py.runPythonAsync(`
+import micropip
+await micropip.install('pypulseq==1.4.2.post2', deps=False)
+`);
                     return py;
                 })();
 
@@ -638,7 +638,6 @@
                     const configCode = await configPromise;
                     await Promise.all([
                         nvModule.initPyodide(),
-                        explorer.detectVersions(),
                         explorer.loadSourcesFromConfig(configCode)
                     ]);
                     if (nvModule._pendingPhantomVfs) {
@@ -651,18 +650,17 @@
                         nvModule._pendingPhantomVfs = null;
                     }
                     if (nvModule.options.showJsonTab) nvModule.updateJsonTab();
-                    await phantomReady.catch(() => {});
                     hideLoaderAndShowFooter();
+                    // Phantom and plot stack finish in background (viewer shows waiting state via CSS until phantom ready)
+                    phantomReady.catch(() => {});
                     // Plot stack (matplotlib + optimized plot) non-blocking; await in explorer when user runs first plot
                     explorer._plotStackReady = pyodide.loadPackage('matplotlib')
                         .then(() => explorer.installOptimizedPlotFunction())
-                        .then(() => explorer.detectVersions())
                         .catch((e) => {
                             console.warn('Plot stack load failed:', e);
                         });
                 }).catch(async (e) => {
                     console.error("Pyodide/background setup failed:", e);
-                    await phantomReady.catch(() => {});
                     hideLoaderAndShowFooter();
                 });
 
