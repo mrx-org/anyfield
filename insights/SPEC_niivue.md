@@ -29,7 +29,7 @@ Modular medical imaging component for 3D/orthographic NIfTI visualization and in
 - **FOV mesh**: Built by `getFovGeometry()` which transforms FOV corner voxels to world coordinates using `voxToMmFactory`. The mesh is displayed as a semi-transparent overlay in the 3D/slice views.
 
 ## Default phantom (lab shell)
-- **Default phantom (remote)**: Startup uses **`DEFAULT_PHANTOM_REMOTE_BASE`** in `niivue_app.js` — GitHub **`raw.githubusercontent.com/mrx-org/nofield/main/data/brain_default_1mm_gz/`** (JSON + PD / dB0 / B1+ NIfTIs). Same files live in-repo under `data/brain_default_1mm_gz/` for version control; **fetch always uses the remote URL** unless overridden (`NiivueModule({ defaultPhantomBaseUrl })` or `window.NV_DEFAULT_PHANTOM_BASE`). **Default phantom** button reloads the same bundle after `resetViewer()`.
+- **Default phantom (remote)**: Startup uses **`DEFAULT_PHANTOM_REMOTE_BASE`** in `niivue_app.js` — GitHub **`raw.githubusercontent.com/mrx-org/anyfield/main/data/brain_default_1mm_gz/`** (JSON + PD / dB0 / B1+ NIfTIs). Same files live in-repo under `data/brain_default_1mm_gz/` for version control; **fetch always uses the remote URL** unless overridden (`NiivueModule({ defaultPhantomBaseUrl })` or `window.NV_DEFAULT_PHANTOM_BASE`). **Default phantom** button reloads the same bundle after `resetViewer()`.
 - **`.gitignore`**: `*.nii.gz` is ignored except the three default-phantom files in `data/brain_default_1mm_gz/` (explicit `!` rules).
 
 ## Phantom Load Reset Flow

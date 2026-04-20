@@ -1,6 +1,6 @@
 # Niivue minimal app (zero-install)
 
-**Version:** `v0.2.0`
+**Version:** `v0.2.1`
 
 This is a **minimal Niivue viewer** implemented as a single `viewer.html` file.
 
@@ -62,6 +62,11 @@ If no deep link is given, the app starts with the built-in Pulseq interpreter se
 For more insights see insights SPEC_no_field.md
 
 ## Release notes
+
+**v0.2.1**
+- faster startup and loading flow
+- fixed FOV consistency in scan pipeline using frozen `fovSnapshot` geometry
+- changed urls consitently to anyfield
 
 
 **v0.2.0**

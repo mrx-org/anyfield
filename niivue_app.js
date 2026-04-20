@@ -7,7 +7,7 @@ import { eventHub } from "./event_hub.js";
  * or `window.NV_DEFAULT_PHANTOM_BASE` (set before app init).
  */
 export const DEFAULT_PHANTOM_REMOTE_BASE =
-  "https://raw.githubusercontent.com/mrx-org/nofield/main/data/brain_default_1mm_gz";
+  "https://raw.githubusercontent.com/mrx-org/anyfield/main/data/brain_default_1mm_gz";
 
 export class NiivueModule {
   constructor(options = {}) {
