@@ -7,7 +7,7 @@ In-browser Python environment for executing PyPulseq scripts and visualizing MRI
 - **Execution**: Pyodide-powered Python runtime for local sequence generation.
 - **Silent Execution**: Support for background sequence generation (without mode switching or plotting) for simulation workflows.
 - **Dynamic UI**: Automatic generation of input controls from Python function signatures.
-- **Plotting**: Optimized Matplotlib visualization of RF, Gradients (X, Y, Z), and ADC events with downsampling.
+- **Plotting**: Default **ChartGPU** WebGPU stack for RF / gradients / ADC waveforms (`plot_speed='chartgpu'`); Matplotlib modes remain via selector (`full` / `fast` / `faster`, see §8).
 - **Integration**: Synchronizes internal sequence parameters with scanner FOV events and emits `sequenceSelected` for other modules.
 - **Editor**: Built-in CodeMirror instance for live sequence logic modification.
 
@@ -16,7 +16,7 @@ In-browser Python environment for executing PyPulseq scripts and visualizing MRI
 - **Parts**:
   - `renderTree(target)`: Sequence database / file tree.
   - `renderParams(target)`: Dynamic protocol parameter inputs.
-  - `renderPlot(target)`: Matplotlib waveform output pane.
+  - `renderPlot(target)`: Waveform output pane (ChartGPU default; matplotlib when another plot speed is selected).
 - **Key Methods**:
   - `executeFunction(silent)`: Executes the current sequence with optional UI suppression.
 
@@ -185,6 +185,14 @@ Protocol files are generated with:
 - Protocols that wrap `seq_pulseq_interpreter` store the `filename` argument as a string (the path or URL). The protocol thus “links” to the seq file via that string. Same session: path still valid; new session: user can re-upload or use a server URL if supported.
 
 **Scan integration:** Execution runs `seq_pulseq_interpreter(seq_file=...)`; the returned sequence is stored in `__main__.seq` and `SourceManager._last_sequence` as for any other sequence. The **Scan Module** treats the interpreter specially when saving the job’s `.seq` file: instead of calling `seq.write()`, it **copies the original** user-specified `.seq` file (path from the `seq_file` param) to `/outputs/scan_[N]_[TS]_[Name].seq`. That way VIEW SEQ and Download always have a valid file (no dependence on pypulseq write/read round-trip).
+
+### 8. ChartGPU plot mode (`plot_speed='chartgpu'`, **default** in UI + `seq_plot` default)
+
+- **Python:** `pypulseq/seq_plot_utils.py` — payload via `build_chartgpu_payload` / `get_chartgpu_payload_json()` after `seq.plot(..., plot_speed='chartgpu')` (no `plt.show()` for that path).
+- **JS/CSS:** `pypulseq/seq_explorer.js` (`renderSeqChartGpuAfterPlot`, dispose, execute-script branch), `pypulseq/seq_explorer.css` (`.seq-chartgpu-*`). Dynamic import URL and ChartGPU version are pinned in JS.
+- **Behavior (short):** WebGPU required; six stacked charts; `connectCharts` crosshair sync + lockstep x-zoom; plain left-drag pan (move threshold); tooltips off; shared x span uses an invisible extent line (`__seqXExtent__`) so value-axis ticks still follow zoom (see comments there — explicit `xAxis.min`/`max` pins tick domain in ChartGPU).
+
+**ChartGPU upstream docs (for the next agent):** repo [ChartGPU/ChartGPU](https://github.com/ChartGPU/ChartGPU) — especially [`docs/api/options.md`](https://github.com/ChartGPU/ChartGPU/blob/main/docs/api/options.md), [`docs/api/chart.md`](https://github.com/ChartGPU/ChartGPU/blob/main/docs/api/chart.md), [`docs/api/interaction.md`](https://github.com/ChartGPU/ChartGPU/blob/main/docs/api/interaction.md), [`docs/api/annotations.md`](https://github.com/ChartGPU/ChartGPU/blob/main/docs/api/annotations.md); guides under [`docs/guides/`](https://github.com/ChartGPU/ChartGPU/tree/main/docs/guides).
 
 ---
 

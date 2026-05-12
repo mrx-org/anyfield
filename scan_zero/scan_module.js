@@ -1,4 +1,5 @@
 import { eventHub } from '../event_hub.js';
+import { SequenceExplorer } from '../pypulseq/seq_explorer.js';
 
 /** toolapi-wasm WebSocket URLs (same path `/tool`, different host). */
 export const TOOL_CONSEQ = 'wss://tool-conseq.fly.dev/tool';
@@ -1066,24 +1067,33 @@ data
             if (window.seqExplorer) {
                 const explorer = window.seqExplorer;
                 const plotRoot = explorer.plotTarget || explorer.container;
-                let plotContainer = plotRoot.querySelector('#seq-mpl-actual-target');
-                
-                if (plotContainer) {
-                    plotContainer.innerHTML = '';
-                    document.pyodideMplTarget = plotContainer;
-                    window.pyodideMplTarget = plotContainer;
-                }
+                const plotContainer = plotRoot.querySelector('#seq-mpl-actual-target');
 
-                // 3. Run Python to read and plot the specific .seq file
+                // 3. Run Python to read and plot the specific .seq file (ChartGPU or matplotlib per selector)
                 const py = window.nvModule.pyodide;
                 if (py) {
-                    py.runPythonAsync(`
+                    const plotSpeed =
+                        plotRoot.querySelector('#seq-plot-speed-selector')?.value ||
+                        SequenceExplorer.DEFAULT_PLOT_SPEED;
+                    const plotBlock =
+                        plotSpeed === 'chartgpu'
+                            ? `        seq.plot(plot_now=False, plot_speed="chartgpu")`
+                            : `        seq.plot(plot_now=False, plot_speed="${plotSpeed}")
+        plt.show()`;
+                    void (async () => {
+                        try {
+                            if (plotContainer) {
+                                await explorer.disposeSeqChartGpu();
+                                plotContainer.innerHTML = '';
+                                document.pyodideMplTarget = plotContainer;
+                                window.pyodideMplTarget = plotContainer;
+                            }
+                            await py.runPythonAsync(`
 import pypulseq as pp
 import matplotlib.pyplot as plt
 import sys
 import os
 
-# Ensure pypulseq is patched for the optimized plot function
 if hasattr(sys, '_pp_patch_func'):
     sys._pp_patch_func()
 
@@ -1094,15 +1104,20 @@ try:
     print(f"Loading sequence from: {path}")
     if os.path.exists(path):
         seq.read(path)
-        # Configure plot (match explorer theme)
-        seq.plot(plot_now=False, plot_speed="faster")
-        plt.show()
+${plotBlock}
         print("Sequence plot complete.")
     else:
         print(f"Error: File {path} not found in VFS")
 except Exception as e:
     print(f"Error reading/plotting seq file: {e}")
-                    `);
+                            `);
+                            if (plotSpeed === 'chartgpu' && plotContainer) {
+                                await explorer.renderSeqChartGpuAfterPlot(plotRoot, py, plotContainer);
+                            }
+                        } catch (e) {
+                            console.error('viewSeq plot failed:', e);
+                        }
+                    })();
                 }
             }
         }

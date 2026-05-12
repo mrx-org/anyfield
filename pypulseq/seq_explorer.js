@@ -12,6 +12,15 @@
 
 import { eventHub } from "../event_hub.js";
 
+/**
+ * Default `#seq-plot-speed-selector` value and JS fallbacks when the control is missing.
+ * Keep the `selected` attribute on the matching `<option>` in SEQ_TEMPLATES in sync.
+ */
+const SEQ_DEFAULT_PLOT_SPEED = 'chartgpu';
+
+/** Pinned ChartGPU ESM (see `insights/SPEC_seq_exp.md` §8 for upstream docs). */
+const CHARTGPU_MODULE_URL = 'https://esm.sh/chartgpu@0.3.2?target=es2022';
+
 /** HTML template builders for sequence explorer UI (single file, no extra modules). */
 const SEQ_TEMPLATES = {
     showConsoleCheckbox() {
@@ -56,7 +65,8 @@ const SEQ_TEMPLATES = {
                             <select id="seq-plot-speed-selector" style="padding: 0.25rem; background: rgba(255, 255, 255, 0.08); border: 1px solid var(--border); border-radius: 4px; color: var(--text); font-size: 0.75rem; cursor: pointer;">
                                 <option value="full">Full plot</option>
                                 <option value="fast">Fast plot</option>
-                                <option value="faster" selected>Faster plot</option>
+                                <option value="faster">Faster plot</option>
+                                <option value="chartgpu" selected>ChartGPU</option>
                             </select>
                         </div>
                         <div id="seq-error-display" class="seq-error-message" style="display: none;"></div>
@@ -110,7 +120,8 @@ const SEQ_TEMPLATES = {
                 <select id="seq-plot-speed-selector" style="padding: 0.25rem; background: rgba(255, 255, 255, 0.08); border: 1px solid var(--border); border-radius: 4px; color: var(--text); font-size: 0.75rem; cursor: pointer;">
                     <option value="full">Full plot</option>
                     <option value="fast">Fast plot</option>
-                    <option value="faster" selected>Faster plot</option>
+                    <option value="faster">Faster plot</option>
+                    <option value="chartgpu" selected>ChartGPU</option>
                 </select>
             </div>`;
     },
@@ -134,6 +145,9 @@ const SEQ_TEMPLATES = {
 };
 
 export class SequenceExplorer {
+    /** Default plot speed (must match `SEQ_DEFAULT_PLOT_SPEED` and template `selected` option). */
+    static DEFAULT_PLOT_SPEED = SEQ_DEFAULT_PLOT_SPEED;
+
     constructor(containerId, config = {}) {
         this.container = typeof containerId === 'string' 
             ? document.getElementById(containerId) 
@@ -176,6 +190,10 @@ export class SequenceExplorer {
         this.installedPackages = new Set(); // Track installed packages to avoid reinstalling
         this.defaultInterpreterSeqPath = null; // Preloaded default .seq path for interpreter
         this._plotStackReady = null; // Promise: matplotlib + installOptimizedPlotFunction (set by bootstrap, non-blocking)
+        this._seqChartGpuDisconnect = null;
+        this._seqChartGpuCharts = null;
+        this._seqChartGpuDevice = null;
+        this._seqChartGpuAdapter = null;
         
         // Initialize UI
         if (containerId) {
@@ -374,12 +392,539 @@ plt.rcParams['font.size'] = 8`;
             
             await pyodide.runPythonAsync(plotUtilsCode);
             await pyodide.runPythonAsync('patch_pypulseq()');
-            
-            console.log('Optimized seq_plot function installed successfully');
         } catch (error) {
             console.error('Error installing optimized plot function:', error);
             throw error;
         }
+    }
+
+    /**
+     * Tear down ChartGPU charts and shared WebGPU device created for sequence plots.
+     */
+    async disposeSeqChartGpu() {
+        if (this._seqChartGpuDisconnect) {
+            try {
+                this._seqChartGpuDisconnect();
+            } catch (e) {
+                /* ignore */
+            }
+            this._seqChartGpuDisconnect = null;
+        }
+        if (Array.isArray(this._seqChartGpuCharts)) {
+            for (const c of this._seqChartGpuCharts) {
+                try {
+                    c.dispose();
+                } catch (e) {
+                    /* ignore */
+                }
+            }
+        }
+        this._seqChartGpuCharts = null;
+        if (this._seqChartGpuDevice) {
+            try {
+                this._seqChartGpuDevice.destroy();
+            } catch (e) {
+                /* ignore */
+            }
+        }
+        this._seqChartGpuDevice = null;
+        this._seqChartGpuAdapter = null;
+    }
+
+    /**
+     * Normalize series objects from Python JSON for ChartGPU.create (camelCase, scatter sizes).
+     * @param {unknown[]} seriesIn
+     */
+    static _normalizeChartGpuSeries(seriesIn) {
+        if (!Array.isArray(seriesIn)) return [];
+        return seriesIn.map((s) => {
+            if (!s || typeof s !== 'object') return { type: 'line', data: [] };
+            const out = { type: s.type || 'line', data: s.data || [] };
+            if (s.style && typeof s.style === 'object') {
+                out.style = { ...s.style };
+                if (out.style.size != null && s.type === 'scatter') {
+                    out.symbolSize = s.symbolSize ?? out.style.size;
+                    delete out.style.size;
+                }
+            }
+            if (s.symbolSize != null) out.symbolSize = s.symbolSize;
+            return out;
+        });
+    }
+
+    /**
+     * ChartGPU y-axis tick labels: three significant digits (stable across RF vs gradient scales).
+     * @param {number} v
+     * @returns {string | null}
+     */
+    static _formatYTick3SigDigits(v) {
+        if (v === null || v === undefined || !Number.isFinite(Number(v))) return null;
+        const n = Number(v);
+        if (n === 0) return '0';
+        return n.toPrecision(3);
+    }
+
+    /**
+     * Pick a finite y for the invisible shared-x-extent helper line (must sit inside real y span
+     * so auto y-bounds are not distorted). Uses the first finite y found in panel series data.
+     * @param {unknown[]} seriesArr normalized ChartGPU series
+     * @returns {number}
+     */
+    static _chartGpuYAnchorForExtentHelper(seriesArr) {
+        if (!Array.isArray(seriesArr)) return 0;
+        for (const s of seriesArr) {
+            if (!s || typeof s !== 'object' || s.name === '__seqXExtent__') continue;
+            const data = s.data;
+            if (!data) continue;
+            if (Array.isArray(data)) {
+                for (let j = 0; j < Math.min(data.length, 256); j++) {
+                    const p = data[j];
+                    if (p == null) continue;
+                    let y;
+                    if (Array.isArray(p) && p.length >= 2) y = p[1];
+                    else if (typeof p === 'object' && Number.isFinite(p.y)) y = p.y;
+                    if (Number.isFinite(y)) return y;
+                }
+            } else if (typeof data === 'object' && data.y != null) {
+                const ys = data.y;
+                const len = typeof ys.length === 'number' ? ys.length : 0;
+                for (let j = 0; j < Math.min(len, 256); j++) {
+                    const y = ys[j];
+                    if (Number.isFinite(y)) return y;
+                }
+            }
+        }
+        return 0;
+    }
+
+    /**
+     * Append an invisible line so ChartGPU's global x bounds match the sequence window on every
+     * panel without setting xAxis.min/max (which pins value-axis ticks to the full span in ChartGPU).
+     * @param {unknown[]} seriesArr
+     * @param {number} xMin
+     * @param {number} xMax
+     * @param {number} yAnchor
+     */
+    static _chartGpuWithSharedXExtentSeries(seriesArr, xMin, xMax, yAnchor) {
+        const base = Array.isArray(seriesArr) ? [...seriesArr] : [];
+        base.push({
+            type: 'line',
+            name: '__seqXExtent__',
+            data: [
+                [xMin, yAnchor],
+                [xMax, yAnchor],
+            ],
+            visible: false,
+            sampling: 'none',
+        });
+        return base;
+    }
+
+    /**
+     * Load ChartGPU and render stacked panels from Python export (plot_speed chartgpu).
+     * @param {HTMLElement | null} plotRoot
+     * @param {*} pyodide
+     * @param {HTMLElement} plotContainer mount for #seq-chartgpu-stack
+     */
+    async renderSeqChartGpuAfterPlot(plotRoot, pyodide, plotContainer) {
+        await this.disposeSeqChartGpu();
+        const darkCb = plotRoot?.querySelector('#seq-dark-plot-checkbox');
+        const wantsDark = darkCb ? darkCb.checked : true;
+
+        if (!navigator.gpu) {
+            plotContainer.innerHTML =
+                '<div class="seq-chartgpu-fallback">WebGPU is required for ChartGPU (e.g. Chrome 113+, Edge 113+, Safari 18+). This browser does not expose <code>navigator.gpu</code>.</div>';
+            return;
+        }
+
+        let jsonStr;
+        try {
+            jsonStr = await pyodide.runPythonAsync('get_chartgpu_payload_json()');
+        } catch (e) {
+            console.error('ChartGPU payload fetch failed:', e);
+            plotContainer.innerHTML =
+                '<div class="seq-chartgpu-fallback">Could not read ChartGPU export from Python (is seq_plot_utils loaded?).</div>';
+            return;
+        }
+
+        let payload;
+        try {
+            payload = jsonStr === 'null' ? null : JSON.parse(jsonStr);
+        } catch (e) {
+            plotContainer.innerHTML = '<div class="seq-chartgpu-fallback">Invalid ChartGPU JSON from Python.</div>';
+            return;
+        }
+
+        if (!payload || !Array.isArray(payload.panels) || payload.panels.length === 0) {
+            plotContainer.innerHTML =
+                '<div class="seq-chartgpu-fallback">No sequence data to plot (ChartGPU export empty or sequence missing).</div>';
+            return;
+        }
+
+        let ChartGPU;
+        let createPipelineCache;
+        let connectCharts;
+        let darkTheme;
+        let lightTheme;
+        try {
+            const mod = await import(/* @vite-ignore */ CHARTGPU_MODULE_URL);
+            ChartGPU = mod.ChartGPU;
+            createPipelineCache = mod.createPipelineCache;
+            connectCharts = mod.connectCharts;
+            darkTheme = mod.darkTheme;
+            lightTheme = mod.lightTheme;
+        } catch (e) {
+            console.error('ChartGPU import failed:', e);
+            plotContainer.innerHTML =
+                '<div class="seq-chartgpu-fallback">Failed to load ChartGPU from CDN (esm.sh). Check network or try another plot mode.</div>';
+            return;
+        }
+
+        if (!ChartGPU || typeof ChartGPU.create !== 'function') {
+            plotContainer.innerHTML = '<div class="seq-chartgpu-fallback">ChartGPU module did not export ChartGPU.create.</div>';
+            return;
+        }
+
+        plotContainer.innerHTML = `
+<div id="seq-chartgpu-stack" class="seq-chartgpu-stack">
+</div>`;
+        const stack = plotContainer.querySelector('#seq-chartgpu-stack');
+        const panels = payload.panels;
+        const n = panels.length;
+        const hosts = [];
+        for (let i = 0; i < n; i++) {
+            const h = document.createElement('div');
+            h.className = 'seq-chartgpu-panel';
+            h.id = `seq-chartgpu-panel-${i}`;
+            stack.appendChild(h);
+            hosts.push(h);
+        }
+
+        const adapter = await navigator.gpu.requestAdapter({ powerPreference: 'high-performance' });
+        if (!adapter) {
+            plotContainer.innerHTML =
+                '<div class="seq-chartgpu-fallback">WebGPU adapter could not be created (GPU busy or blocked).</div>';
+            return;
+        }
+        const device = await adapter.requestDevice();
+        this._seqChartGpuAdapter = adapter;
+        this._seqChartGpuDevice = device;
+        const pipelineCache = typeof createPipelineCache === 'function' ? createPipelineCache(device) : undefined;
+
+        const wantsDarkResolved = payload.isDark !== undefined ? payload.isDark : wantsDark;
+        /** Default ChartGPU theme uses 12px; titles use ic(fontSize) and stay slightly larger. */
+        const CHARTGPU_SEQ_FONT_PX = 10;
+        let theme;
+        if (darkTheme && lightTheme && typeof darkTheme === 'object' && typeof lightTheme === 'object') {
+            const base = wantsDarkResolved ? darkTheme : lightTheme;
+            theme = { ...base, fontSize: CHARTGPU_SEQ_FONT_PX };
+        } else {
+            theme = wantsDarkResolved ? 'dark' : 'light';
+        }
+        // ChartGPU default minSpan is dataset-derived (larger N → smaller minSpan). Gradient panels
+        // have many more x samples than ADC/RF, so default zoom limits differ per row. One explicit
+        // minSpan keeps max zoom-in identical across all six charts (and matches lockstep setZoomRange).
+        const ZOOM_MIN_SPAN = 0.08;
+        /** Slider ~25% shorter than a typical default (~24px → 18px; ECharts-style `height`). */
+        const CHARTGPU_SLIDER_H = 18;
+
+        // Align all rows to the same x span without xAxis.min/max: ChartGPU uses explicit min/max
+        // for value-axis *tick* domain, so zoom does not refresh tick labels. Instead, append an
+        // invisible two-point line at the exported global [xMin,xMax] so auto x-bounds match while
+        // ticks still derive from the visible zoom window (see createRenderCoordinator non-time branch).
+        let sharedXExtent = null;
+        {
+            const xrPanel = panels[0] && panels[0].x;
+            const xrFlat = payload.xRange;
+            if (xrPanel && Number.isFinite(xrPanel.min) && Number.isFinite(xrPanel.max) && xrPanel.max > xrPanel.min) {
+                sharedXExtent = { min: xrPanel.min, max: xrPanel.max };
+            } else if (
+                Array.isArray(xrFlat) &&
+                xrFlat.length >= 2 &&
+                Number.isFinite(xrFlat[0]) &&
+                Number.isFinite(xrFlat[1]) &&
+                xrFlat[1] > xrFlat[0]
+            ) {
+                sharedXExtent = { min: xrFlat[0], max: xrFlat[1] };
+            }
+        }
+
+        /** ChartGPU background grid: vertical line count (evenly spaced in plot; not axis ticks). */
+        const CHARTGPU_GRID_LINES_VERTICAL = 5;
+
+        const chartCreatePromises = [];
+        /** Full ChartGPU.create options per panel; setOption replaces the whole config (see chartgpu source). */
+        const chartUserOpts = [];
+        const ctx = pipelineCache ? { adapter, device, pipelineCache } : { adapter, device };
+        for (let i = 0; i < n; i++) {
+            const panel = panels[i];
+            const isBottom = i === n - 1;
+            let series = SequenceExplorer._normalizeChartGpuSeries(panel.series);
+            if (sharedXExtent) {
+                const yAnchor = SequenceExplorer._chartGpuYAnchorForExtentHelper(series);
+                series = SequenceExplorer._chartGpuWithSharedXExtentSeries(
+                    series,
+                    sharedXExtent.min,
+                    sharedXExtent.max,
+                    yAnchor,
+                );
+            }
+            const dataZoom = isBottom
+                ? [
+                      { type: 'inside', minSpan: ZOOM_MIN_SPAN },
+                      { type: 'slider', minSpan: ZOOM_MIN_SPAN, height: CHARTGPU_SLIDER_H },
+                  ]
+                : [{ type: 'inside', minSpan: ZOOM_MIN_SPAN }];
+            const xAxis = isBottom
+                ? { name: `t (${payload.timeUnit || ''})` }
+                : { tickFormatter: () => null, tickLength: 0 };
+            // ChartGPU defaults use top/bottom 40px each — with ~90px-tall panes the plot grid
+            // collapses (~12px). Tight margins + extra bottom on last row for x-axis + slider.
+            // Left margin ~20% wider than 50px; bottom margin trimmed slightly when slider is shorter.
+            const grid = isBottom
+                ? { left: 60, right: 6, top: 4, bottom: 50 }
+                : { left: 60, right: 6, top: 4, bottom: 4 };
+            const opts = {
+                theme,
+                animation: false,
+                legend: { show: false },
+                grid,
+                gridLines: { vertical: { count: CHARTGPU_GRID_LINES_VERTICAL } },
+                // Bottom chart: full x-axis title + ticks. Upper charts: no x tick labels (shared time axis).
+                xAxis,
+                yAxis: {
+                    name: panel.title || '',
+                    tickFormatter: SequenceExplorer._formatYTick3SigDigits,
+                },
+                dataZoom,
+                tooltip: { show: false },
+                series,
+            };
+            chartUserOpts.push(opts);
+            chartCreatePromises.push(ChartGPU.create(hosts[i], opts, ctx));
+        }
+        const charts = await Promise.all(chartCreatePromises);
+        this._seqChartGpuCharts = charts;
+
+        await new Promise((r) => requestAnimationFrame(r));
+        await new Promise((r) => requestAnimationFrame(r));
+        for (const c of charts) {
+            try {
+                c.resize();
+            } catch (e) {
+                /* ignore */
+            }
+        }
+
+        let disconnectCrosshair = null;
+        if (typeof connectCharts === 'function' && charts.length > 1) {
+            try {
+                disconnectCrosshair = connectCharts(charts, {
+                    syncCrosshair: true,
+                    syncZoom: false,
+                });
+            } catch (e) {
+                console.warn('connectCharts failed:', e);
+            }
+        }
+
+        const SEQ_ZOOM_SYNC = Symbol('seqExplorerChartGpuZoomLockstep');
+        const zoomUnsubs = [];
+        const broadcastZoomToAll = (start, end) => {
+            for (const c of charts) {
+                if (c.disposed) continue;
+                const cur = c.getZoomRange();
+                if (
+                    cur &&
+                    Math.abs(cur.start - start) < 1e-4 &&
+                    Math.abs(cur.end - end) < 1e-4
+                ) {
+                    continue;
+                }
+                try {
+                    c.setZoomRange(start, end, SEQ_ZOOM_SYNC);
+                } catch (e) {
+                    /* ignore */
+                }
+            }
+        };
+        const onZoomRangeChange = (payload) => {
+            if (payload.source === SEQ_ZOOM_SYNC) return;
+            if (payload.sourceKind === 'auto-scroll') return;
+            const start = Number(payload.start);
+            const end = Number(payload.end);
+            if (!Number.isFinite(start) || !Number.isFinite(end)) return;
+            broadcastZoomToAll(start, end);
+        };
+        for (const c of charts) {
+            c.on('zoomRangeChange', onZoomRangeChange);
+            zoomUnsubs.push(() => {
+                try {
+                    c.off('zoomRangeChange', onZoomRangeChange);
+                } catch (e) {
+                    /* ignore */
+                }
+            });
+        }
+        const anchor = charts[charts.length - 1] || charts[0];
+        const z0 = anchor?.getZoomRange?.();
+        if (z0 && charts.length > 0) {
+            broadcastZoomToAll(z0.start, z0.end);
+        }
+
+        // ChartGPU 0.3.x only pans x-zoom with Shift+left or middle button. Add plain left-drag pan
+        // after a small move threshold so tiny jitters do not start a pan.
+        const leftDragPanRemoves = [];
+        {
+            const DRAG_THRESHOLD = 5;
+            const panState = {
+                phase: 'idle',
+                chartIdx: 0,
+                startClientX: 0,
+                startClientY: 0,
+                lastClientX: 0,
+                pointerId: -1,
+                captureEl: null,
+                didPan: false,
+            };
+
+            const removeWindowPanListeners = () => {
+                window.removeEventListener('pointermove', onPanPointerMove);
+                window.removeEventListener('pointerup', stopLeftPan);
+                window.removeEventListener('pointercancel', stopLeftPan);
+            };
+
+            const applyPanDeltaPx = (rawD, chartIdx) => {
+                if (!Number.isFinite(rawD) || rawD === 0) return;
+                const anchorCh = charts[chartIdx] || charts[0];
+                if (!anchorCh || anchorCh.disposed) return;
+                const cnv = panState.captureEl;
+                if (!cnv) return;
+                const gr = chartUserOpts[chartIdx]?.grid || {};
+                const rect = cnv.getBoundingClientRect();
+                const plotW = rect.width - (gr.left || 0) - (gr.right || 0);
+                if (!(plotW > 0)) return;
+                const cur = anchorCh.getZoomRange();
+                if (!cur) return;
+                const span = cur.end - cur.start;
+                if (!Number.isFinite(span) || span <= 0) return;
+                const P = -(rawD / plotW) * span;
+                if (!Number.isFinite(P) || P === 0) return;
+                let ns = cur.start + P;
+                let ne = cur.end + P;
+                if (ns < 0) {
+                    ne -= ns;
+                    ns = 0;
+                }
+                if (ne > 100) {
+                    const over = ne - 100;
+                    ns -= over;
+                    ne = 100;
+                }
+                if (ns < 0) ns = 0;
+                if (ne <= ns) ne = Math.min(100, ns + span);
+                broadcastZoomToAll(ns, ne);
+            };
+
+            const stopLeftPan = () => {
+                if (panState.phase === 'active' && panState.captureEl && panState.pointerId >= 0) {
+                    try {
+                        panState.captureEl.releasePointerCapture(panState.pointerId);
+                    } catch (_) {
+                        /* ignore */
+                    }
+                }
+                removeWindowPanListeners();
+                panState.phase = 'idle';
+                panState.captureEl = null;
+                panState.pointerId = -1;
+                panState.didPan = false;
+            };
+
+            const onPanPointerMove = (ev) => {
+                if (panState.phase === 'idle' || ev.pointerId !== panState.pointerId) return;
+                if (panState.phase === 'pending') {
+                    const dx = ev.clientX - panState.startClientX;
+                    const dy = ev.clientY - panState.startClientY;
+                    if (dx * dx + dy * dy < DRAG_THRESHOLD * DRAG_THRESHOLD) return;
+                    panState.phase = 'active';
+                    try {
+                        panState.captureEl.setPointerCapture(ev.pointerId);
+                    } catch (_) {
+                        /* ignore */
+                    }
+                    ev.preventDefault();
+                    const catchUp = ev.clientX - panState.startClientX;
+                    panState.lastClientX = ev.clientX;
+                    applyPanDeltaPx(catchUp, panState.chartIdx);
+                    panState.didPan = true;
+                    return;
+                }
+                if (panState.phase === 'active') {
+                    const rawD = ev.clientX - panState.lastClientX;
+                    panState.lastClientX = ev.clientX;
+                    if (!Number.isFinite(rawD) || rawD === 0) return;
+                    ev.preventDefault();
+                    applyPanDeltaPx(rawD, panState.chartIdx);
+                    panState.didPan = true;
+                }
+            };
+
+            for (let i = 0; i < n; i++) {
+                const canvas = hosts[i].querySelector('canvas');
+                if (!canvas) continue;
+                const onDown = (ev) => {
+                    if (ev.button !== 0 || ev.shiftKey) return;
+                    const c = charts[i];
+                    if (!c || c.disposed) return;
+                    const ht = c.hitTest(ev);
+                    if (!ht.isInGrid) return;
+                    const gr = chartUserOpts[i]?.grid || {};
+                    const rect = canvas.getBoundingClientRect();
+                    const plotW = rect.width - (gr.left || 0) - (gr.right || 0);
+                    if (!(plotW > 0)) return;
+                    stopLeftPan();
+                    panState.phase = 'pending';
+                    panState.chartIdx = i;
+                    panState.startClientX = ev.clientX;
+                    panState.startClientY = ev.clientY;
+                    panState.lastClientX = ev.clientX;
+                    panState.pointerId = ev.pointerId;
+                    panState.captureEl = canvas;
+                    panState.didPan = false;
+                    window.addEventListener('pointermove', onPanPointerMove);
+                    window.addEventListener('pointerup', stopLeftPan);
+                    window.addEventListener('pointercancel', stopLeftPan);
+                };
+                canvas.addEventListener('pointerdown', onDown);
+                leftDragPanRemoves.push(() => canvas.removeEventListener('pointerdown', onDown));
+            }
+            leftDragPanRemoves.push(stopLeftPan);
+        }
+
+        this._seqChartGpuDisconnect = () => {
+            for (const fn of leftDragPanRemoves) {
+                try {
+                    fn();
+                } catch (e) {
+                    /* ignore */
+                }
+            }
+            if (disconnectCrosshair) {
+                try {
+                    disconnectCrosshair();
+                } catch (e) {
+                    /* ignore */
+                }
+            }
+            for (const u of zoomUnsubs) {
+                try {
+                    u();
+                } catch (e) {
+                    /* ignore */
+                }
+            }
+        };
     }
     
     renderConsole(target) {
@@ -694,9 +1239,19 @@ plt.rcParams['font.size'] = 8`;
         const dbgResult = debug ? '\n    print(f"PYTHON (popup): Result from execute_function: {result}")' : '';
         const dbgSeq = debug ? '\nprint(f"PYTHON (popup): Found sequence object: {seq is not None}")' : '';
         const dbgPatch = debug ? '\n    print("PYTHON (popup): Re-applying patches...")' : '';
-        const plotBlock = debug
+        const plotBlockChartgpu = debug
+            ? `if seq is not None:\n    print(f"PYTHON (popup): Calling seq.plot(plot_speed='chartgpu')")\n    plt.close('all')\n    seq.plot(plot_now=False, plot_speed="chartgpu")\n    print("PYTHON (popup): ChartGPU export done (no plt.show)")\nelse:\n    print("PYTHON ERROR (popup): No sequence found")`
+            : `if seq is not None:\n    if not ${silent ? 'True' : 'False'}:\n        plt.close('all')\n        seq.plot(plot_now=False, plot_speed="chartgpu")\n    else:\n        print("Sequence generated (silent mode)")\nelse:\n    print("No sequence found")`;
+
+        const plotBlockMpl = debug
             ? `if seq is not None:\n    print(f"PYTHON (popup): Calling seq.plot(plot_speed='${plotSpeed}')")\n    plt.close('all')\n    seq.plot(plot_now=False, plot_speed="${plotSpeed}")\n    print("PYTHON (popup): Plot command finished, calling plt.show()")\n    plt.show()\n    print("PYTHON (popup): plt.show() returned")\nelse:\n    print("PYTHON ERROR (popup): No sequence found")`
             : `if seq is not None:\n    if not ${silent ? 'True' : 'False'}:\n        plt.close('all')\n        seq.plot(plot_now=False, plot_speed="${plotSpeed}")\n        plt.show()\n    else:\n        print("Sequence generated (silent mode)")\nelse:\n    print("No sequence found")`;
+
+        const plotBlock = plotSpeed === 'chartgpu' ? plotBlockChartgpu : plotBlockMpl;
+
+        const chartgpuClearPy = plotSpeed === 'chartgpu'
+            ? 'import __main__\nsetattr(__main__, \'_chartgpu_last_payload\', None)\n'
+            : '';
 
         return `
 import json
@@ -709,6 +1264,7 @@ ${dbgStart}# Configure matplotlib
 plt.close('all')
 plt.ion()
 ${themeCode}
+${chartgpuClearPy}
 
 _orig_plot, _orig_show = pp.Sequence.plot, plt.show
 pp.Sequence.plot = plt.show = lambda *args, **kwargs: None
@@ -2559,6 +3115,7 @@ json.dumps(_result)
             
             // Clear the container
             if (plotContainer) {
+                await this.disposeSeqChartGpu();
                 plotContainer.innerHTML = '';
             }
             
@@ -2577,7 +3134,7 @@ json.dumps(_result)
             
             // Get plot speed
             const plotSpeedSelector = plotRoot.querySelector('#seq-plot-speed-selector');
-            const plotSpeed = plotSpeedSelector ? plotSpeedSelector.value : 'faster';
+            const plotSpeed = plotSpeedSelector ? plotSpeedSelector.value : SEQ_DEFAULT_PLOT_SPEED;
             
             // Get theme code
             const themeCode = this.getMatplotlibThemeCode();
@@ -2631,7 +3188,11 @@ json.dumps(_result)
 
             // Parse result (SourceManager returns JSON string)
             const resultObj = JSON.parse(result);
-            
+
+            if (plotSpeed === 'chartgpu' && !silent && plotContainer) {
+                await this.renderSeqChartGpuAfterPlot(plotRoot, pyodide, plotContainer);
+            }
+
             // Final sweep for any matplotlib figures that might have been created outside our container
             setTimeout(() => {
                 // Re-query the container since it may have been recreated
@@ -2910,7 +3471,8 @@ json.dumps(out)
         const closeBtn = document.createElement('button');
         closeBtn.className = 'btn btn-secondary btn-md';
         closeBtn.textContent = 'Close';
-        closeBtn.onclick = () => {
+        closeBtn.onclick = async () => {
+            await this.disposeSeqChartGpu();
             // Clean up matplotlib target
             const plotOutput = plotRoot ? plotRoot.querySelector('#seq-plot-output') : null;
             if (plotOutput) {
@@ -2950,8 +3512,9 @@ json.dumps(out)
         document.body.appendChild(modal);
         
         // Close modal when clicking outside
-        modal.addEventListener('click', (e) => {
+        modal.addEventListener('click', async (e) => {
             if (e.target === modal) {
+                await this.disposeSeqChartGpu();
                 const plotOutput = plotRoot ? plotRoot.querySelector('#seq-plot-output') : null;
                 if (plotOutput) {
                     document.pyodideMplTarget = plotOutput;
@@ -2969,7 +3532,7 @@ json.dumps(out)
             const pyodide = this.config.pyodide;
             const argsDict = {};
             const plotSpeedSelector = plotRoot ? plotRoot.querySelector('#seq-plot-speed-selector') : null;
-            const plotSpeed = plotSpeedSelector?.value || 'faster';
+            const plotSpeed = plotSpeedSelector?.value || SEQ_DEFAULT_PLOT_SPEED;
             const darkPlotCheckbox = plotRoot ? plotRoot.querySelector('#seq-dark-plot-checkbox') : null;
             const darkPlot = darkPlotCheckbox?.checked ?? true;
             
@@ -3030,8 +3593,13 @@ plt.rcParams['font.size'] = 8`;
                 throw new Error('Sequence has no module path; cannot execute.');
             }
             const modulePath = source.fullModulePath || source.module || source.path;
-            const script = this.buildExecuteScript({ modulePath, functionName, argsDict, silent, themeCode, plotSpeed, debug: true });
+            const script = this.buildExecuteScript({ modulePath, functionName, argsDict, silent: false, themeCode, plotSpeed, debug: true });
             const result = await pyodide.runPythonAsync(script);
+
+            if (plotSpeed === 'chartgpu') {
+                mplTarget.innerHTML = '';
+                await this.renderSeqChartGpuAfterPlot(plotRoot, pyodide, mplTarget);
+            }
 
             // Final sweep for any matplotlib figures
             setTimeout(() => {

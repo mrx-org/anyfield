@@ -14,6 +14,12 @@ This application uses the following open-source software. We are grateful to the
 - **URL:** https://pyodide.org
 - **License:** [Mozilla Public License 2.0 (MPL-2.0)](https://www.mozilla.org/en-US/MPL/2.0/)
 
+### ChartGPU
+- **Description:** WebGPU-accelerated charting; default renderer for MRI sequence waveform panels (RF, gradients, ADC) in the sequence explorer.
+- **Version:** 0.3.2 (ES module from esm.sh, see `pypulseq/seq_explorer.js`)
+- **URL:** https://github.com/ChartGPU/ChartGPU
+- **License:** [MIT](https://github.com/ChartGPU/ChartGPU/blob/main/LICENSE)
+
 ### Niivue
 - **Description:** Web-based 3D / 4D NIfTI viewer.
 - **Version:** 0.65.0

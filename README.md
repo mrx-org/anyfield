@@ -1,6 +1,6 @@
 # Niivue minimal app (zero-install)
 
-**Version:** `v0.2.1`
+**Version:** `v0.2.2`
 
 This is a **minimal Niivue viewer** implemented as a single `viewer.html` file.
 
@@ -62,6 +62,10 @@ If no deep link is given, the app starts with the built-in Pulseq interpreter se
 For more insights see insights SPEC_no_field.md
 
 ## Release notes
+
+**v0.2.2**
+- **ChartGPU** as the default sequence waveform plot (WebGPU); Matplotlib modes remain in the plot-speed selector.
+- Shared x-axis alignment across stacked panels without freezing zoom ticks (invisible extent helper); lockstep zoom, crosshair sync, and custom left-drag pan in the sequence explorer.
 
 **v0.2.1**
 - faster startup and loading flow
