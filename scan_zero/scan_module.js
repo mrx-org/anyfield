@@ -1116,6 +1116,11 @@ except Exception as e:
                             }
                         } catch (e) {
                             console.error('viewSeq plot failed:', e);
+                            try {
+                                await explorer.disposeSeqChartGpu();
+                            } catch (_) {
+                                /* ignore */
+                            }
                         }
                     })();
                 }

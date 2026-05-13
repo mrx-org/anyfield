@@ -7,7 +7,7 @@ In-browser Python environment for executing PyPulseq scripts and visualizing MRI
 - **Execution**: Pyodide-powered Python runtime for local sequence generation.
 - **Silent Execution**: Support for background sequence generation (without mode switching or plotting) for simulation workflows.
 - **Dynamic UI**: Automatic generation of input controls from Python function signatures.
-- **Plotting**: Default **ChartGPU** WebGPU stack for RF / gradients / ADC waveforms (`plot_speed='chartgpu'`); Matplotlib modes remain via selector (`full` / `fast` / `faster`, see §8).
+- **Plotting**: Default **ChartGPU** WebGPU stack for RF / gradients / ADC waveforms (`plot_speed='chartgpu'`); Matplotlib modes remain via selector (`full` / `fast` / `faster`). **Details:** [SPEC_seq_plot.md](SPEC_seq_plot.md).
 - **Integration**: Synchronizes internal sequence parameters with scanner FOV events and emits `sequenceSelected` for other modules.
 - **Editor**: Built-in CodeMirror instance for live sequence logic modification.
 
@@ -188,11 +188,9 @@ Protocol files are generated with:
 
 ### 8. ChartGPU plot mode (`plot_speed='chartgpu'`, **default** in UI + `seq_plot` default)
 
-- **Python:** `pypulseq/seq_plot_utils.py` — payload via `build_chartgpu_payload` / `get_chartgpu_payload_json()` after `seq.plot(..., plot_speed='chartgpu')` (no `plt.show()` for that path).
-- **JS/CSS:** `pypulseq/seq_explorer.js` (`renderSeqChartGpuAfterPlot`, dispose, execute-script branch), `pypulseq/seq_explorer.css` (`.seq-chartgpu-*`). Dynamic import URL and ChartGPU version are pinned in JS.
-- **Behavior (short):** WebGPU required; six stacked charts; `connectCharts` crosshair sync + lockstep x-zoom; plain left-drag pan (move threshold); tooltips off; shared x span uses an invisible extent line (`__seqXExtent__`) so value-axis ticks still follow zoom (see comments there — explicit `xAxis.min`/`max` pins tick domain in ChartGPU).
+**Full specification:** [SPEC_seq_plot.md](SPEC_seq_plot.md) (Python `seq_plot_utils.py`, JS module `seq_plot.js`, CSS, zoom/pan/sync, pinned ChartGPU version, failure modes, Scan Module notes).
 
-**ChartGPU upstream docs (for the next agent):** repo [ChartGPU/ChartGPU](https://github.com/ChartGPU/ChartGPU) — especially [`docs/api/options.md`](https://github.com/ChartGPU/ChartGPU/blob/main/docs/api/options.md), [`docs/api/chart.md`](https://github.com/ChartGPU/ChartGPU/blob/main/docs/api/chart.md), [`docs/api/interaction.md`](https://github.com/ChartGPU/ChartGPU/blob/main/docs/api/interaction.md), [`docs/api/annotations.md`](https://github.com/ChartGPU/ChartGPU/blob/main/docs/api/annotations.md); guides under [`docs/guides/`](https://github.com/ChartGPU/ChartGPU/tree/main/docs/guides).
+**One-line summary:** Python exports a JSON payload after `seq.plot(..., plot_speed='chartgpu')`; `seq_plot.js` loads ChartGPU over WebGPU, renders six stacked panels, syncs zoom/crosshair, and tears down via `disposeSeqChartGpuHost`; Matplotlib modes remain for other `plot_speed` values.
 
 ---
 

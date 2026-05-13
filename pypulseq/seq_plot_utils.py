@@ -1,5 +1,7 @@
+import base64
 import json
 import math
+
 import numpy as np
 import matplotlib.pyplot as plt
 import matplotlib.collections as mcollections
@@ -209,6 +211,18 @@ def _segments_to_line_series(segments, color: str, width: float = 1.0):
     return series
 
 
+def _encode_xy_interleaved_f32_b64(xy: np.ndarray) -> str:
+    """Little-endian float32 x,y,x,y… as base64 (compact ChartGPU bridge; avoids huge JSON nested lists)."""
+    a = np.asarray(xy, dtype=np.float64)
+    if a.ndim == 2 and a.shape[1] == 2:
+        flat = a.astype(np.float32, copy=False).ravel()
+    elif a.ndim == 1:
+        flat = a.astype(np.float32, copy=False)
+    else:
+        flat = np.reshape(a, (-1, 2)).astype(np.float32, copy=False).ravel()
+    return base64.b64encode(flat.tobytes()).decode('ascii')
+
+
 # Matplotlib default tab10 (CSS hex) — matches ``plot_speed='fast'`` where each ``plot()`` advances the cycle.
 _MPL_TAB10 = [
     '#1f77b4',
@@ -222,6 +236,26 @@ _MPL_TAB10 = [
     '#bcbd22',
     '#17becf',
 ]
+
+
+def _segments_to_line_series_tab10_chartgpu(segments, line_width: float = 0.6):
+    """One ChartGPU line per segment (tab10 by segment index); interleaved f32 via xyBase64 (no cross-segment merge)."""
+    series = []
+    for i, seg in enumerate(segments):
+        if seg is None or len(seg) == 0:
+            continue
+        c = _MPL_TAB10[i % len(_MPL_TAB10)]
+        arr = np.asarray(seg, dtype=np.float64)
+        if arr.ndim != 2 or arr.shape[1] < 2:
+            continue
+        series.append(
+            {
+                'type': 'line',
+                'xyBase64': _encode_xy_interleaved_f32_b64(arr[:, :2]),
+                'style': {'color': c, 'lineWidth': line_width},
+            }
+        )
+    return series
 
 
 def _segments_to_line_series_tab10(segments, line_width: float = 0.6):
@@ -250,10 +284,18 @@ def build_chartgpu_payload(data, is_dark: bool):
     x0, x1 = data['disp_range']
     common_x = {'min': x0, 'max': x1}
 
-    adc_scatter = []
+    adc_series = []
     if data['adc_times']:
         all_adc_t = np.concatenate(data['adc_times'])
-        adc_scatter = [[float(t), 0.0] for t in all_adc_t]
+        adc_xy = np.column_stack([all_adc_t, np.zeros_like(all_adc_t)]).astype(np.float64, copy=False)
+        adc_series.append(
+            {
+                'type': 'scatter',
+                'xyBase64': _encode_xy_interleaved_f32_b64(adc_xy),
+                'style': {'color': adc_red},
+                'symbolSize': 2,
+            }
+        )
 
     adc_label_series = []
     if data['label_points'] and data['label_legend_to_plot']:
@@ -268,25 +310,28 @@ def build_chartgpu_payload(data, is_dark: bool):
             if pts:
                 rgba = np.asarray(label_colors[label_idx]).ravel()
                 lbl_color = mcolors.to_hex(rgba[:3])
+                xy = np.asarray(pts, dtype=np.float64)
                 adc_label_series.append(
-                    {'type': 'scatter', 'data': pts, 'style': {'color': lbl_color}, 'symbolSize': 1.5}
+                    {
+                        'type': 'scatter',
+                        'xyBase64': _encode_xy_interleaved_f32_b64(xy),
+                        'style': {'color': lbl_color},
+                        'symbolSize': 1.5,
+                    }
                 )
 
-    adc_series = _segments_to_line_series([], adc_red, lw)
-    if adc_scatter:
-        adc_series.append({'type': 'scatter', 'data': adc_scatter, 'style': {'color': adc_red}, 'symbolSize': 2})
     adc_series.extend(adc_label_series)
 
-    rf_mag_series = _segments_to_line_series_tab10(data['rf_mag_segments'], lw)
+    rf_mag_series = _segments_to_line_series_tab10_chartgpu(data['rf_mag_segments'], lw)
 
-    rf_phase_series = _segments_to_line_series_tab10(data['rf_phase_segments'], lw)
+    rf_phase_series = _segments_to_line_series_tab10_chartgpu(data['rf_phase_segments'], lw)
     if data['adc_phases']:
         all_t = np.concatenate([t for t, _ in data['adc_phases']])
         all_p = np.concatenate([p for _, p in data['adc_phases']])
         rf_phase_series.append(
             {
                 'type': 'scatter',
-                'data': np.column_stack([all_t, all_p]).tolist(),
+                'xyBase64': _encode_xy_interleaved_f32_b64(np.column_stack([all_t, all_p]).astype(np.float64, copy=False)),
                 'style': {'color': phase_marker},
                 'symbolSize': 0.85,
             }
@@ -295,7 +340,11 @@ def build_chartgpu_payload(data, is_dark: bool):
         rf_phase_series.append(
             {
                 'type': 'scatter',
-                'data': np.column_stack([np.asarray(data['rf_phase_center_times']), np.asarray(data['rf_phase_center_vals'])]).tolist(),
+                'xyBase64': _encode_xy_interleaved_f32_b64(
+                    np.column_stack(
+                        [np.asarray(data['rf_phase_center_times'], dtype=np.float64), np.asarray(data['rf_phase_center_vals'], dtype=np.float64)]
+                    )
+                ),
                 'style': {'color': phase_marker},
                 'symbolSize': 2.25,
             }
@@ -307,14 +356,18 @@ def build_chartgpu_payload(data, is_dark: bool):
         grad_panels.append(
             {
                 'title': f'G{grad_plot_labels[x]} ({data["grad_disp"]})',
-                'series': _segments_to_line_series_tab10(data['grad_segments'][x], lw),
+                'series': _segments_to_line_series_tab10_chartgpu(data['grad_segments'][x], lw),
                 'x': common_x,
             }
         )
 
-    placeholder = {'type': 'line', 'data': [[x0, 0.0], [x1, 0.0]], 'style': {'color': '#7f7f7f', 'lineWidth': 0.5}}
+    placeholder = {
+        'type': 'line',
+        'xyBase64': _encode_xy_interleaved_f32_b64(np.array([[x0, 0.0], [x1, 0.0]], dtype=np.float64)),
+        'style': {'color': '#7f7f7f', 'lineWidth': 0.5},
+    }
     return {
-        'version': 1,
+        'version': 3,
         'isDark': is_dark,
         'timeUnit': data['time_disp'],
         'gradUnit': data['grad_disp'],
@@ -335,6 +388,13 @@ def get_chartgpu_payload_json():
     if p is None:
         return 'null'
     return json.dumps(p)
+
+
+def clear_chartgpu_payload():
+    """Drop exported payload on the Python side after the browser has consumed it (lower Pyodide heap)."""
+    import __main__
+
+    setattr(__main__, '_chartgpu_last_payload', None)
 
 
 def seq_plot(

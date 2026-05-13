@@ -496,7 +496,7 @@ await micropip.install('pypulseq==1.4.2.post2', deps=False)
                 });
                 explorer.renderTree('seq-tree-container');
                 explorer.renderParams('seq-params-container');
-                explorer.renderPlot('seq-plot-container');
+                await explorer.renderPlot('seq-plot-container');
 
                 const scanModule = new ScanModule();
                 scanModule.render('scan-module-container');
