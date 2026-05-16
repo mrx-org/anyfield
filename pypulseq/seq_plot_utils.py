@@ -397,6 +397,181 @@ def clear_chartgpu_payload():
     setattr(__main__, '_chartgpu_last_payload', None)
 
 
+def _patch_calculate_kspace():
+    """Monkey-patch Sequence.calculate_kspace to stash per-column times on seq._t_ktraj."""
+    import pypulseq
+    from pypulseq import eps as _eps
+
+    if getattr(pypulseq.Sequence, '_kspace_t_patch_done', False):
+        return
+
+    _orig = pypulseq.Sequence.calculate_kspace
+
+    def _patched(self, trajectory_delay=0, gradient_offset=0):
+        result = _orig(self, trajectory_delay, gradient_offset)
+
+        total_duration = sum(self.block_durations.values())
+        t_excitation, _fp_excitation, t_refocusing, _ = self.rf_times()
+        t_adc, _ = self.adc_times()
+        gw_pp = self.get_gradients(trajectory_delay, gradient_offset)
+        ng = len(gw_pp)
+
+        tc = []
+        for i in range(ng):
+            if gw_pp[i] is None:
+                continue
+            gm = gw_pp[i].antiderivative()
+            tc.append(gm.x)
+            ii = np.flatnonzero(np.abs(gm.c[0, :]) > 1e-7 * self.system.max_slew)
+            if ii.shape[0] == 0:
+                continue
+            starts = np.int64(np.floor((gm.x[ii] + _eps) / self.grad_raster_time))
+            ends = np.int64(np.ceil((gm.x[ii + 1] - _eps) / self.grad_raster_time))
+            lengths = ends - starts + 1
+            inds = np.ones((lengths).sum())
+            start_inds = np.cumsum(np.concatenate(([0], lengths[:-1])))
+            inds[start_inds] = np.concatenate(([starts[0]], np.diff(starts) - lengths[:-1] + 1))
+            tc.append(np.cumsum(inds) * self.grad_raster_time)
+        if tc != []:
+            tc = np.concatenate(tc)
+
+        t_acc = 1e-10
+        t_acc_inv = 1 / t_acc
+        t_ktraj = t_acc * np.unique(
+            np.round(
+                t_acc_inv
+                * np.array(
+                    [
+                        *tc,
+                        0,
+                        *np.asarray(t_excitation) - 2 * self.rf_raster_time,
+                        *np.asarray(t_excitation) - self.rf_raster_time,
+                        *t_excitation,
+                        *np.asarray(t_refocusing) - self.rf_raster_time,
+                        *t_refocusing,
+                        *t_adc,
+                        total_duration,
+                    ]
+                )
+            )
+        )
+        self._t_ktraj = t_ktraj
+        return result
+
+    pypulseq.Sequence.calculate_kspace = _patched
+    pypulseq.Sequence._kspace_t_patch_done = True
+
+
+def ensure_kspace_cache(seq, time_range=(0, np.inf)):
+    """Build __main__._kspace_cache after calculate_kspace (requires _patch_calculate_kspace)."""
+    import __main__
+
+    k_traj_adc, k_traj, _, _, t_adc = seq.calculate_kspace()
+    k_traj = np.asarray(k_traj)
+    n = int(k_traj.shape[1]) if k_traj.ndim >= 2 else 0
+    t_ktraj = np.asarray(getattr(seq, '_t_ktraj', np.zeros(0)), dtype=np.float64)
+    n_t = int(t_ktraj.size)
+    len_mismatch_fixed = False
+    if n > 0 and n_t != n:
+        len_mismatch_fixed = True
+        total_dur = float(sum(seq.block_durations.values()))
+        t_ktraj = np.linspace(0.0, total_dur, n, dtype=np.float64)
+    kx_g = np.asarray(k_traj[0, :], dtype=np.float64) if n > 0 and k_traj.shape[0] >= 1 else np.zeros(0)
+    ky_g = np.asarray(k_traj[1, :], dtype=np.float64) if n > 0 and k_traj.shape[0] >= 2 else np.zeros(0)
+    kz_g = np.asarray(k_traj[2, :], dtype=np.float64) if n > 0 and k_traj.shape[0] >= 3 else np.zeros(n, dtype=np.float64)
+    ta = None
+    kx_a = ky_a = kz_a = None
+    if t_adc is not None:
+        ta = np.asarray(t_adc, dtype=np.float64).ravel()
+        if k_traj_adc is not None:
+            k_traj_adc = np.asarray(k_traj_adc)
+            if k_traj_adc.ndim >= 2 and k_traj_adc.shape[1] > 0:
+                m = min(ta.size, int(k_traj_adc.shape[1]))
+                ta = ta[:m]
+                kx_a = np.asarray(k_traj_adc[0, :m], dtype=np.float64)
+                if k_traj_adc.shape[0] >= 2:
+                    ky_a = np.asarray(k_traj_adc[1, :m], dtype=np.float64)
+                if k_traj_adc.shape[0] >= 3:
+                    kz_a = np.asarray(k_traj_adc[2, :m], dtype=np.float64)
+    if kz_a is None:
+        kz_a = np.zeros_like(kx_a) if kx_a is not None else None
+    total_duration = float(sum(seq.block_durations.values()))
+    data = collect_seq_waveform_data(seq, str(), time_range, 's', 'kHz/m', 100)
+    disp_lo, disp_hi = data['disp_range']
+    __main__._kspace_cache = {
+        't_ktraj': t_ktraj,
+        'kx_grad': kx_g,
+        'ky_grad': ky_g,
+        'kz_grad': kz_g,
+        't_adc': ta,
+        'kx_adc': kx_a,
+        'ky_adc': ky_a,
+        'kz_adc': kz_a,
+        'total_duration_s': total_duration,
+        'disp_range_s': [float(disp_lo), float(disp_hi)],
+        't_ktraj_len_mismatch_fixed': len_mismatch_fixed,
+        'k_traj_shape': list(k_traj.shape) if k_traj.size else [],
+    }
+
+
+def _tolist_json_safe(arr):
+    """JSON cannot encode NaN/Inf; use null so JS can skip with Number.isFinite."""
+    a = np.asarray(arr, dtype=np.float64).ravel()
+    return [float(x) if np.isfinite(x) else None for x in a]
+
+
+def export_kspace_cache_json():
+    """Export k-space cache to plain JSON lists for JS time-window filtering."""
+    import __main__
+
+    c = getattr(__main__, '_kspace_cache', None)
+    if c is None:
+        return json.dumps({'error': 'no _kspace_cache'})
+    ta = c.get('t_adc')
+    kx_a = c.get('kx_adc')
+    ky_a = c.get('ky_adc')
+    kz_a = c.get('kz_adc')
+    if ta is None:
+        ta = np.zeros(0, dtype=np.float64)
+    else:
+        ta = np.asarray(ta, dtype=np.float64).ravel()
+    kx_a = np.asarray(kx_a, dtype=np.float64).ravel() if kx_a is not None else np.zeros(0, dtype=np.float64)
+    ky_a = np.asarray(ky_a, dtype=np.float64).ravel() if ky_a is not None else np.zeros(0, dtype=np.float64)
+    kz_a = np.asarray(kz_a, dtype=np.float64).ravel() if kz_a is not None else np.zeros(0, dtype=np.float64)
+    m = int(min(ta.size, kx_a.size, ky_a.size))
+    ta, kx_a, ky_a = ta[:m], kx_a[:m], ky_a[:m]
+    kz_a = kz_a[:m] if kz_a.size >= m else np.zeros(m, dtype=np.float64)
+    t_g = np.asarray(c['t_ktraj'], dtype=np.float64)
+    kx_g = np.asarray(c['kx_grad'], dtype=np.float64)
+    ky_g = np.asarray(c['ky_grad'], dtype=np.float64)
+    kz_g = np.asarray(c.get('kz_grad', np.zeros_like(kx_g)), dtype=np.float64)
+    return json.dumps(
+        {
+            'meta': {
+                'total_duration_s': c.get('total_duration_s'),
+                'disp_range_s': c.get('disp_range_s'),
+                'k_traj_shape': c.get('k_traj_shape'),
+                'n_adc': m,
+                'n_traj': int(t_g.size),
+            },
+            't_adc': _tolist_json_safe(ta),
+            'kx_adc': _tolist_json_safe(kx_a),
+            'ky_adc': _tolist_json_safe(ky_a),
+            'kz_adc': _tolist_json_safe(kz_a),
+            't_ktraj': _tolist_json_safe(t_g),
+            'kx_grad': _tolist_json_safe(kx_g),
+            'ky_grad': _tolist_json_safe(ky_g),
+            'kz_grad': _tolist_json_safe(kz_g),
+        }
+    )
+
+
+def clear_kspace_cache():
+    import __main__
+
+    setattr(__main__, '_kspace_cache', None)
+
+
 def seq_plot(
     self,
     label: str = str(),
@@ -428,7 +603,7 @@ def seq_plot(
         phase_color = 'yellow' if is_dark else 'black'
         grad_colors = ['#ffb3d9', '#99ccff', '#99ff99'] if is_dark else ['#ff69b4', '#0000ff', '#00ff00']
     elif plot_speed == 'chartgpu':
-        max_points_per_block = 100
+        max_points_per_block = 10000000
         print('PYTHON: Exporting sequence waveforms for ChartGPU (no matplotlib figure)')
         rf_color = phase_color = None
         grad_colors = [None, None, None]
@@ -583,5 +758,7 @@ def patch_pypulseq():
             pp.Sequence.plot = seq_plot
     except Exception:
         pass
+
+    _patch_calculate_kspace()
 
     print('Optimized seq_plot patched into Sequence.plot()')

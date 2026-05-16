@@ -598,8 +598,55 @@ body {
     font-size: 14px;
 }
 
+/* Lab shell: plot fills the main row; options sit below the fold — scroll #slot-main to reach them */
+#slot-main.scrollable > #seq-plot-container.seq-explorer {
+    display: flex;
+    flex-direction: column;
+    min-height: 100%;
+    box-sizing: border-box;
+}
+
+#slot-main.scrollable > #seq-plot-container > #seq-plot-output.seq-plot-container {
+    flex: 0 0 auto;
+    min-height: calc(100vh - 36px - 320px) !important;
+    height: calc(100vh - 36px - 320px);
+    max-height: none;
+    margin-bottom: 0;
+    overflow: hidden;
+    display: flex;
+    flex-direction: column;
+    box-sizing: border-box;
+}
+
+#slot-main.scrollable > #seq-plot-container > .seq-plot-options-row {
+    flex-shrink: 0;
+}
+
+#slot-main.scrollable > #seq-plot-container #seq-mpl-actual-target {
+    flex: 1 1 auto;
+    min-height: 0;
+    height: 100%;
+    display: flex;
+    flex-direction: column;
+}
+
+#seq-plot-container .seq-plot-with-kspace,
+#seq-plot-container .mpl-figure-container > .seq-plot-with-kspace,
+#seq-plot-container #seq-mpl-actual-target:has(> .seq-chartgpu-stack),
+#seq-plot-container #seq-mpl-actual-target:has(> .seq-plot-with-kspace) {
+    min-height: 0 !important;
+}
+
+#seq-plot-container .seq-kspace-panel {
+    flex: 1 1 0;
+    min-height: 72px;
+    max-height: none;
+    aspect-ratio: unset;
+}
+
 /* When ChartGPU is active, stretch the matplotlib mount so six rows can share height */
-#seq-plot-output .mpl-figure-container:has(.seq-chartgpu-stack) {
+#seq-plot-output .mpl-figure-container:has(.seq-chartgpu-stack),
+#seq-plot-output .mpl-figure-container:has(.seq-plot-with-kspace) {
     display: flex;
     flex-direction: column;
     flex: 1 1 auto;
@@ -647,8 +694,105 @@ body {
     height: 100%;
 }
 
+/* Waveforms + optional k-space column (ChartGPU, checkbox on) */
+.seq-plot-with-kspace {
+    display: flex;
+    flex-direction: row;
+    flex-wrap: nowrap;
+    gap: 0.75rem;
+    align-items: stretch;
+    width: 100%;
+    min-height: min(70vh, 560px);
+    flex: 1 1 auto;
+}
+
+.seq-plot-col-waveforms {
+    flex: 2 1 0;
+    min-width: 0;
+    display: flex;
+    flex-direction: column;
+    min-height: 0;
+}
+
+.seq-plot-col-kspace {
+    flex: 1 1 0;
+    min-width: 200px;
+    max-width: 42%;
+    display: flex;
+    flex-direction: column;
+    gap: 0.35rem;
+    min-height: 0;
+}
+
+.seq-plot-time-range {
+    display: inline-flex;
+    align-items: center;
+    gap: 0.35rem;
+    font-size: 0.75rem;
+    color: var(--muted);
+}
+
+.seq-plot-time-range-label {
+    white-space: nowrap;
+}
+
+.seq-plot-time-input {
+    width: 4.25rem;
+    padding: 0.2rem 0.35rem;
+    font-size: 0.75rem;
+    color: var(--text);
+    background: rgba(255, 255, 255, 0.08);
+    border: 1px solid var(--border);
+    border-radius: 4px;
+}
+
+.seq-kspace-panel {
+    flex: 0 0 auto;
+    width: 100%;
+    aspect-ratio: 1;
+    max-height: min(38vh, 380px);
+    min-height: 140px;
+    border: 1px solid var(--border);
+    border-radius: 6px;
+    background: var(--bg-elevated, #0f1424);
+    overflow: hidden;
+    touch-action: none;
+    overscroll-behavior: contain;
+}
+
+#seq-plot-output .seq-kspace-panel > canvas {
+    width: 100% !important;
+    height: 100% !important;
+    display: block !important;
+}
+
+.mpl-figure-container > .seq-plot-with-kspace {
+    border: none !important;
+    box-shadow: none !important;
+    background: transparent !important;
+    padding: 0 !important;
+    margin: 0 !important;
+    width: 100% !important;
+    max-width: 100% !important;
+    display: flex !important;
+    flex: 1 1 auto !important;
+    min-height: min(70vh, 560px) !important;
+}
+
+@media (max-width: 960px) {
+    .seq-plot-with-kspace {
+        flex-wrap: wrap;
+    }
+    .seq-plot-col-waveforms,
+    .seq-plot-col-kspace {
+        flex: 1 1 100%;
+        max-width: 100%;
+    }
+}
+
 /* Let the plot column grow so ChartGPU rows can use vertical space (not fixed 92px panes). */
-#seq-mpl-actual-target:has(> .seq-chartgpu-stack) {
+#seq-mpl-actual-target:has(> .seq-chartgpu-stack),
+#seq-mpl-actual-target:has(> .seq-plot-with-kspace) {
     display: flex;
     flex-direction: column;
     flex: 1 1 auto;
@@ -670,10 +814,10 @@ body {
     align-items: stretch;
 }
 
-/* Bottom row: x-axis + slider; flex share bumped ~40% vs 1.885 for a taller sixth row */
+/* Bottom row: x-axis + slider (shorter flex share → ~50% less row height vs prior 2.639) */
 .seq-chartgpu-panel:last-child {
-    flex: 2.639 1 0;
-    min-height: 182px;
+    flex: 1.32 1 0;
+    min-height: 91px;
 }
 
 /* ChartGPU mounts the canvas first; fill pane (override #seq-plot-output canvas height:auto) */
@@ -736,7 +880,7 @@ body {
  * Exclude ChartGPU subtree: ChartGPU relies on pointer-events on internal layers;
  * forcing `auto` on every node breaks wheel / drag / slider.
  */
-#seq-plot-output *:not(.seq-chartgpu-stack):not(.seq-chartgpu-stack *) {
+#seq-plot-output *:not(.seq-chartgpu-stack):not(.seq-chartgpu-stack *):not(.seq-plot-with-kspace):not(.seq-plot-with-kspace *) {
     visibility: visible !important;
     pointer-events: auto !important;
 }

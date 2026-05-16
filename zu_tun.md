@@ -16,6 +16,8 @@
    4) if phantom is missing locally, show warning + keep geometry restore (graceful fallback).
 
 
+-- in seq_plot .py/.js is a "monkey patch" of seq.calculate_kspace as PyPulseq’s Sequence.calculate_kspace() returns k-trajectory values but, in the public API you use, it does not reliably expose a per-column time array aligned with k_traj. This shoudl be remobved once pypulseq fixes it online.
+
 
 -- speedup at startup: prebundle Pyodide (custom build or pre-built wheels for pypulseq/nibabel). [burden is high because you need a reproducible build pipeline, wheel compatibility checks for Pyodide/Python versions, larger artifact management, and ongoing maintenance whenever Pyodide or deps update.] (benefit: ++, burden: +++)
 -- add a Service Worker for caching Pyodide/WASM/assets on repeat visits. [watchouts: stale cache + dev confusion; use versioned cache names, network-first for HTML, cache-first for immutable wasm/wheels, and an easy dev bypass.] (benefit: +++, burden: ++)

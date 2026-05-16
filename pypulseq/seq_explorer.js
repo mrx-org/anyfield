@@ -16,12 +16,20 @@ import {
     buildSeqPlotExecuteFragments,
     disposeSeqChartGpuHost,
     releaseChartgpuPythonPayload,
+    releaseKspaceCache,
     renderSeqChartGpuAfterPlot as mountChartGpuSequencePlot,
 } from "./seq_plot.js";
 
 /**
  * HTML template builders for sequence explorer UI (single file, no extra modules). */
 const SEQ_TEMPLATES = {
+    plotTimeRangeControls() {
+        return `<span class="seq-plot-time-range" title="seq.plot time_range (display time units, usually seconds)">
+                <span class="seq-plot-time-range-label">time_range</span>
+                <input type="number" id="seq-plot-time-start" class="seq-plot-time-input" value="0" step="any" aria-label="time range start" />
+                <input type="number" id="seq-plot-time-stop" class="seq-plot-time-input" value="100" step="any" aria-label="time range stop" />
+            </span>`;
+    },
     showConsoleCheckbox() {
         return `<label style="display: flex; align-items: center; cursor: pointer; font-size: 0.875rem; color: var(--text); margin-left: auto;">
                 <input type="checkbox" id="seq-show-console-checkbox" style="margin-right: 0.5rem; cursor: pointer; width: 1rem; height: 1rem;">
@@ -61,6 +69,11 @@ const SEQ_TEMPLATES = {
                                 <input type="checkbox" id="seq-dark-plot-checkbox" checked style="margin-right: 0.5rem; cursor: pointer; width: 1rem; height: 1rem;">
                                 <span>Dark plot</span>
                             </label>
+                            <label id="seq-show-kspace-label" style="display: flex; align-items: center; cursor: pointer; font-size: 0.875rem; color: var(--text); margin-right: 0.75rem;" title="ChartGPU only: kx–ky and ky–kz follow waveform time zoom">
+                                <input type="checkbox" id="seq-show-kspace-checkbox" checked style="margin-right: 0.5rem; cursor: pointer; width: 1rem; height: 1rem;">
+                                <span>Show k-space</span>
+                            </label>
+                            ${SEQ_TEMPLATES.plotTimeRangeControls()}
                             <select id="seq-plot-speed-selector" style="padding: 0.25rem; background: rgba(255, 255, 255, 0.08); border: 1px solid var(--border); border-radius: 4px; color: var(--text); font-size: 0.75rem; cursor: pointer;">
                                 <option value="full">Full plot</option>
                                 <option value="fast">Fast plot</option>
@@ -111,11 +124,16 @@ const SEQ_TEMPLATES = {
                 <div id="seq-mpl-actual-target" class="mpl-figure-container">
                 </div>
             </div>
-            <div style="display: flex; align-items: center; justify-content: flex-end; margin-top: 0.5rem; padding: 0.5rem; background: rgba(0,0,0,0.2); border-radius: 4px;">
-                <label style="display: flex; align-items: center; cursor: pointer; font-size: 0.875rem; color: var(--text); margin-right: 1rem;">
+            <div class="seq-plot-options-row" style="display: flex; align-items: center; justify-content: flex-end; flex-wrap: wrap; gap: 0.5rem 0.75rem; margin-top: 0.5rem; padding: 0.5rem; background: rgba(0,0,0,0.2); border-radius: 4px;">
+                <label style="display: flex; align-items: center; cursor: pointer; font-size: 0.875rem; color: var(--text);">
                     <input type="checkbox" id="seq-dark-plot-checkbox" checked style="margin-right: 0.5rem; cursor: pointer; width: 1rem; height: 1rem;">
                     <span>Dark plot</span>
                 </label>
+                <label id="seq-show-kspace-label" style="display: flex; align-items: center; cursor: pointer; font-size: 0.875rem; color: var(--text);" title="ChartGPU only: kx–ky and ky–kz follow waveform time zoom">
+                    <input type="checkbox" id="seq-show-kspace-checkbox" checked style="margin-right: 0.5rem; cursor: pointer; width: 1rem; height: 1rem;">
+                    <span>Show k-space</span>
+                </label>
+                ${SEQ_TEMPLATES.plotTimeRangeControls()}
                 <select id="seq-plot-speed-selector" style="padding: 0.25rem; background: rgba(255, 255, 255, 0.08); border: 1px solid var(--border); border-radius: 4px; color: var(--text); font-size: 0.75rem; cursor: pointer;">
                     <option value="full">Full plot</option>
                     <option value="fast">Fast plot</option>
@@ -246,6 +264,11 @@ export class SequenceExplorer {
 
         // Initialize plotting infrastructure for this target
         this.initPlottingInfrastructure();
+        this.syncPlotSpeedKspaceCheckbox(this.plotTarget);
+        const plotSpeedSel = this.plotTarget.querySelector('#seq-plot-speed-selector');
+        if (plotSpeedSel) {
+            plotSpeedSel.addEventListener('change', () => this.syncPlotSpeedKspaceCheckbox(this.plotTarget));
+        }
     }
 
     updateParamValue(name, value) {
@@ -292,6 +315,12 @@ export class SequenceExplorer {
             popBtn.addEventListener('click', () => {
                 this.executeFunctionInPopup();
             });
+        }
+
+        this.syncPlotSpeedKspaceCheckbox(this.container);
+        const plotSpeedSel = this.container.querySelector('#seq-plot-speed-selector');
+        if (plotSpeedSel) {
+            plotSpeedSel.addEventListener('change', () => this.syncPlotSpeedKspaceCheckbox(this.container));
         }
         
         // Show console checkbox event listener
@@ -404,7 +433,10 @@ plt.rcParams['font.size'] = 8`;
      * Tear down ChartGPU charts and shared WebGPU device (see seq_plot.js).
      */
     async disposeSeqChartGpu() {
-        return disposeSeqChartGpuHost(this);
+        await disposeSeqChartGpuHost(this);
+        if (this.config.pyodide) {
+            await releaseKspaceCache(this.config.pyodide);
+        }
     }
 
     /**
@@ -724,15 +756,65 @@ plt.rcParams['font.size'] = 8`;
      * @param {{ modulePath: string, functionName: string, argsDict: object, silent: boolean, themeCode: string, plotSpeed: string, debug?: boolean }} options
      * @returns {string} Python script
      */
+    /** Read seq.plot time_range from UI (defaults 0, 100). */
+    getSeqPlotTimeRange(root) {
+        const el = root || this.paramsTarget || this.container;
+        const startEl = el?.querySelector('#seq-plot-time-start');
+        const stopEl = el?.querySelector('#seq-plot-time-stop');
+        let t0 = parseFloat(startEl?.value ?? '0');
+        let t1 = parseFloat(stopEl?.value ?? '100');
+        if (!Number.isFinite(t0)) t0 = 0;
+        if (!Number.isFinite(t1)) t1 = 100;
+        if (t1 < t0) {
+            const s = t0;
+            t0 = t1;
+            t1 = s;
+        }
+        return [t0, t1];
+    }
+
+    /** Enable k-space checkbox only when ChartGPU plot speed is selected. */
+    syncPlotSpeedKspaceCheckbox(root) {
+        const el = root || this.paramsTarget || this.container;
+        if (!el) return;
+        const sel = el.querySelector('#seq-plot-speed-selector');
+        const kspaceCb = el.querySelector('#seq-show-kspace-checkbox');
+        const kspaceLbl = el.querySelector('#seq-show-kspace-label');
+        if (!kspaceCb) return;
+        const chartgpu = !sel || sel.value === 'chartgpu';
+        kspaceCb.disabled = !chartgpu;
+        if (kspaceLbl) {
+            kspaceLbl.style.opacity = chartgpu ? '1' : '0.45';
+            kspaceLbl.style.cursor = chartgpu ? 'pointer' : 'not-allowed';
+        }
+        if (!chartgpu) kspaceCb.checked = false;
+    }
+
     buildExecuteScript(options) {
-        const { modulePath, functionName, argsDict, silent, themeCode, plotSpeed, debug = false } = options;
+        const {
+            modulePath,
+            functionName,
+            argsDict,
+            silent,
+            themeCode,
+            plotSpeed,
+            debug = false,
+            showKspace = false,
+            timeRange = [0, 100],
+        } = options;
         const argsJson = JSON.stringify(argsDict);
         const execCall = `manager.execute_function(\n        module_path='${modulePath}',\n        function_name='${functionName}',\n        args_dict=${argsJson}\n    )`;
         const dbgStart = debug ? 'print("PYTHON (popup): Execution starting...")\n' : '';
         const dbgResult = debug ? '\n    print(f"PYTHON (popup): Result from execute_function: {result}")' : '';
         const dbgSeq = debug ? '\nprint(f"PYTHON (popup): Found sequence object: {seq is not None}")' : '';
         const dbgPatch = debug ? '\n    print("PYTHON (popup): Re-applying patches...")' : '';
-        const { plotBlock, chartgpuClearPy } = buildSeqPlotExecuteFragments({ silent, plotSpeed, debug });
+        const { plotBlock, chartgpuClearPy } = buildSeqPlotExecuteFragments({
+            silent,
+            plotSpeed,
+            debug,
+            showKspace,
+            timeRange,
+        });
 
         return `
 import json
@@ -2616,6 +2698,11 @@ json.dumps(_result)
             // Get plot speed
             const plotSpeedSelector = plotRoot.querySelector('#seq-plot-speed-selector');
             const plotSpeed = plotSpeedSelector ? plotSpeedSelector.value : SEQ_DEFAULT_PLOT_SPEED;
+            const paramsRootForKspace = this.paramsTarget || this.container;
+            const showKspace =
+                plotSpeed === 'chartgpu' &&
+                !!paramsRootForKspace.querySelector('#seq-show-kspace-checkbox')?.checked;
+            const timeRange = this.getSeqPlotTimeRange(paramsRootForKspace);
             
             // Get theme code
             const themeCode = this.getMatplotlibThemeCode();
@@ -2664,7 +2751,17 @@ json.dumps(_result)
                 throw new Error('Sequence has no module path; cannot execute.');
             }
             const modulePath = source.fullModulePath || source.module || source.path;
-            const script = this.buildExecuteScript({ modulePath, functionName, argsDict, silent, themeCode, plotSpeed, debug: false });
+            const script = this.buildExecuteScript({
+                modulePath,
+                functionName,
+                argsDict,
+                silent,
+                themeCode,
+                plotSpeed,
+                debug: false,
+                showKspace,
+                timeRange,
+            });
             const result = await pyodide.runPythonAsync(script);
 
             // Parse result (SourceManager returns JSON string)
@@ -3014,6 +3111,10 @@ json.dumps(out)
             const argsDict = {};
             const plotSpeedSelector = plotRoot ? plotRoot.querySelector('#seq-plot-speed-selector') : null;
             const plotSpeed = plotSpeedSelector?.value || SEQ_DEFAULT_PLOT_SPEED;
+            const showKspace =
+                plotSpeed === 'chartgpu' &&
+                !!plotRoot?.querySelector('#seq-show-kspace-checkbox')?.checked;
+            const timeRange = this.getSeqPlotTimeRange(this.paramsTarget || this.container);
             const darkPlotCheckbox = plotRoot ? plotRoot.querySelector('#seq-dark-plot-checkbox') : null;
             const darkPlot = darkPlotCheckbox?.checked ?? true;
             
@@ -3074,7 +3175,17 @@ plt.rcParams['font.size'] = 8`;
                 throw new Error('Sequence has no module path; cannot execute.');
             }
             const modulePath = source.fullModulePath || source.module || source.path;
-            const script = this.buildExecuteScript({ modulePath, functionName, argsDict, silent: false, themeCode, plotSpeed, debug: true });
+            const script = this.buildExecuteScript({
+                modulePath,
+                functionName,
+                argsDict,
+                silent: false,
+                themeCode,
+                plotSpeed,
+                debug: true,
+                showKspace,
+                timeRange,
+            });
             const result = await pyodide.runPythonAsync(script);
 
             if (plotSpeed === 'chartgpu') {
