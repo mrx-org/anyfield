@@ -3,7 +3,7 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Any-Field Scanner v0.2.2</title>
+    <title>Any-Field Scanner v0.3.0</title>
     
     <!-- Dependencies for Niivue App -->
     <script src="https://cdn.jsdelivr.net/pyodide/v0.29.0/full/pyodide.js"></script>
@@ -72,7 +72,7 @@
             overflow: hidden;
             position: relative;
         }
-        /* Loader overlays only the right half of main (scan-preview side); left half shows Niivue + demo ASAP */
+        /* Loader overlays right side of main (B, and B+C when compare pane active) */
         .loading-overlay.main-area-loader {
             grid-area: main;
             position: absolute;
@@ -81,6 +81,22 @@
             top: 0;
             bottom: 0;
             z-index: 10;
+        }
+        #slot-main.has-compare-pane .loading-overlay.main-area-loader {
+            left: 33.33%;
+        }
+        #nv-compare-container {
+            flex: 1;
+            min-width: 0;
+            min-height: 0;
+            border-left: 1px solid var(--border);
+            flex-direction: column;
+        }
+        #nv-compare-container.compare-pane-hidden {
+            display: none !important;
+        }
+        #slot-main > .niivue-app {
+            min-width: 0;
         }
         .footer-wrapper.footer-pending {
             display: none !important;
@@ -218,7 +234,7 @@
     <div class="lab-shell">
         <header>
             <div class="header-content">
-                <div class="header-title">Any-Field <span class="header-subtitle">Scanner</span><span class="app-version" aria-label="Version v0.2.2">v0.2.2</span></div>
+                <div class="header-title">Any-Field <span class="header-subtitle">Scanner</span><span class="app-version" aria-label="Version v0.3.0">v0.3.0</span></div>
                 <button type="button" id="credits-btn" class="credits-btn" title="Credits &amp; dependencies"><i class="bi bi-award" aria-hidden="true"></i></button>
             </div>
         </header>
@@ -278,6 +294,7 @@
     <div id="module-cache" style="display: none;">
         <div id="nv-viewer-container" class="niivue-app"></div>
         <div id="nv-scan-preview-container" class="niivue-app"></div>
+        <div id="nv-compare-container" class="niivue-app compare-pane-hidden"></div>
         <div id="nv-controls-container" class="niivue-app"></div>
         <div id="seq-tree-container" class="seq-explorer"></div>
         <div id="seq-params-container" class="seq-explorer"></div>
@@ -286,7 +303,7 @@
     </div>
 
     <script type="module">
-        import { NiivueModule, ScanPreviewModule } from './niivue_app.js';
+        import { NiivueModule, ScanPreviewModule, ComparePane } from './niivue_app.js';
         import { SequenceExplorer } from './pypulseq/seq_explorer.js';
         import { ScanModule } from './scan_zero/scan_module.js';
         import { eventHub } from './event_hub.js';
@@ -311,7 +328,8 @@
                 this.scan = scanModule;
                 this.preview = scanPreview;
                 this.currentMode = null;
-                this.maximizedViewer = null; // null = both visible, 'nvViewer' or 'nvScanPreview' = maximized
+                this.maximizedViewer = null; // null | nvViewer | nvScanPreview | nvCompare
+                this.compareActive = false;
                 this.slots = {
                     sidebar: document.getElementById('slot-sidebar'),
                     main: document.getElementById('slot-main'),
@@ -322,6 +340,7 @@
                 this.cache = {
                     nvViewer: document.getElementById('nv-viewer-container'),
                     nvScanPreview: document.getElementById('nv-scan-preview-container'),
+                    nvCompare: document.getElementById('nv-compare-container'),
                     nvControls: document.getElementById('nv-controls-container'),
                     seqTree: document.getElementById('seq-tree-container'),
                     seqParams: document.getElementById('seq-params-container'),
@@ -342,6 +361,7 @@
                 let tappedViewer = null;
                 if (containerId === 'nv-viewer-container') tappedViewer = 'nvViewer';
                 else if (containerId === 'nv-scan-preview-container') tappedViewer = 'nvScanPreview';
+                else if (containerId === 'nv-compare-container') tappedViewer = 'nvCompare';
                 else return;
                 
                 // Toggle logic
@@ -357,35 +377,104 @@
                 this.applyViewerLayout();
             }
             
+            activateCompareColumn() {
+                this.compareActive = true;
+                this.maximizedViewer = null;
+                const compare = this.cache.nvCompare;
+                const main = this.slots.main;
+                if (compare) {
+                    compare.classList.remove('compare-pane-hidden');
+                    compare.style.display = 'flex';
+                    compare.style.flex = '1';
+                    compare.style.minWidth = '0';
+                    compare.style.minHeight = '0';
+                }
+                if (main) main.classList.add('has-compare-pane');
+                if (this.currentMode === 'planning') {
+                    this.moveToSlot('nvCompare', 'main');
+                    this.applyViewerLayout();
+                }
+            }
+
+            deactivateCompareColumn() {
+                this.compareActive = false;
+                if (this.maximizedViewer === 'nvCompare') {
+                    this.maximizedViewer = null;
+                }
+                const compare = this.cache.nvCompare;
+                const moduleCache = document.getElementById('module-cache');
+                if (compare) {
+                    compare.classList.add('compare-pane-hidden');
+                    compare.style.display = 'none';
+                    if (moduleCache) moduleCache.appendChild(compare);
+                }
+                this.slots.main?.classList.remove('has-compare-pane');
+                if (this.currentMode === 'planning') {
+                    this.applyViewerLayout();
+                }
+            }
+
             applyViewerLayout() {
                 const viewer = this.cache.nvViewer;
                 const preview = this.cache.nvScanPreview;
-                
+                const compare = this.cache.nvCompare;
+                const three = this.compareActive;
+                const border = '1px solid var(--border)';
+
+                const showPane = (el, asFlex = false) => {
+                    if (!el) return;
+                    el.style.display = asFlex || el.id === 'nv-compare-container' ? 'flex' : '';
+                    el.style.flex = '1';
+                    el.style.minWidth = '0';
+                    el.style.minHeight = '0';
+                    if (asFlex || el.id === 'nv-compare-container') {
+                        el.style.flexDirection = 'column';
+                    }
+                };
+                const hidePane = (el) => {
+                    if (el) el.style.display = 'none';
+                };
+
                 if (this.maximizedViewer === 'nvViewer') {
-                    viewer.style.flex = '1';
-                    viewer.style.display = '';
-                    preview.style.display = 'none';
+                    showPane(viewer);
+                    hidePane(preview);
+                    hidePane(compare);
                 } else if (this.maximizedViewer === 'nvScanPreview') {
-                    preview.style.flex = '1';
-                    preview.style.display = '';
-                    preview.style.borderLeft = 'none';
-                    viewer.style.display = 'none';
+                    hidePane(viewer);
+                    showPane(preview);
+                    hidePane(compare);
+                    if (preview) preview.style.borderLeft = 'none';
+                } else if (this.maximizedViewer === 'nvCompare') {
+                    hidePane(viewer);
+                    hidePane(preview);
+                    showPane(compare);
+                    if (compare) compare.style.borderLeft = 'none';
                 } else {
-                    // Both visible
-                    viewer.style.flex = '1';
-                    viewer.style.display = '';
-                    preview.style.flex = '1';
-                    preview.style.display = '';
-                    preview.style.borderLeft = '1px solid var(--border)';
+                    showPane(viewer);
+                    showPane(preview);
+                    if (preview) preview.style.borderLeft = border;
+                    if (three) {
+                        showPane(compare, true);
+                        if (compare) {
+                            compare.classList.remove('compare-pane-hidden');
+                            compare.style.borderLeft = border;
+                        }
+                    } else {
+                        hidePane(compare);
+                        if (compare) compare.classList.add('compare-pane-hidden');
+                    }
                 }
-                
-                // Trigger resize for Niivue
+
                 setTimeout(() => {
-                    if (this.nv?.nv && viewer.style.display !== 'none') {
+                    if (this.nv?.nv && viewer?.style.display !== 'none') {
                         this.nv.nv.resizeListener();
                     }
-                    if (this.preview?.nv && preview.style.display !== 'none') {
+                    if (this.preview?.nv && preview?.style.display !== 'none') {
                         this.preview.nv.resizeListener();
+                    }
+                    const cmpNv = window.scanCompare?.module?.nv;
+                    if (cmpNv && compare?.style.display !== 'none') {
+                        cmpNv.resizeListener();
                     }
                 }, 50);
             }
@@ -416,15 +505,25 @@
                 this.moveToSlot('seqParams', 'params');
 
                 if (mode === 'planning') {
-                    // Side-by-side layout: main viewer (50%) + scan preview (50%)
                     this.slots.main.style.display = 'flex';
                     this.slots.main.style.flexDirection = 'row';
                     this.cache.nvViewer.style.display = '';
                     this.cache.nvScanPreview.style.display = '';
                     this.moveToSlot('nvViewer', 'main');
                     this.moveToSlot('nvScanPreview', 'main');
+                    if (this.compareActive) {
+                        this.moveToSlot('nvCompare', 'main');
+                        const cmp = this.cache.nvCompare;
+                        if (cmp) {
+                            cmp.classList.remove('compare-pane-hidden');
+                            cmp.style.display = 'flex';
+                        }
+                    } else if (this.cache.nvCompare) {
+                        const cmp = this.cache.nvCompare;
+                        cmp.classList.add('compare-pane-hidden');
+                        cmp.style.display = 'none';
+                    }
                     this.slots.main.classList.remove('scrollable');
-                    // Apply current maximize state (or default to both visible)
                     this.applyViewerLayout();
                 } else if (mode === 'sequence') {
                     // Reset maximize state when leaving planning mode
@@ -497,8 +596,10 @@ await micropip.install('pypulseq==1.4.2.post2', deps=False)
                 const scanModule = new ScanModule();
                 scanModule.render('scan-module-container');
 
-                const scanPreview = new ScanPreviewModule();
+                const scanPreview = new ScanPreviewModule({ role: 'preview', labelDefault: 'Scan Preview' });
                 scanPreview.render('nv-scan-preview-container');
+
+                const scanCompare = new ComparePane();
 
                 const configPromise = explorer.getDefaultSourcesConfig();
 
@@ -518,6 +619,7 @@ await micropip.install('pypulseq==1.4.2.post2', deps=False)
                 window.nvModule = nvModule;
                 window.seqExplorer = explorer;
                 window.scanPreview = scanPreview;
+                window.scanCompare = scanCompare;
 
                 // Footer listeners (footer stays hidden until Pyodide ready)
                 (function initFooterCardDots() {

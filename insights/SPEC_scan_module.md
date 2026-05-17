@@ -55,7 +55,8 @@ Uses `executeFunction` and prepares `/outputs/<baseName>.seq` for the external s
 - **Queue Item**: Shows the job number, label, and 24h timestamp (`${scanNumber}. ${name}`). **CROP** jobs use label **`crop`**. **SIM** jobs use the sequence display name plus **`(▶)`** (MR0) or **`(▶▶)`** (rapisim) in the title; `job.protocol` matches **`(▶)`** / **`(▶▶)`**.
 - **Visual Feedback**: Uses a color-coded left border (Green: Done, Yellow: Scanning, Red: Error).
 - **Actions**:
-    - **VIEW SCAN**: Loads the NIfTI into Niivue, hides other scans, switches to **Planning Mode**, and syncs the FOV sliders/mesh to the scan's affine (`loadJob(jobId)`, default `syncFov=true`).
+    - **VIEW SCAN**: Loads the NIfTI into Niivue (pane **A**), hides other scans, switches to **Planning Mode**, updates scan preview (**B**), and syncs the FOV sliders/mesh to the scan's affine (`loadJob(jobId)`, default `syncFov=true`). Tooltip notes Ctrl variant.
+    - **Ctrl+VIEW SCAN**: Same job volume on **A** if not already loaded; opens **compare pane C** only via `loadJobToCompare` (does not change B selection or FOV sync behavior beyond ensuring the volume exists on A).
     - **VIEW SEQ** / **Download (↓)**: Shown for SIM (and any future jobs with `vfsSeqPath` / `seqUrl`), not for CROP (`cropOnly`).
     - **Remove (×)**: Deletes the job from the session queue.
 

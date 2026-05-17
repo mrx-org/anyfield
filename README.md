@@ -1,6 +1,6 @@
 # Niivue minimal app (zero-install)
 
-**Version:** `v0.2.2`
+**Version:** `v0.3.0`
 
 This is a **minimal Niivue viewer** implemented as a single `viewer.html` file.
 
@@ -62,6 +62,11 @@ If no deep link is given, the app starts with the built-in Pulseq interpreter se
 For more insights see insights SPEC_no_field.md
 
 ## Release notes
+
+**v0.3.0**
+- **Planning compare pane (C)**: Lazy third Niivue (slice-only, no 3D render) to the right of scan preview **B**; **Ctrl+click** a volume or **Ctrl+VIEW SCAN** opens it; **Ctrl+double-click** on **C** tears down the instance and hides the pane to save GPU memory.
+- **B ↔ C sync**: Bidirectional crosshair, window/level (clims), slice layout (including multiplanar grid via **V** on either pane); re-sync when **B** or **C** loads a new volume.
+- **Scan preview (B)**: Dedicated slice-only viewer for the latest/selected scan; auto-updates after SIM/CROP completion without overwriting in-progress FOV on auto-load.
 
 **v0.2.2**
 - **ChartGPU** as the default sequence waveform plot (WebGPU); Matplotlib modes remain in the plot-speed selector.

@@ -874,7 +874,7 @@ run_sim_recon(sim_signal_pairs, sim_traj_points, sim_ref_bytes)
                     ${job.status === 'scanning' ? '<div class="scan-spinner"></div>' : ''}
                     ${job.status === 'done' ? `
                         <div class="action-row">
-                            <button class="view-btn">VIEW SCAN</button>
+                            <button class="view-btn" title="View on main + preview (B). Ctrl+click: compare pane (C).">VIEW SCAN</button>
                             ${job.cropOnly ? '' : '<button class="view-seq-btn">VIEW SEQ</button>'}
                         </div>
                         <div class="action-row small-btns">
@@ -897,7 +897,11 @@ run_sim_recon(sim_signal_pairs, sim_traj_points, sim_ref_bytes)
             btn.onclick = (e) => {
                 e.stopPropagation();
                 const jobId = btn.closest('.queue-item').dataset.id;
-                this.loadJob(jobId);
+                if (e.ctrlKey || e.metaKey) {
+                    this.loadJobToCompare(jobId);
+                } else {
+                    this.loadJob(jobId);
+                }
             };
         });
 
@@ -985,6 +989,14 @@ data
      *   follow the scan). Auto-load right after completion passes `false` so the user's in-progress
      *   FOV planning (slice positioning for the next scan) is preserved.
      */
+    /** Ctrl+VIEW SCAN: lazy compare pane C only (does not change B selection). */
+    async loadJobToCompare(jobId) {
+        const job = this.queue.find(j => j.id === jobId);
+        if (job?.status === 'done' && window.scanCompare) {
+            await window.scanCompare.loadFromJob(job);
+        }
+    }
+
     async loadJob(jobId, syncFov = true) {
         const job = this.queue.find(j => j.id === jobId);
         if (job && job.status === 'done' && window.nvModule) {

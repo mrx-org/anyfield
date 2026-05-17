@@ -183,6 +183,10 @@
 .niivue-app .layout.standalone-layout .standalone-sidebar .volume-row.scan-item.selected {
   border-left: 4px solid #22c55e;
 }
+.niivue-app .layout.standalone-layout .standalone-sidebar .volume-row.compare-selected,
+.niivue-app .volume-row.compare-selected {
+  box-shadow: inset 3px 0 0 #a78bfa;
+}
 .niivue-app .layout.standalone-layout .standalone-sidebar .volume-row.mask-item {
   border-left: 3px solid var(--accent);
 }
@@ -387,7 +391,8 @@
 }
 
 .niivue-app .highlight-add,
-.scan-preview-viewer.highlight-add {
+.scan-preview-viewer.highlight-add,
+.compare-preview-viewer.highlight-add {
   animation: highlight-fade 3s ease-out forwards;
 }
 

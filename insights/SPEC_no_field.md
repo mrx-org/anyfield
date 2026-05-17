@@ -5,7 +5,7 @@ Unified MRI laboratory dashboard that synchronizes spatial FOV planning with pul
 
 ## Core Functionality
 - **Dual-Mode Shell**:
-  - **Planning**: Prioritizes 3D anatomical orientation and FOV box positioning.
+  - **Planning**: Prioritizes 3D anatomical orientation and FOV box positioning. Main viewer (**A**) may share `slot-main` with scan preview (**B**) and, when opened, compare (**C**); see `insights/SPEC_niivue.md` (lazy compare pane, B↔C sync).
   - **Sequence**: Prioritizes pulse sequence waveform visualization and parameter tuning.
 - **Auto-Mode Switching**: The app intelligently switches modes based on user interaction (viewing scans, interacting with the viewer, or generating sequences).
 - **Live Link**: Automatic injection of Niivue FOV coordinates into pulse sequence parameters via `EventHub`.
@@ -29,11 +29,9 @@ The dashboard uses a "Slot" system to dynamically swap components between `Plann
 |                   |                                         |
 |   slot-sidebar    |               slot-main                 |
 |                   |                                         |
-| [NiivueModule     |   +-------------------------------+     |
-|  Controls (Tabs)] |   |      NiivueModule Viewer      |     |
-|                   |   |              OR               |     |
-|                   |   |     SequenceExplorer Plot     |     |
-|                   |   +-------------------------------+     |
+| [NiivueModule     |   Planning: A | B [| C] (flex row)   |
+|  Controls (Tabs)] |   Sequence: SequenceExplorer plot |
+|                   |   (see SPEC_niivue.md for B/C)   |
 |                   |                                         |
 +-------------------------------------------------------------+
 |                slot-footer (Full Width)                     |

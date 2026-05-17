@@ -1,6 +1,6 @@
 # Niivue Component Specification
 
-**Released with lab shell:** `v0.1.1` (see root `README.md` and `index.html` header).
+**Released with lab shell:** `v0.3.0` (see root `README.md` and `index.html` header).
 
 ## Intent
 Modular medical imaging component for 3D/orthographic NIfTI visualization and interactive scanner Field of View (FOV) planning.
@@ -69,6 +69,35 @@ A live debug info panel (in the FOV tab hint area) shows:
   - `generateFovMaskNiftiFromSnapshot(snapshot, matrixDims)`: Builds a mask NIfTI from a captured snapshot at any matrix resolution; isolates in-flight pipelines from later slider mutations.
   - `triggerHighlight()`: Triggers the green visual feedback animation.
   - `updateVolumeList()`: Rebuilds the synchronized management UI.
+  - `loadCompareFromVolume(vol)`: Lazy-loads a volume into compare pane **C** (Ctrl+click in volume list).
+
+## Planning layout: panes A, B, and C (`index.html` + `niivue_app.js`)
+
+In **Planning** mode, `slot-main` hosts up to three Niivue canvases in a horizontal row:
+
+| Pane | Container | Class / module | Role |
+|------|-----------|----------------|------|
+| **A** | `#nv-viewer-container` | `NiivueModule` | Phantom / FOV planning, volume list, primary interaction |
+| **B** | `#nv-scan-preview-container` | `ScanPreviewModule` (`role: 'preview'`) | Latest or selected scan preview (slice-only, no 3D render) |
+| **C** | `#nv-compare-container` | `ScanPreviewModule` via `ComparePane` (`role: 'compare'`) | Optional second scan for side-by-side compare |
+
+### Pane B (scan preview)
+- Initialized at bootstrap; always present in planning layout.
+- **Auto-load**: When a SIM/CROP job completes, `ScanModule.loadJob(id, false)` sets `selectedVolume` and calls `updatePreviewFromSelection()` → `loadSingleScan` on B (FOV sync skipped on auto-load).
+- **Selection**: Click a scan row in the volume list (no Ctrl) selects it for B and syncs FOV from that scan (`syncFovFromScanVolume`).
+- **Slice-only**: `multiplanarShowRender: NEVER`, custom **V** cycle (axial → coronal → sagittal → multiplanar grid, no `SLICE_TYPE.RENDER`). Niivue’s built-in **V** is disabled (`viewModeHotKey: ""`).
+- Does **not** mirror the main viewer’s “3D Render” checkbox (`viewOptionsChange` applies slice MM, radiological convention, crosshair only).
+
+### Pane C (compare — lazy)
+- **`ComparePane`** (`window.scanCompare`): **No WebGL context until first use.** DOM shell `#nv-compare-container` stays in `#module-cache` with class `compare-pane-hidden` until activated.
+- **Open C**: **Ctrl+click** any volume row with `sourceUrl`, or **Ctrl+VIEW SCAN** on a completed queue item (`loadJobToCompare` → ensures volume on A if needed, loads C only; B selection unchanged).
+- **Sync B ↔ C** (after C opens): `linkScanPreviewPanes` — mutual `broadcastTo` (crosshair, slice type, 2D pan/zoom, `cal_min`/`cal_max`, gamma). `pushPreviewStateFrom` also copies multiplanar **GRID** layout (Niivue `sync()` alone does not). Hooks: `onLocationChange` → lightweight `sync()`; `onMouseUp` / `onIntensityChange` → full state push. **V** on either B or C updates the other. Re-sync after load via `syncPreviewPanesAfterLoad` (B is authoritative for clims/view when either pane loads a new volume).
+- **Close C / free GPU**: **Ctrl+double-click** on pane C → `ComparePane.deactivate()`: `unlinkScanPreviewPanes`, remove volumes, `nv.cleanup()`, clear container, `ViewManager.deactivateCompareColumn()`, reset `compareVolume` in volume list. Next compare use re-inits lazily.
+- **UI**: Compare row highlight (`compare-selected`, purple inset). Hint on C: `Synced · V views · Ctrl+dbl-click close`. Double-click without Ctrl still maximizes C via `toggleViewerMaximize`.
+
+### ViewManager
+- `activateCompareColumn()` / `deactivateCompareColumn()` — third column flex, `has-compare-pane` on `#slot-main` (loader overlay uses right ⅔ when C active).
+- Maximize: `nvViewer` | `nvScanPreview` | `nvCompare` (planning only).
 
 ## RUN bar: CROP / SCAN▶ / SCAN▶▶ (`scan_zero/scan_module.js`)
 - **Buttons**: **CROP** — resample first viewer volume to the FOV mask only (`runCropScan`): no `executeFunction`, no `.seq` on disk/VFS, queue shows **VIEW SCAN** only (no VIEW SEQ / download). **SCAN▶** (MR0) → `wss://tool-mr0sim.fly.dev/tool`. **SCAN▶▶** (rapisim) → `wss://tool-rapisim.fly.dev/tool`. Protocol / queue suffix labels are **`(▶)`** and **`(▶▶)`** (not `SIM▶` / `SCAN▶▶` text). Same `Dict` payload: `sequence` + `phantom`. Shared implementation: `runSimPipeline(job)` with `job.simToolUrl` (`TOOL_MR0SIM` / `TOOL_RAPISIM` exported from the module).

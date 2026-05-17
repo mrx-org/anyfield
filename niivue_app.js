@@ -132,7 +132,8 @@ export class NiivueModule {
     this._pendingPhantomVfs = null;
     this.collapsedGroups = new Set();
     this._initWaiters = [];
-    this.selectedVolume = null; // Track which volume is selected for preview
+    this.selectedVolume = null; // Track which volume is selected for preview (pane B)
+    this.compareVolume = null; // Volume shown in lazy compare pane C
   }
 
   waitForInit() {
@@ -186,6 +187,7 @@ export class NiivueModule {
     while (this.nv.volumes.length) this.nv.removeVolume(this.nv.volumes[0]);
     this.volumeGroups = [];
     this.selectedVolume = null;
+    this.compareVolume = null;
     this.lastLocationMm = null;
     this.lastLocationVox = null;
     this.voxelSpacingMm = null;
@@ -2744,9 +2746,11 @@ os.makedirs('/phantom/averaged', exist_ok=True)
       const isScan = vol.name && vol.name.startsWith('scan_');
       const isMask = vol.name?.toLowerCase().includes("mask");
       const isSelected = this.selectedVolume === vol;
+      const isCompare = this.compareVolume === vol;
       if (isScan) row.classList.add('scan-item');
       else if (isMask) row.classList.add('mask-item');
       if (isSelected) row.classList.add('selected');
+      if (isCompare) row.classList.add('compare-selected');
 
       if (!noCheckbox) {
         const cb = document.createElement("input");
@@ -2846,9 +2850,18 @@ os.makedirs('/phantom/averaged', exist_ok=True)
       }
       row.appendChild(actions);
 
-      if (isScan && !noCheckbox) {
+      if (!noCheckbox) {
         row.onclick = (e) => {
           if (e.target === row.querySelector('input[type="checkbox"]') || e.target.closest('button')) return;
+          if (e.ctrlKey || e.metaKey) {
+            const url = vol.sourceUrl || vol.url;
+            if (url) {
+              e.preventDefault();
+              this.loadCompareFromVolume(vol);
+            }
+            return;
+          }
+          if (!isScan) return;
           this.selectedVolume = this.selectedVolume === vol ? null : vol;
           this.updateVolumeList();
           this.updatePreviewFromSelection();
@@ -3037,6 +3050,14 @@ os.makedirs('/phantom/averaged', exist_ok=True)
     }
   }
 
+  /** Lazy compare pane C: Ctrl+click list or Ctrl+VIEW SCAN */
+  async loadCompareFromVolume(vol) {
+    if (!vol || !window.scanCompare) return;
+    const url = vol.sourceUrl || vol.url;
+    if (!url) return;
+    await window.scanCompare.loadFromVolume(vol);
+  }
+
   /**
    * Fetch bundled nifti_phantom_v1 folder (JSON + NIfTIs) and load like Add File / Add Folder.
    * Base URL may be absolute (GitHub raw) or relative to the current page.
@@ -3202,14 +3223,119 @@ os.makedirs('/phantom/averaged', exist_ok=True)
   }
 }
 
+/** Sync options for scan preview (B) ↔ compare (C) panes */
+const PREVIEW_PANE_SYNC_OPTS = {
+  '2d': true,
+  '3d': false,
+  crosshair: true,
+  sliceType: true,
+  zoomPan: true,
+  cal_min: true,
+  cal_max: true,
+  gamma: true,
+};
+
+let _previewPeerSyncGuard = false;
+
+function getPreviewPeerNv(sourceNv) {
+  const preview = window.scanPreview?.nv;
+  const compare = window.scanCompare?.module?.nv;
+  if (!preview || !compare || !sourceNv) return null;
+  if (sourceNv === preview) return compare;
+  if (sourceNv === compare) return preview;
+  return null;
+}
+
+/** Push slice layout, clims, and scene sync from sourceNv → peer (both directions via broadcastTo). */
+export function pushPreviewStateFrom(sourceNv) {
+  if (_previewPeerSyncGuard || !sourceNv) return;
+  const peer = getPreviewPeerNv(sourceNv);
+  if (!peer) return;
+  _previewPeerSyncGuard = true;
+  try {
+    if (sourceNv.volumes.length && peer.volumes.length) {
+      peer.volumes[0].cal_min = sourceNv.volumes[0].cal_min;
+      peer.volumes[0].cal_max = sourceNv.volumes[0].cal_max;
+      if (typeof peer.updateGLVolume === 'function') peer.updateGLVolume();
+    }
+    peer.opts.multiplanarShowRender = SHOW_RENDER.NEVER;
+    peer.setSliceType(sourceNv.opts.sliceType);
+    if (sourceNv.opts.sliceType === SLICE_TYPE.MULTIPLANAR) {
+      peer.setMultiplanarLayout(MULTIPLANAR_TYPE.GRID);
+    }
+    if (typeof sourceNv.sync === 'function') sourceNv.sync();
+    peer.drawScene();
+  } finally {
+    _previewPeerSyncGuard = false;
+  }
+}
+
+export function linkScanPreviewPanes(previewNv, compareNv) {
+  if (!previewNv || !compareNv) return;
+  previewNv.broadcastTo(compareNv, PREVIEW_PANE_SYNC_OPTS);
+  compareNv.broadcastTo(previewNv, PREVIEW_PANE_SYNC_OPTS);
+  previewNv.readyForSync = true;
+  compareNv.readyForSync = true;
+}
+
+export function unlinkScanPreviewPanes(previewNv, compareNv) {
+  if (previewNv?.otherNV) {
+    previewNv.otherNV = previewNv.otherNV.filter((nv) => nv !== compareNv);
+    if (previewNv.otherNV.length === 0) previewNv.otherNV = null;
+  }
+  if (compareNv?.otherNV) {
+    compareNv.otherNV = compareNv.otherNV.filter((nv) => nv !== previewNv);
+    if (compareNv.otherNV.length === 0) compareNv.otherNV = null;
+  }
+}
+
+export function installPreviewSyncHooks(nv) {
+  if (!nv || nv._previewSyncHooksInstalled) return;
+  nv._previewSyncHooksInstalled = true;
+  const prevLoc = nv.onLocationChange;
+  nv.onLocationChange = (data) => {
+    if (typeof prevLoc === 'function') prevLoc(data);
+    if (_previewPeerSyncGuard || !getPreviewPeerNv(nv)) return;
+    _previewPeerSyncGuard = true;
+    try {
+      if (typeof nv.sync === 'function') nv.sync();
+    } finally {
+      _previewPeerSyncGuard = false;
+    }
+  };
+  nv.onMouseUp = () => {
+    if (!_previewPeerSyncGuard && getPreviewPeerNv(nv)) pushPreviewStateFrom(nv);
+  };
+  nv.onIntensityChange = () => {
+    if (!_previewPeerSyncGuard && getPreviewPeerNv(nv)) pushPreviewStateFrom(nv);
+  };
+}
+
+/** After B or C loads a volume: re-sync clims + slice/crosshair (B view is default after C load). */
+export function syncPreviewPanesAfterLoad(loadedRole) {
+  const previewNv = window.scanPreview?.nv;
+  const compareNv = window.scanCompare?.module?.nv;
+  if (!previewNv || !compareNv) return;
+  const sourceNv = loadedRole === 'compare' ? previewNv : previewNv;
+  pushPreviewStateFrom(sourceNv);
+}
+
 /**
  * ScanPreviewModule - A lightweight, view-only Niivue instance for scan previews
  * Slice-only (no 3D volume render) to reduce GPU memory vs the main viewer.
  */
 export class ScanPreviewModule {
-  constructor() {
-    this.instanceId = 'preview-' + Math.random().toString(36).substr(2, 5);
-    this.canvasId = `gl-preview-${Math.random().toString(36).substr(2, 9)}`;
+  constructor(options = {}) {
+    this.role = options.role || 'preview';
+    this.labelDefault = options.labelDefault || (this.role === 'compare' ? 'Compare' : 'Scan Preview');
+    this.hintText = options.hint ?? (this.role === 'compare'
+      ? 'Synced · V views · Ctrl+dbl-click close'
+      : 'Press V to change views');
+    this.viewerClass = this.role === 'compare'
+      ? 'viewer scan-preview-viewer compare-preview-viewer'
+      : 'viewer scan-preview-viewer';
+    this.instanceId = (this.role === 'compare' ? 'compare-' : 'preview-') + Math.random().toString(36).substr(2, 5);
+    this.canvasId = `gl-${this.role}-${Math.random().toString(36).substr(2, 9)}`;
     this.nv = new Niivue({
       logging: false,
       loadingText: "Press scan.",
@@ -3239,10 +3365,10 @@ export class ScanPreviewModule {
 
     this.container.classList.add('niivue-app');
     this.container.innerHTML = `
-      <div class="viewer scan-preview-viewer" style="background: black; height: 100%;">
+      <div class="${this.viewerClass}" style="background: black; height: 100%;">
         <canvas id="${this.canvasId}"></canvas>
-        <div class="preview-label" style="position: absolute; bottom: 8px; left: 8px; font-size: 11px; color: #888; pointer-events: none;">Scan Preview</div>
-        <div class="preview-hint" style="position: absolute; bottom: 8px; right: 8px; font-size: 11px; color: #666; pointer-events: none;">Press V to change views</div>
+        <div class="preview-label" style="position: absolute; bottom: 8px; left: 8px; font-size: 11px; color: #888; pointer-events: none;">${this.labelDefault}</div>
+        <div class="preview-hint" style="position: absolute; bottom: 8px; right: 8px; font-size: 11px; color: #666; pointer-events: none;">${this.hintText}</div>
       </div>
     `;
 
@@ -3271,11 +3397,17 @@ export class ScanPreviewModule {
       this.nv.opts.crosshairWidth = 0.5; // Thinner crosshair
       
       eventHub.on('viewOptionsChange', (opts) => this.applyViewOptions(opts));
-
+      installPreviewSyncHooks(this.nv);
       this.canvas.addEventListener("keydown", (e) => this._onPreviewViewKey(e));
 
-      // Double-click to toggle maximize canvas
-      this.canvas.addEventListener("dblclick", () => {
+      // Double-click: compare pane Ctrl+dbl-click closes and frees GPU; else maximize
+      this.canvas.addEventListener("dblclick", (e) => {
+        if (this.role === 'compare' && (e.ctrlKey || e.metaKey)) {
+          e.preventDefault();
+          e.stopPropagation();
+          window.scanCompare?.deactivate?.();
+          return;
+        }
         this.toggleMaximize();
       });
       
@@ -3316,6 +3448,9 @@ export class ScanPreviewModule {
     }
     nv.setSliceType(next);
     nv.drawScene();
+    if (window.scanCompare?.isReady) {
+      pushPreviewStateFrom(nv);
+    }
   }
 
   _onPreviewViewKey(e) {
@@ -3375,6 +3510,9 @@ export class ScanPreviewModule {
       this.triggerHighlight();
       
       console.log("ScanPreviewModule loaded:", name);
+      if (window.scanCompare?.isReady) {
+        setTimeout(() => syncPreviewPanesAfterLoad(this.role), 0);
+      }
     } catch (e) {
       console.error("ScanPreviewModule load failed:", e);
     } finally {
@@ -3384,7 +3522,145 @@ export class ScanPreviewModule {
 
   updateLabel(text) {
     const label = this.container?.querySelector('.preview-label');
-    if (label) label.textContent = text || 'Scan Preview';
+    if (label) label.textContent = text || this.labelDefault;
+  }
+}
+
+/**
+ * Lazy compare pane (C): no WebGL until first Ctrl+load. Synced from scan preview (B).
+ */
+export class ComparePane {
+  constructor() {
+    this.module = null;
+    this._initPromise = null;
+    this.isActive = false;
+  }
+
+  get isReady() {
+    return !!this.module?.isInitialized;
+  }
+
+  async ensureInitialized() {
+    if (this.module?.isInitialized) return this.module;
+    if (this._initPromise) {
+      await this._initPromise;
+      return this.module;
+    }
+    this._initPromise = this._doInit();
+    await this._initPromise;
+    return this.module;
+  }
+
+  async _doInit() {
+    try {
+      await window.scanPreview?.waitForInit?.();
+      if (window.viewManager?.activateCompareColumn) {
+        window.viewManager.activateCompareColumn();
+      }
+      this.module = new ScanPreviewModule({
+        role: 'compare',
+        labelDefault: 'Compare',
+        hint: 'Synced · V views · Ctrl+dbl-click close',
+      });
+      this.module.render('nv-compare-container');
+      await this.module.waitForInit();
+      const previewNv = window.scanPreview?.nv;
+      const compareNv = this.module.nv;
+      if (previewNv && compareNv) {
+        linkScanPreviewPanes(previewNv, compareNv);
+        installPreviewSyncHooks(previewNv);
+        installPreviewSyncHooks(compareNv);
+        pushPreviewStateFrom(previewNv);
+      }
+      setTimeout(() => {
+        this.module?.nv?.resizeListener?.();
+        window.viewManager?.applyViewerLayout?.();
+        if (previewNv && compareNv) pushPreviewStateFrom(previewNv);
+      }, 80);
+      this.isActive = true;
+      return this.module;
+    } catch (e) {
+      console.error('ComparePane init failed:', e);
+      this._initPromise = null;
+      throw e;
+    }
+  }
+
+  async loadFromVolume(vol) {
+    if (!vol) return;
+    let url = vol.sourceUrl || vol.url;
+    if (!url && window.nvModule?.nv?.mediaUrlMap) {
+      url = window.nvModule.nv.mediaUrlMap.get(vol);
+    }
+    if (!url) {
+      console.warn('ComparePane: volume has no URL — load it on the main viewer first');
+      return;
+    }
+    if (window.viewManager?.currentMode !== 'planning') {
+      window.viewManager?.setMode('planning');
+    }
+    await this.ensureInitialized();
+    await this.module.loadSingleScan(url, vol.name);
+    if (window.nvModule) {
+      window.nvModule.compareVolume = vol;
+      window.nvModule.updateVolumeList?.();
+    }
+  }
+
+  async loadFromJob(job) {
+    if (!job?.niftiUrl || !window.nvModule) return;
+    if (window.viewManager?.currentMode !== 'planning') {
+      window.viewManager?.setMode('planning');
+    }
+    const nvMod = window.nvModule;
+    const targetName = job.baseName + '.nii.gz';
+    let idx = nvMod.nv.volumes.findIndex((v) => v.name === targetName);
+    if (idx === -1) {
+      await nvMod.loadUrl(job.niftiUrl, targetName, true, false);
+      idx = nvMod.nv.volumes.findIndex((v) => v.name === targetName);
+    }
+    if (idx === -1) return;
+    await this.loadFromVolume(nvMod.nv.volumes[idx]);
+  }
+
+  /** Tear down compare Niivue (C) and hide the pane until next Ctrl+load. */
+  deactivate() {
+    const previewNv = window.scanPreview?.nv;
+    const compareNv = this.module?.nv;
+
+    if (previewNv && compareNv) {
+      unlinkScanPreviewPanes(previewNv, compareNv);
+    }
+
+    if (compareNv) {
+      while (compareNv.volumes.length > 0) {
+        compareNv.removeVolume(compareNv.volumes[0]);
+      }
+      if (typeof compareNv.cleanup === 'function') {
+        compareNv.cleanup();
+      }
+    }
+
+    const container = document.getElementById('nv-compare-container');
+    if (container) {
+      container.innerHTML = '';
+      container.classList.add('compare-pane-hidden');
+    }
+
+    this.module = null;
+    this._initPromise = null;
+    this.isActive = false;
+
+    if (window.nvModule) {
+      window.nvModule.compareVolume = null;
+      if (typeof window.nvModule.updateVolumeList === 'function') {
+        window.nvModule.updateVolumeList();
+      }
+    }
+
+    if (window.viewManager?.deactivateCompareColumn) {
+      window.viewManager.deactivateCompareColumn();
+    }
   }
 }
 
