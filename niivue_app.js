@@ -3204,17 +3204,22 @@ os.makedirs('/phantom/averaged', exist_ok=True)
 
 /**
  * ScanPreviewModule - A lightweight, view-only Niivue instance for scan previews
- * Displays multiplanar 2x2 grid view of the selected scan
+ * Slice-only (no 3D volume render) to reduce GPU memory vs the main viewer.
  */
 export class ScanPreviewModule {
   constructor() {
     this.instanceId = 'preview-' + Math.random().toString(36).substr(2, 5);
     this.canvasId = `gl-preview-${Math.random().toString(36).substr(2, 9)}`;
-    this.nv = new Niivue({ 
+    this.nv = new Niivue({
       logging: false,
       loadingText: "Press scan.",
-      multiplanarLayout: 2 // MULTIPLANAR_TYPE.GRID
+      sliceType: SLICE_TYPE.AXIAL,
+      multiplanarShowRender: SHOW_RENDER.NEVER,
+      viewModeHotKey: "", // disable Niivue V cycle (includes SLICE_TYPE.RENDER)
+      show3Dcrosshair: false,
+      isOrientCube: false,
     });
+    this._previewViewKeyLast = 0;
     this.container = null;
     this.canvas = null;
     this.currentScanName = null;
@@ -3250,9 +3255,7 @@ export class ScanPreviewModule {
     if (!this.nv) return;
     if (opts.sliceMM !== undefined) this.nv.setSliceMM(opts.sliceMM);
     if (opts.radiological !== undefined) this.nv.setRadiologicalConvention(opts.radiological);
-    if (opts.showRender !== undefined) {
-      this.nv.opts.multiplanarShowRender = opts.showRender ? SHOW_RENDER.ALWAYS : SHOW_RENDER.NEVER;
-    }
+    // Preview stays slice-only; do not mirror main viewer 3D render toggle.
     if (opts.showCrosshair !== undefined) this.nv.setCrosshairWidth(opts.showCrosshair ? 1 : 0);
     this.nv.drawScene();
   }
@@ -3260,15 +3263,17 @@ export class ScanPreviewModule {
   async initNiivue() {
     try {
       await this.nv.attachToCanvas(this.canvas);
+      this.nv.opts.multiplanarShowRender = SHOW_RENDER.NEVER;
       this.nv.setSliceType(SLICE_TYPE.AXIAL);
-      this.nv.setMultiplanarLayout(MULTIPLANAR_TYPE.GRID);
-      
+
       // Set crosshair to be thinner and 50% transparent
       this.nv.opts.crosshairColor = [0.2, 0.8, 0.2, 0.5]; // 50% transparent green
       this.nv.opts.crosshairWidth = 0.5; // Thinner crosshair
       
       eventHub.on('viewOptionsChange', (opts) => this.applyViewOptions(opts));
-      
+
+      this.canvas.addEventListener("keydown", (e) => this._onPreviewViewKey(e));
+
       // Double-click to toggle maximize canvas
       this.canvas.addEventListener("dblclick", () => {
         this.toggleMaximize();
@@ -3297,6 +3302,28 @@ export class ScanPreviewModule {
     }
   }
   
+  /** Cycle axial → coronal → sagittal → multiplanar (no 3D render). */
+  _cyclePreviewSliceView() {
+    const nv = this.nv;
+    const now = Date.now();
+    if (now - this._previewViewKeyLast <= nv.opts.keyDebounceTime) return;
+    this._previewViewKeyLast = now;
+    nv.opts.multiplanarShowRender = SHOW_RENDER.NEVER;
+    const cur = nv.opts.sliceType >= SLICE_TYPE.RENDER ? SLICE_TYPE.AXIAL : nv.opts.sliceType;
+    const next = (cur + 1) % SLICE_TYPE.RENDER;
+    if (next === SLICE_TYPE.MULTIPLANAR) {
+      nv.setMultiplanarLayout(MULTIPLANAR_TYPE.GRID);
+    }
+    nv.setSliceType(next);
+    nv.drawScene();
+  }
+
+  _onPreviewViewKey(e) {
+    if (e.code !== "KeyV" || e.repeat || e.ctrlKey || e.altKey || e.metaKey) return;
+    e.preventDefault();
+    this._cyclePreviewSliceView();
+  }
+
   /** Toggle maximize this viewer (hide the other viewer) */
   toggleMaximize() {
     eventHub.emit('toggleViewerMaximize', { containerId: this.container?.id });

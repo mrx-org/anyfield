@@ -454,10 +454,6 @@
                 if (this.preview && this.preview.nv) {
                     setTimeout(() => {
                         this.preview.nv.resizeListener();
-                        // Force grid layout again after resize
-                        if (typeof this.preview.nv.setMultiplanarLayout === 'function') {
-                            this.preview.nv.setMultiplanarLayout(2); // GRID
-                        }
                     }, 50);
                 }
             }
