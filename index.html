@@ -85,6 +85,28 @@
         #slot-main.has-compare-pane .loading-overlay.main-area-loader {
             left: 33.33%;
         }
+        #nv-preview-bc-stack {
+            flex: 1;
+            min-width: 0;
+            min-height: 0;
+            display: flex;
+            flex-direction: column;
+            border-left: 1px solid var(--border);
+        }
+        #nv-preview-bc-canvas-row {
+            flex: 1;
+            min-height: 0;
+            display: flex;
+            flex-direction: row;
+        }
+        #nv-preview-bc-canvas-row > .niivue-app {
+            flex: 1;
+            min-width: 0;
+            min-height: 0;
+        }
+        #nv-joint-hist-row {
+            flex: 0 0 auto;
+        }
         #nv-compare-container {
             flex: 1;
             min-width: 0;
@@ -95,8 +117,13 @@
         #nv-compare-container.compare-pane-hidden {
             display: none !important;
         }
-        #slot-main > .niivue-app {
+        #slot-main > .niivue-app,
+        #slot-main > #nv-preview-bc-stack {
             min-width: 0;
+        }
+        #slot-main:not(.planning-hist-visible) .clim-hist-panel,
+        #slot-main:not(.planning-hist-visible) #nv-joint-hist-row {
+            display: none !important;
         }
         .footer-wrapper.footer-pending {
             display: none !important;
@@ -292,9 +319,14 @@
 
     <!-- Hidden cache for modules when they are not in a slot -->
     <div id="module-cache" style="display: none;">
-        <div id="nv-viewer-container" class="niivue-app"></div>
-        <div id="nv-scan-preview-container" class="niivue-app"></div>
-        <div id="nv-compare-container" class="niivue-app compare-pane-hidden"></div>
+        <div id="nv-viewer-container" class="niivue-app viewer-column-stack"></div>
+        <div id="nv-preview-bc-stack" class="nv-preview-bc-stack">
+            <div id="nv-preview-bc-canvas-row" class="nv-preview-bc-canvas-row">
+                <div id="nv-scan-preview-container" class="niivue-app viewer-column-stack"></div>
+                <div id="nv-compare-container" class="niivue-app compare-pane-hidden viewer-column-stack"></div>
+            </div>
+            <div id="nv-joint-hist-row" class="nv-joint-hist-row"></div>
+        </div>
         <div id="nv-controls-container" class="niivue-app"></div>
         <div id="seq-tree-container" class="seq-explorer"></div>
         <div id="seq-params-container" class="seq-explorer"></div>
@@ -304,6 +336,7 @@
 
     <script type="module">
         import { NiivueModule, ScanPreviewModule, ComparePane } from './niivue_app.js';
+        import { MainHistogramController, PreviewJointHistogramController } from './shared/histogram-clim-mount.js';
         import { SequenceExplorer } from './pypulseq/seq_explorer.js';
         import { ScanModule } from './scan_zero/scan_module.js';
         import { eventHub } from './event_hub.js';
@@ -339,6 +372,7 @@
                 };
                 this.cache = {
                     nvViewer: document.getElementById('nv-viewer-container'),
+                    nvPreviewBcStack: document.getElementById('nv-preview-bc-stack'),
                     nvScanPreview: document.getElementById('nv-scan-preview-container'),
                     nvCompare: document.getElementById('nv-compare-container'),
                     nvControls: document.getElementById('nv-controls-container'),
@@ -391,7 +425,6 @@
                 }
                 if (main) main.classList.add('has-compare-pane');
                 if (this.currentMode === 'planning') {
-                    this.moveToSlot('nvCompare', 'main');
                     this.applyViewerLayout();
                 }
             }
@@ -402,11 +435,9 @@
                     this.maximizedViewer = null;
                 }
                 const compare = this.cache.nvCompare;
-                const moduleCache = document.getElementById('module-cache');
                 if (compare) {
                     compare.classList.add('compare-pane-hidden');
                     compare.style.display = 'none';
-                    if (moduleCache) moduleCache.appendChild(compare);
                 }
                 this.slots.main?.classList.remove('has-compare-pane');
                 if (this.currentMode === 'planning') {
@@ -416,51 +447,64 @@
 
             applyViewerLayout() {
                 const viewer = this.cache.nvViewer;
+                const bcStack = this.cache.nvPreviewBcStack;
                 const preview = this.cache.nvScanPreview;
                 const compare = this.cache.nvCompare;
                 const three = this.compareActive;
                 const border = '1px solid var(--border)';
 
-                const showPane = (el, asFlex = false) => {
+                const showCol = (el, flexGrow = '1') => {
                     if (!el) return;
-                    el.style.display = asFlex || el.id === 'nv-compare-container' ? 'flex' : '';
+                    el.style.display = 'flex';
+                    el.style.flex = flexGrow;
+                    el.style.minWidth = '0';
+                    el.style.minHeight = '0';
+                    el.style.flexDirection = 'column';
+                };
+                const hideCol = (el) => {
+                    if (el) el.style.display = 'none';
+                };
+                const showInner = (el) => {
+                    if (!el) return;
+                    el.style.display = 'flex';
                     el.style.flex = '1';
                     el.style.minWidth = '0';
                     el.style.minHeight = '0';
-                    if (asFlex || el.id === 'nv-compare-container') {
-                        el.style.flexDirection = 'column';
-                    }
+                    el.style.flexDirection = 'column';
                 };
-                const hidePane = (el) => {
+                const hideInner = (el) => {
                     if (el) el.style.display = 'none';
                 };
 
                 if (this.maximizedViewer === 'nvViewer') {
-                    showPane(viewer);
-                    hidePane(preview);
-                    hidePane(compare);
+                    showCol(viewer);
+                    hideCol(bcStack);
                 } else if (this.maximizedViewer === 'nvScanPreview') {
-                    hidePane(viewer);
-                    showPane(preview);
-                    hidePane(compare);
-                    if (preview) preview.style.borderLeft = 'none';
+                    hideCol(viewer);
+                    showCol(bcStack);
+                    showInner(preview);
+                    hideInner(compare);
+                    if (bcStack) bcStack.style.borderLeft = 'none';
                 } else if (this.maximizedViewer === 'nvCompare') {
-                    hidePane(viewer);
-                    hidePane(preview);
-                    showPane(compare);
+                    hideCol(viewer);
+                    showCol(bcStack);
+                    hideInner(preview);
+                    showInner(compare);
                     if (compare) compare.style.borderLeft = 'none';
+                    if (bcStack) bcStack.style.borderLeft = 'none';
                 } else {
-                    showPane(viewer);
-                    showPane(preview);
-                    if (preview) preview.style.borderLeft = border;
+                    showCol(viewer);
+                    showCol(bcStack, three ? '2' : '1');
+                    if (bcStack) bcStack.style.borderLeft = border;
+                    showInner(preview);
                     if (three) {
-                        showPane(compare, true);
+                        showInner(compare);
                         if (compare) {
                             compare.classList.remove('compare-pane-hidden');
                             compare.style.borderLeft = border;
                         }
                     } else {
-                        hidePane(compare);
+                        hideInner(compare);
                         if (compare) compare.classList.add('compare-pane-hidden');
                     }
                 }
@@ -476,6 +520,8 @@
                     if (cmpNv && compare?.style.display !== 'none') {
                         cmpNv.resizeListener();
                     }
+                    window.jointHist?.refresh?.();
+                    window.mainHist?.scheduleRefresh?.();
                 }, 50);
             }
 
@@ -507,25 +553,13 @@
                 if (mode === 'planning') {
                     this.slots.main.style.display = 'flex';
                     this.slots.main.style.flexDirection = 'row';
-                    this.cache.nvViewer.style.display = '';
-                    this.cache.nvScanPreview.style.display = '';
+                    this.slots.main.classList.add('planning-hist-visible');
                     this.moveToSlot('nvViewer', 'main');
-                    this.moveToSlot('nvScanPreview', 'main');
-                    if (this.compareActive) {
-                        this.moveToSlot('nvCompare', 'main');
-                        const cmp = this.cache.nvCompare;
-                        if (cmp) {
-                            cmp.classList.remove('compare-pane-hidden');
-                            cmp.style.display = 'flex';
-                        }
-                    } else if (this.cache.nvCompare) {
-                        const cmp = this.cache.nvCompare;
-                        cmp.classList.add('compare-pane-hidden');
-                        cmp.style.display = 'none';
-                    }
+                    this.moveToSlot('nvPreviewBcStack', 'main');
                     this.slots.main.classList.remove('scrollable');
                     this.applyViewerLayout();
                 } else if (mode === 'sequence') {
+                    this.slots.main.classList.remove('planning-hist-visible');
                     // Reset maximize state when leaving planning mode
                     this.maximizedViewer = null;
                     // Full width for sequence plot
@@ -601,6 +635,11 @@ await micropip.install('pypulseq==1.4.2.post2', deps=False)
 
                 const scanCompare = new ComparePane();
 
+                const mainHist = new MainHistogramController(nvModule);
+                mainHist.attachToContainer(document.getElementById('nv-viewer-container'));
+                const jointHist = new PreviewJointHistogramController();
+                jointHist.attachToJointRow(document.getElementById('nv-joint-hist-row'));
+
                 const configPromise = explorer.getDefaultSourcesConfig();
 
                 const viewManager = new ViewManager(nvModule, explorer, scanModule, scanPreview);
@@ -620,6 +659,8 @@ await micropip.install('pypulseq==1.4.2.post2', deps=False)
                 window.seqExplorer = explorer;
                 window.scanPreview = scanPreview;
                 window.scanCompare = scanCompare;
+                window.mainHist = mainHist;
+                window.jointHist = jointHist;
 
                 // Footer listeners (footer stays hidden until Pyodide ready)
                 (function initFooterCardDots() {

@@ -216,15 +216,17 @@ export class NiivueModule {
     this.containerViewer = typeof target === 'string' ? document.getElementById(target) : target;
     if (!this.containerViewer) throw new Error(`Viewer target not found: ${target}`);
 
-    this.containerViewer.classList.add('niivue-app');
+    this.containerViewer.classList.add('niivue-app', 'viewer-column-stack');
     this.containerViewer.innerHTML = `
-      <div class="viewer standalone-viewer" style="position: relative;">
+      <div class="viewer-stack-body" style="flex:1;min-height:0;display:flex;flex-direction:column;">
+      <div class="viewer standalone-viewer" style="flex:1;min-height:0;position:relative;">
         <canvas id="${this.canvasId}"></canvas>
         <div class="status" id="statusOverlay-${this.instanceId}">idle</div>
         <div class="crosshair-intensity" id="crosshairIntensity-${this.instanceId}">—</div>
         <div class="viewer-hint" style="position: absolute; bottom: 8px; right: 8px; font-size: 11px; color: rgba(255,255,255,0.7); pointer-events: none; text-shadow: 0 1px 2px rgba(0,0,0,0.8);">
           CTRL + mouse to change FoV
         </div>
+      </div>
       </div>
     `;
 
@@ -2965,6 +2967,7 @@ os.makedirs('/phantom/averaged', exist_ok=True)
     }
 
     if (this.options.showJsonTab) this.updateJsonTab();
+    if (typeof window !== "undefined") window.mainHist?.scheduleRefresh?.();
   }
 
   /** JSON text still in memory on volume groups when /phantom was never filled (default bundle, Add File). */
@@ -3219,6 +3222,7 @@ os.makedirs('/phantom/averaged', exist_ok=True)
       this.updatePreviewFromSelection();
       this.triggerHighlight();
       this.setStatus(`loaded: ${name??url}`);
+      if (typeof window !== "undefined") window.mainHist?.scheduleRefresh?.();
     } catch (e) { this.setStatus(`Error: ${e.message}`); }
   }
 }
@@ -3265,6 +3269,7 @@ export function pushPreviewStateFrom(sourceNv) {
     }
     if (typeof sourceNv.sync === 'function') sourceNv.sync();
     peer.drawScene();
+    if (typeof window !== "undefined") window.jointHist?.syncFromVolumes?.();
   } finally {
     _previewPeerSyncGuard = false;
   }
@@ -3303,11 +3308,21 @@ export function installPreviewSyncHooks(nv) {
       _previewPeerSyncGuard = false;
     }
   };
-  nv.onMouseUp = () => {
+  const prevMouseUp = nv.onMouseUp;
+  nv.onMouseUp = (...args) => {
+    if (typeof prevMouseUp === "function") prevMouseUp(...args);
     if (!_previewPeerSyncGuard && getPreviewPeerNv(nv)) pushPreviewStateFrom(nv);
+    if (!window.jointHist?.panel?.isApplyingFromPanel?.()) {
+      window.jointHist?.syncFromVolumes?.();
+    }
   };
-  nv.onIntensityChange = () => {
+  const prevIntensity = nv.onIntensityChange;
+  nv.onIntensityChange = (...args) => {
+    if (typeof prevIntensity === "function") prevIntensity(...args);
     if (!_previewPeerSyncGuard && getPreviewPeerNv(nv)) pushPreviewStateFrom(nv);
+    if (!window.jointHist?.panel?.isApplyingFromPanel?.()) {
+      window.jointHist?.syncFromVolumes?.();
+    }
   };
 }
 
@@ -3318,6 +3333,7 @@ export function syncPreviewPanesAfterLoad(loadedRole) {
   if (!previewNv || !compareNv) return;
   const sourceNv = loadedRole === 'compare' ? previewNv : previewNv;
   pushPreviewStateFrom(sourceNv);
+  if (typeof window !== "undefined") window.jointHist?.refresh?.();
 }
 
 /**
@@ -3363,12 +3379,14 @@ export class ScanPreviewModule {
     this.container = typeof target === 'string' ? document.getElementById(target) : target;
     if (!this.container) throw new Error(`Preview target not found: ${target}`);
 
-    this.container.classList.add('niivue-app');
+    this.container.classList.add('niivue-app', 'viewer-column-stack');
     this.container.innerHTML = `
-      <div class="${this.viewerClass}" style="background: black; height: 100%;">
+      <div class="viewer-stack-body" style="flex:1;min-height:0;display:flex;flex-direction:column;">
+      <div class="${this.viewerClass}" style="flex:1;min-height:0;position:relative;background:black;">
         <canvas id="${this.canvasId}"></canvas>
         <div class="preview-label" style="position: absolute; bottom: 8px; left: 8px; font-size: 11px; color: #888; pointer-events: none;">${this.labelDefault}</div>
         <div class="preview-hint" style="position: absolute; bottom: 8px; right: 8px; font-size: 11px; color: #666; pointer-events: none;">${this.hintText}</div>
+      </div>
       </div>
     `;
 
@@ -3398,6 +3416,7 @@ export class ScanPreviewModule {
       
       eventHub.on('viewOptionsChange', (opts) => this.applyViewOptions(opts));
       installPreviewSyncHooks(this.nv);
+      window.jointHist?.installPreviewHooks?.();
       this.canvas.addEventListener("keydown", (e) => this._onPreviewViewKey(e));
 
       // Double-click: compare pane Ctrl+dbl-click closes and frees GPU; else maximize
@@ -3512,6 +3531,8 @@ export class ScanPreviewModule {
       console.log("ScanPreviewModule loaded:", name);
       if (window.scanCompare?.isReady) {
         setTimeout(() => syncPreviewPanesAfterLoad(this.role), 0);
+      } else {
+        window.jointHist?.refresh?.();
       }
     } catch (e) {
       console.error("ScanPreviewModule load failed:", e);
@@ -3564,6 +3585,7 @@ export class ComparePane {
       });
       this.module.render('nv-compare-container');
       await this.module.waitForInit();
+      window.jointHist?.installPreviewHooks?.();
       const previewNv = window.scanPreview?.nv;
       const compareNv = this.module.nv;
       if (previewNv && compareNv) {
@@ -3576,6 +3598,7 @@ export class ComparePane {
         this.module?.nv?.resizeListener?.();
         window.viewManager?.applyViewerLayout?.();
         if (previewNv && compareNv) pushPreviewStateFrom(previewNv);
+        window.jointHist?.refresh?.();
       }, 80);
       this.isActive = true;
       return this.module;
@@ -3661,6 +3684,7 @@ export class ComparePane {
     if (window.viewManager?.deactivateCompareColumn) {
       window.viewManager.deactivateCompareColumn();
     }
+    window.jointHist?.refresh?.();
   }
 }
 
