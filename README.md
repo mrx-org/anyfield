@@ -1,6 +1,6 @@
 # Niivue minimal app (zero-install)
 
-**Version:** `v0.3.0`
+**Version:** `v0.3.1`
 
 This is a **minimal Niivue viewer** implemented as a single `viewer.html` file.
 
@@ -62,6 +62,9 @@ If no deep link is given, the app starts with the built-in Pulseq interpreter se
 For more insights see insights SPEC_no_field.md
 
 ## Release notes
+
+**v0.3.1**
+- **Histogram windowing (Planning)**: Clim histogram under main viewer **A**; joint overlay histogram under preview **B** / compare **C** with shared min/max; tick labels, double-click edit dialog, 4D frame ↔ clims sync; preview/compare pane accent borders.
 
 **v0.3.0**
 - **Planning compare pane (C)**: Lazy third Niivue (slice-only, no 3D render) to the right of scan preview **B**; **Ctrl+click** a volume or **Ctrl+VIEW SCAN** opens it; **Ctrl+double-click** on **C** tears down the instance and hides the pane to save GPU memory.
