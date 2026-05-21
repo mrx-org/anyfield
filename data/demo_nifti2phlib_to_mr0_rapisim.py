@@ -374,6 +374,7 @@ def recon_signal_traj_to_image(
     fov_x_m: float,
     fov_y_m: float,
     fov_z_m: float,
+    sim_backend: str = "mr0",
 ) -> tuple[np.ndarray, str]:
     """
     Reconstruct complex image from 1D k-space samples and trajectory (k in 1/m),
@@ -384,6 +385,7 @@ def recon_signal_traj_to_image(
 
     from scan_zero.recon import (
         _GRID_TOL,
+        _cartesian_use_fftn,
         _per_axis_cartesian_and_offsets,
         _recon_cartesian_ifft,
         _recon_full_nufft,
@@ -407,6 +409,7 @@ def recon_signal_traj_to_image(
         tr_np, fov_x_m, fov_y_m, fov_z_m, nx, ny, nz_use, tol=_GRID_TOL
     )
 
+    cart_fftn = _cartesian_use_fftn(sim_backend)
     if all(axis_ok):
         n_cart = min(int(signal.size), int(tr_np.shape[0]))
         reco = _recon_cartesian_ifft(
@@ -419,8 +422,9 @@ def recon_signal_traj_to_image(
             fov_y_m,
             fov_z_m,
             offset_n=offsets_xyz,
+            use_fftn=cart_fftn,
         )
-        return reco, "Cartesian IFFT"
+        return reco, "Cartesian FFT" if cart_fftn else "Cartesian IFFT"
 
     if kmax_x > 1e-30 and kmax_y > 1e-30 and np.abs(tr_np[:, :2]).max() > 1e-18:
         n_full = min(int(signal.size), int(tr_np.shape[0]))
@@ -542,10 +546,10 @@ if have_recon:
     gx, gy, gz, fovx, fovy, fovz = _phantom_grid_fov_m(phantom)
     try:
         reco_mr0, label_mr0 = recon_signal_traj_to_image(
-            s_mr0, tr_np, gx, gy, gz, fovx, fovy, fovz
+            s_mr0, tr_np, gx, gy, gz, fovx, fovy, fovz, sim_backend="mr0"
         )
         reco_rapi, label_rapi = recon_signal_traj_to_image(
-            s_rapi, tr_np, gx, gy, gz, fovx, fovy, fovz
+            s_rapi, tr_np, gx, gy, gz, fovx, fovy, fovz, sim_backend="rapisim"
         )
         print(f"recon mr0sim: {label_mr0}")
         print(f"recon rapisim: {label_rapi}")

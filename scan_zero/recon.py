@@ -301,15 +301,18 @@ def _recon_cartesian_ifft(
     fov_y_m: float,
     fov_z_m: float,
     offset_n: tuple[float, float, float] | None = None,
+    use_fftn: bool = False,
 ) -> np.ndarray:
     """
-    Scatter ``signal_1d`` onto centered Cartesian k-space bins, then ``ifftn``.
+    Scatter ``signal_1d`` onto centered Cartesian k-space bins, then ``ifftn`` or ``fftn``.
 
     Integer bin index ``n_adj = k * FOV - offset_n`` maps to numpy's unshifted FFT order via
     ``i = n % N`` (same convention as ``numpy.fft``).
 
     ``fftshift`` is applied on the image so DC / anatomy align with display (PyNUFFT adjoint
     was already effectively centered; raw ``ifftn`` leaves energy in array corners).
+
+    ``use_fftn=True`` selects ``fftn`` (rapisim sign convention workaround until simulators align).
     """
     ksp = _scatter_cartesian_kspace(
         signal_1d,
@@ -322,7 +325,10 @@ def _recon_cartesian_ifft(
         fov_z_m,
         offset_n=offset_n,
     )
-    reco = np.fft.ifftn(ksp, norm="ortho")
+    if use_fftn:
+        reco = np.fft.fftn(ksp, norm="ortho")
+    else:
+        reco = np.fft.ifftn(ksp, norm="ortho")
     reco = np.fft.fftshift(reco, axes=(0, 1, 2))
     return reco.astype(np.complex64)
 
@@ -447,6 +453,11 @@ def _to_py_list(x: Any) -> Any:
     return x
 
 
+def _cartesian_use_fftn(sim_backend: str) -> bool:
+    """Rapisim k-space uses the opposite FT sign vs MR0 until simulators are aligned."""
+    return str(sim_backend).strip().lower() == "rapisim"
+
+
 def run_sim_recon(
     signal_pairs: Sequence[Sequence[float]],
     traj_points: Union[Sequence[Sequence[float]], Any],
@@ -454,6 +465,7 @@ def run_sim_recon(
     out_path: str = DEFAULT_OUT_PATH,
     output_mode: str = "image",
     matrix: Sequence[int] | None = None,
+    sim_backend: str = "mr0",
 ) -> str:
     """
     Gridding adjoint (NUFFT) magnitude recon on the ref mask grid, or k-space debug output.
@@ -473,6 +485,9 @@ def run_sim_recon(
         ``"kspace_log"``: ``log(abs(kspace)+1)`` on recon grid or acquisition matrix.
     matrix
         Optional ``[Nread, Nphase, nz]`` from seq definitions (non-Cartesian fallback).
+    sim_backend
+        ``"mr0"`` (default) or ``"rapisim"``. Rapisim Cartesian recon uses ``fftn`` instead of
+        ``ifftn`` as a temporary sign-convention workaround.
 
     Returns
     -------
@@ -605,6 +620,7 @@ def run_sim_recon(
         nib.save(out, out_path)
         return out_path
 
+    cart_fftn = _cartesian_use_fftn(sim_backend)
     reco: np.ndarray | None = None
     if tr_np is not None and axis_ok is not None and all(axis_ok):
         n_cart = min(int(signal.size), int(tr_np.shape[0]))
@@ -618,10 +634,14 @@ def run_sim_recon(
             fov_y_m,
             fov_z_m,
             offset_n=offsets_xyz,
+            use_fftn=cart_fftn,
         )
+        _ft = "fftn" if cart_fftn else "ifftn"
         _log_recon(
             "[recon] transform used: kx=FFT, ky=FFT, kz=FFT "
-            "(numpy.fft.ifftn — Cartesian scatter + central crop to recon grid + separable FFT)"
+            "(numpy.fft.%s — Cartesian scatter + central crop to recon grid + separable FFT, "
+            "sim_backend=%s)"
+            % (_ft, sim_backend)
         )
 
     elif tr_np is not None and axis_ok is not None and not all(axis_ok):

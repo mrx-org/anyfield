@@ -1,6 +1,6 @@
 # Niivue minimal app (zero-install)
 
-**Version:** `v0.4.1`
+**Version:** `v0.4.2`
 
 This is a **minimal Niivue viewer** implemented as a single `viewer.html` file.
 
@@ -62,6 +62,10 @@ If no deep link is given, the app starts with the built-in Pulseq interpreter se
 For more insights see insights SPEC_no_field.md
 
 ## Release notes
+
+**v0.4.2**
+- **Rapisim recon orientation (temporary)**: Cartesian recon for **SCAN▶▶** (rapisim) uses `fftn` instead of `ifftn` in `scan_zero/recon.py` until MR0 and rapisim agree on k-space sign convention.
+- **User protocols**: Fixed loading saved protocols from the sequence tree (`user/prot/…`) — parameters and execute no longer fail with `VFS file not found`; protocol source is restored from in-memory code, mirrored to the Pyodide VFS with absolute paths, and persisted in `localStorage` across reloads.
 
 **v0.4.1**
 - **Fix rotated FOV sim**: Oblique FOV boxes (coronal, sagittal, arbitrary rotation) now produce correct simulations. The phantom affine sent to sim backends is stripped to a pure diagonal (voxel sizes only, no rotation), matching the sim's axis-aligned assumption. Previously the sim read voxel sizes from the affine diagonal, which gave wrong values for rotated grids (e.g. 0.035mm instead of 2mm).

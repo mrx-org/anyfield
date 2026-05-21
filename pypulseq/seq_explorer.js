@@ -165,6 +165,10 @@ export class SequenceExplorer {
     /** Default plot speed (must match `SEQ_DEFAULT_PLOT_SPEED` and template `selected` option). */
     static DEFAULT_PLOT_SPEED = SEQ_DEFAULT_PLOT_SPEED;
 
+    /** localStorage keys for session-persisted user sequences / protocols (VFS is ephemeral). */
+    static LS_USER_FILES = 'seq_explorer_user_files_v1';
+    static LS_USER_SOURCES = 'seq_explorer_user_sources_v1';
+
     constructor(containerId, config = {}) {
         this.container = typeof containerId === 'string' 
             ? document.getElementById(containerId) 
@@ -293,6 +297,102 @@ export class SequenceExplorer {
         }
         // Otherwise, prefix with basePath
         return this.config.basePath + path;
+    }
+
+    /** Normalize a sequence file key to an absolute Pyodide VFS path. */
+    vfsPath(fileName) {
+        const p = String(fileName || '').replace(/\\/g, '/').replace(/^\/+/, '');
+        return p ? `/${p}` : '/';
+    }
+
+    isUserArtifactPath(path) {
+        const p = String(path || '').replace(/\\/g, '/');
+        return p.startsWith('user/seq/') || p.startsWith('user/prot/');
+    }
+
+    persistUserArtifacts() {
+        try {
+            const files = {};
+            const sources = [];
+            for (const [path, fileData] of Object.entries(this.sequences)) {
+                if (this.isUserArtifactPath(path) && fileData?.code) {
+                    files[path] = fileData.code;
+                }
+            }
+            for (const s of this.config.sources || []) {
+                const p = this.getSourcePath(s);
+                if (s?.isUserEdited && this.isUserArtifactPath(p)) {
+                    sources.push(s);
+                }
+            }
+            localStorage.setItem(SequenceExplorer.LS_USER_FILES, JSON.stringify(files));
+            localStorage.setItem(SequenceExplorer.LS_USER_SOURCES, JSON.stringify(sources));
+        } catch (e) {
+            console.warn('Could not persist user sequences/protocols:', e);
+        }
+    }
+
+    async restorePersistedUserArtifacts() {
+        if (!this.config.pyodide) return;
+        let files = {};
+        let sources = [];
+        try {
+            files = JSON.parse(localStorage.getItem(SequenceExplorer.LS_USER_FILES) || '{}');
+            sources = JSON.parse(localStorage.getItem(SequenceExplorer.LS_USER_SOURCES) || '[]');
+        } catch (e) {
+            console.warn('Could not parse persisted user artifacts:', e);
+            return;
+        }
+        if (!sources.length && !Object.keys(files).length) return;
+
+        for (const [path, code] of Object.entries(files)) {
+            if (!code || !this.isUserArtifactPath(path)) continue;
+            try {
+                await this.storeUserFile(path, code);
+            } catch (e) {
+                console.warn('Could not restore user file to VFS:', path, e);
+            }
+        }
+        for (const src of sources) {
+            const p = this.getSourcePath(src);
+            if (!p || !this.isUserArtifactPath(p)) continue;
+            if (!this.config.sources.some((s) => this.getSourcePath(s) === p)) {
+                this.config.sources.push(src);
+            }
+        }
+        const toLoad = sources.filter((src) => {
+            const p = this.getSourcePath(src);
+            return p && !this.sequences[p];
+        });
+        for (const src of toLoad) {
+            try {
+                await this.loadSource(src);
+            } catch (e) {
+                console.warn('Could not reload persisted source:', src.path || src.name, e);
+            }
+        }
+        if (toLoad.length) {
+            this.renderTree();
+        }
+    }
+
+    /** Ensure a .py file exists on the VFS (absolute paths) before AST/noexec or import. */
+    async ensureSequenceFileInVfs(fileName) {
+        if (!this.config.pyodide || !fileName || !String(fileName).endsWith('.py')) return;
+        const norm = String(fileName).replace(/\\/g, '/').replace(/^\/+/, '');
+        const vfs = this.vfsPath(norm);
+        const pyodide = this.config.pyodide;
+        try {
+            const exists = await pyodide.runPythonAsync(`
+import os
+os.path.exists(${JSON.stringify(vfs)})
+`);
+            if (exists) return;
+        } catch (_) { /* check failed — try write below */ }
+        const code = this.sequences[norm]?.code ?? this.sequences[fileName]?.code;
+        if (code) {
+            await this.mirrorLocalPythonModuleToPyodide(norm, code);
+        }
     }
     
     render() {
@@ -1245,6 +1345,9 @@ else:
                         const fullModulePath = path.replace(/\.py$/i, '').replace(/\//g, '.');
                         sourceWithModule = { ...source, fullModulePath };
                     }
+                    if (this.config.pyodide && path && path.endsWith('.py')) {
+                        await this.mirrorLocalPythonModuleToPyodide(path, fileCode);
+                    }
                     await this.parseFile(path, fileCode, sourceWithModule);
                     return;
                 }
@@ -2054,16 +2157,32 @@ json.dumps(functions)
             const modulePath = source.fullModulePath || source.module || source.path;
             await this.ensureSourceManager();
 
-            // For file-type sources (built-in, private), use AST extraction to avoid
+            // For file-type sources (built-in, private, user), use AST extraction to avoid
             // triggering 'import pypulseq' which takes ~11s cold.
             if (source.type === 'file' && fileName) {
-                const noexecResult = await pyodide.runPythonAsync(`
+                const fileData = this.sequences[fileName];
+                const cachedCode = fileData?.code;
+                let noexecResult;
+                if (cachedCode) {
+                    pyodide.globals.set('_param_extract_code', cachedCode);
+                    noexecResult = await pyodide.runPythonAsync(`
 import json
 from seq_source_manager import SourceManager
 manager = SourceManager()
-result = manager.extract_function_parameters_noexec('/${fileName}', '${functionName}')
+_code = _param_extract_code.to_py() if hasattr(_param_extract_code, 'to_py') else str(_param_extract_code)
+result = manager.extract_function_parameters_noexec(${JSON.stringify(this.vfsPath(fileName))}, ${JSON.stringify(functionName)}, code=_code)
 json.dumps(result)
 `);
+                } else {
+                    await this.ensureSequenceFileInVfs(fileName);
+                    noexecResult = await pyodide.runPythonAsync(`
+import json
+from seq_source_manager import SourceManager
+manager = SourceManager()
+result = manager.extract_function_parameters_noexec(${JSON.stringify(this.vfsPath(fileName))}, ${JSON.stringify(functionName)})
+json.dumps(result)
+`);
+                }
                 const { params, doc } = JSON.parse(noexecResult);
                 this.functionParams = params;
                 if (doc && doc.trim()) {
@@ -2744,6 +2863,10 @@ json.dumps(_result)
             }
             
             await this.ensureSourceManager();
+
+            if (fileName && this.isUserArtifactPath(fileName)) {
+                await this.ensureSequenceFileInVfs(fileName);
+            }
 
             const sourceType = this.resolveSourceType(source);
             const useModulePath = source.fullModulePath || (sourceType === 'pyodide_module' ? (source.module || source.path) : null);
@@ -3562,6 +3685,7 @@ _result if _result else json.dumps({'error': 'No result returned from Python cod
         
         // loadSequences() already renders the tree and runs selectInitialSequence(); do not render again here or the tree is rebuilt and initial selection is lost.
         await this.loadSequences();
+        await this.restorePersistedUserArtifacts();
     }
     
     async getDefaultSourcesConfig() {
@@ -3790,31 +3914,17 @@ parse_toml_config(_toml_payload)
         if (!this.config.pyodide) {
             throw new Error('Pyodide not available');
         }
-        if (path.startsWith('user/seq/') || path.startsWith('user/prot/')) {
+        const normPath = String(path).replace(/\\/g, '/').replace(/^\/+/, '');
+        if (this.isUserArtifactPath(normPath)) {
+            await this.mirrorLocalPythonModuleToPyodide(normPath, code);
             await this.config.pyodide.runPythonAsync(`
-import os
-for d in ('user', 'user/seq', 'user/prot'):
-    if not os.path.exists(d):
-        os.makedirs(d)
-    init_path = os.path.join(d, '__init__.py')
-    if not os.path.exists(init_path):
-        with open(init_path, 'w', encoding='utf-8') as f:
-            f.write('')
-`);
-        }
-        await this.config.pyodide.runPythonAsync(`
 import sys
-import os
 if not hasattr(sys.modules['__main__'], '_user_edited_files'):
     sys.modules['__main__']._user_edited_files = {}
-_code = ${JSON.stringify(code)}
-sys.modules['__main__']._user_edited_files['${path}'] = _code
-dir_path = os.path.dirname('${path}')
-if dir_path and not os.path.exists(dir_path):
-    os.makedirs(dir_path)
-with open('${path}', 'w', encoding='utf-8') as f:
-    f.write(_code)
+sys.modules['__main__']._user_edited_files[${JSON.stringify(normPath)}] = ${JSON.stringify(code)}
 `);
+            this.persistUserArtifacts();
+        }
     }
     
     async saveProtocolSnapshot(protocolName) {
@@ -3927,6 +4037,7 @@ def ${safeFunctionName}(
             
             // Parse and refresh
             await this.parseFile(finalFileName, code, newSource);
+            this.persistUserArtifacts();
             this.renderTree();
             console.log('Protocol snapshot saved:', shortName);
             return finalFileName;
@@ -4518,6 +4629,8 @@ if hasattr(sys.modules['__main__'], '_user_edited_files'):
         if (this.sequences[filePath]) {
             delete this.sequences[filePath];
         }
+
+        this.persistUserArtifacts();
         
         // Re-render tree
         this.renderTree();

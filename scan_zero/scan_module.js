@@ -830,6 +830,8 @@ except Exception:
             nvMod.pyodide.globals.set("sim_ref_bytes", reconRef);
             nvMod.pyodide.globals.set("sim_output_mode", useRecon ? "image" : "kspace_log");
             nvMod.pyodide.globals.set("sim_seq_path", job.vfsSeqPath || "");
+            const simBackend = String(simToolUrl || '').includes('rapisim') ? 'rapisim' : 'mr0';
+            nvMod.pyodide.globals.set("sim_backend", simBackend);
             const recoPathRes = await nvMod.pyodide.runPythonAsync(`
 import types
 _matrix = None
@@ -853,12 +855,14 @@ if "output_mode" not in _src:
 _recon = types.ModuleType("_scan_recon_live")
 _recon.__dict__["__file__"] = "/scan_zero/recon.py"
 exec(compile(_src, "/scan_zero/recon.py", "exec"), _recon.__dict__)
+_backend = sim_backend.to_py() if hasattr(sim_backend, 'to_py') else str(sim_backend)
 _recon.run_sim_recon(
     sim_signal_pairs,
     sim_traj_points,
     sim_ref_bytes,
     output_mode=sim_output_mode,
     matrix=_matrix,
+    sim_backend=_backend,
 )
             `);
             console.log(`[SIM] ${useRecon ? 'PyNUFFT recon' : 'k-space log'}: ${(performance.now()-_t6).toFixed(0)}ms`);

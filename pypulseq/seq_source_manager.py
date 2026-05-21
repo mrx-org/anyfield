@@ -286,15 +286,16 @@ class SourceManager:
         
         return functions
     
-    def extract_function_parameters_noexec(self, file_path, function_name):
+    def extract_function_parameters_noexec(self, file_path, function_name, code=None):
         """
         Extract parameters AND docstring from a function using AST only — no module import.
-        Reads the file from the Pyodide VFS and parses it with ast.parse, so module-level
-        side-effects (e.g. 'import pypulseq') are never triggered.
+        Reads the file from the Pyodide VFS (or uses ``code`` when provided) and parses with
+        ast.parse, so module-level side-effects (e.g. 'import pypulseq') are never triggered.
 
         Args:
             file_path: Absolute or root-relative VFS path (e.g. '/built_in_seq/mr0_tse_2d_seq.py')
             function_name: Name of the function to extract from
+            code: Optional source text (user protocols kept in JS memory / localStorage)
 
         Returns:
             Dict {'params': [...], 'doc': str}
@@ -302,14 +303,14 @@ class SourceManager:
         """
         import ast, math, operator as op_mod
 
-        # Resolve path — prepend '/' if needed
-        if not os.path.isabs(file_path):
-            file_path = '/' + file_path.lstrip('/')
-        if not os.path.exists(file_path):
-            raise FileNotFoundError(f"VFS file not found: {file_path}")
-
-        with open(file_path, 'r', encoding='utf-8', errors='replace') as fh:
-            code = fh.read()
+        if code is None:
+            # Resolve path — prepend '/' if needed
+            if not os.path.isabs(file_path):
+                file_path = '/' + file_path.lstrip('/')
+            if not os.path.exists(file_path):
+                raise FileNotFoundError(f"VFS file not found: {file_path}")
+            with open(file_path, 'r', encoding='utf-8', errors='replace') as fh:
+                code = fh.read()
 
         tree = ast.parse(code)
 
