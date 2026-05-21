@@ -48,6 +48,18 @@ Uses `executeFunction` and prepares `/outputs/<baseName>.seq` for the external s
 - **B1 handling**: `b1_tx`/`b1_rx` are built from `B1+`/`B1-` entries (searched across tissues); if missing/empty, fallback constant maps are inserted so toolapi payloads are never TX/RX-empty.
 - **Wire format**: JS encodes the plain dict to toolapi `SegmentedPhantom` with `Volume.data` serialized as `TypedList::Float` (`{ Float: [...] }`) to match toolapi-wasm expectations.
 
+## Rotated FOV and the sim coordinate contract
+
+The sim pipeline supports oblique (coronal, sagittal, arbitrary) FOV boxes. Understanding how coordinates flow through the pipeline is critical:
+
+1. **Reslice**: `generateFovMaskNiftiFromSnapshot` builds a NIfTI whose voxel grid is aligned with the FOV box. For a coronal FOV, voxel axis 0 might map to world X while axis 1 maps to world Z. The **data matrix** is in the FOV-native frame; the NIfTI **affine** encodes the rotation back to world (RAS) space.
+
+2. **Phantom for sim — diagonal affine**: The sim backends (rapisim, tool-mr0sim) treat the phantom as an axis-aligned box scaled by voxel sizes read from the affine. They do **not** extract column norms; they read the affine diagonal directly. Therefore `make_vol` in `_convertResampledGroupToToolPhantom` strips the rotation and builds a pure diagonal affine: `diag(vox_x, vox_y, vox_z, 1)` where `vox_i = ‖column_i‖` of the original affine. This ensures the sim always sees correct voxel dimensions regardless of FOV rotation.
+
+3. **Trajectory**: `trajex` computes k-space from the sequence gradient waveforms (physical Gx/Gy/Gz channels). Since the sim maps gradient X → voxel axis 0, Y → axis 1, Z → axis 2 (axis-aligned assumption), the trajectory is already in the same frame as the sim's encoding. No rotation of the trajectory is needed.
+
+4. **Recon**: Receives `reconRef` (with the **full rotated affine**). Extracts grid shape and voxel sizes (zooms) for FOV/kmax computation — these are correct regardless of rotation. Reconstructs in the sim's axis-aligned frame. The output NIfTI is stamped with the original rotated affine so Niivue displays the image at the correct world-space position and orientation.
+
 ## Interface & Workflow
 - **CROP Button**: Resample-to-FOV only (see above).
 - **MR0 button** (**SCAN▶** in the bar): uses the in-app translated/resampled phantom path (with robust B1 TX/RX handling); queue/protocol label **`(▶)`**.

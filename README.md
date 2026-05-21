@@ -1,6 +1,6 @@
 # Niivue minimal app (zero-install)
 
-**Version:** `v0.3.1`
+**Version:** `v0.4.1`
 
 This is a **minimal Niivue viewer** implemented as a single `viewer.html` file.
 
@@ -62,6 +62,14 @@ If no deep link is given, the app starts with the built-in Pulseq interpreter se
 For more insights see insights SPEC_no_field.md
 
 ## Release notes
+
+**v0.4.1**
+- **Fix rotated FOV sim**: Oblique FOV boxes (coronal, sagittal, arbitrary rotation) now produce correct simulations. The phantom affine sent to sim backends is stripped to a pure diagonal (voxel sizes only, no rotation), matching the sim's axis-aligned assumption. Previously the sim read voxel sizes from the affine diagonal, which gave wrong values for rotated grids (e.g. 0.035mm instead of 2mm).
+
+**v0.4.0**
+- **Recon / k-space toggle**: OPTIONS **recon** checkbox (default on); unchecked writes `log(abs(k)+1)` for k-space debug instead of image recon.
+- **Recon matrix = central k-space crop**: Cartesian scans crop acquisition samples to the recon grid when `Nread×Nphase` exceeds mask matrix size (fixes empty recon/k-space for oversampled sequences).
+- **4D scan output**: Image recon NIfTIs are `(nx, ny, nz, 2)` — frame 0 = magnitude, frame 1 = phase `[rad]` (Left/Right in Niivue).
 
 **v0.3.1**
 - **Histogram windowing (Planning)**: Clim histogram under main viewer **A**; joint overlay histogram under preview **B** / compare **C** with shared min/max; tick labels, double-click edit dialog, 4D frame ↔ clims sync; preview/compare pane accent borders.

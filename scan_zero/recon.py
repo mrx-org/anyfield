@@ -16,8 +16,10 @@ Bins use ``n % N`` (``+N/2`` and ``-N/2`` map to the same Nyquist bin).
 Per-axis ``offset_n = median(k*FOV - round(k*FOV))`` removes a global k-space shift
 (linear phase in image domain) before testing ``n`` on-grid.
 
-If **all** axes pass the Cartesian test, reconstruction uses ``numpy.fft.ifftn``;
-otherwise joint 3D PyNUFFT is used for the whole volume (no per-axis mixing).
+If **all** axes pass the Cartesian spacing test, reconstruction uses ``numpy.fft.ifftn``
+on the **recon matrix** grid (``maskX×maskY×maskZ``). Samples with ``|n| > N/2`` on
+any axis are **dropped** (central k-space crop) when acquisition resolution exceeds
+the recon matrix — the recon matrix is the output grid, not the acquisition size.
 
 For non-Cartesian trajectories, density compensation is applied before the
 adjoint NUFFT using a short Pipe-Menon style fixed-point iteration on PyNUFFT's
@@ -72,7 +74,12 @@ def _axis_cartesian_after_offset(
     n_len: int,
     tol: float,
 ) -> tuple[bool, float]:
-    """Cartesian test on ``(k*FOV - offset)`` with ``offset = median(d - round(d))``."""
+    """Cartesian spacing test on ``(k*FOV - offset)`` (integer grid); range not checked.
+
+    Recon matrix size defines the output grid; out-of-range samples are cropped at scatter.
+    ``n_len`` is kept for API compatibility with callers that pass recon ``nx/ny/nz``.
+    """
+    del n_len  # crop applied in scatter, not in detection
     if k_axis.size == 0:
         return True, 0.0
     d = k_axis.astype(np.float64, copy=False) * fov_m
@@ -81,10 +88,19 @@ def _axis_cartesian_after_offset(
     r = np.round(d_adj)
     if not np.all(np.abs(d_adj - r) <= tol):
         return False, offset
-    lo, hi = _centered_int_range(n_len)
-    if not np.all((r >= lo) & (r <= hi)):
-        return False, offset
     return True, offset
+
+
+def _axis_int_n(k: np.ndarray, fov_m: float, offset_n: float) -> np.ndarray:
+    """Integer frequency index ``n = round(k*FOV - offset_n)``."""
+    d_adj = k.astype(np.float64) * fov_m - offset_n
+    return np.rint(d_adj).astype(np.int64)
+
+
+def _in_recon_index_range(n: np.ndarray, n_len: int) -> np.ndarray:
+    """True where integer index ``n`` lies in the centered recon grid ``[-N/2, N/2]``."""
+    lo, hi = _centered_int_range(n_len)
+    return (n >= lo) & (n <= hi)
 
 
 def _log_traj_and_detection(
@@ -135,7 +151,10 @@ def _log_traj_and_detection(
         nmin = int(np.min(r))
         nmax = int(np.max(r))
         st = "Cartesian" if ok else "non-Cartesian"
-        line_parts.append("%s:%s n=%d..%d allow[%d,%d]" % (name, st, nmin, nmax, lo, hi))
+        crop = ""
+        if ok and (nmin < lo or nmax > hi):
+            crop = ", crop"
+        line_parts.append("%s:%s n=%d..%d recon[%d,%d]%s" % (name, st, nmin, nmax, lo, hi, crop))
     _log_recon("[recon]   " + " | ".join(line_parts))
 
 
@@ -172,8 +191,8 @@ def _is_centered_cartesian(
     tol: float = _GRID_TOL,
 ) -> bool:
     """
-    True if all samples lie on the centered Cartesian grid:
-    ``k * FOV`` is (approximately) integer and within the valid index range.
+    True if samples lie on a centered Cartesian grid (integer ``k * FOV`` spacing).
+    Recon matrix may crop a larger acquisition grid (see ``_scatter_cartesian_kspace``).
     """
     ok, _ = _per_axis_cartesian_and_offsets(
         tr, fov_x_m, fov_y_m, fov_z_m, nx, ny, nz, tol
@@ -181,10 +200,77 @@ def _is_centered_cartesian(
     return bool(all(ok))
 
 
-def _axis_bins(k: np.ndarray, fov_m: float, offset_n: float, n_len: int) -> np.ndarray:
-    """FFT bin indices for ``n_adj = k*FOV - offset_n`` (centered DFT, ``% n_len``)."""
-    d_adj = k.astype(np.float64) * fov_m - offset_n
-    return (np.rint(d_adj).astype(np.int64) % n_len).astype(np.intp)
+def _scatter_cartesian_kspace(
+    signal_1d: np.ndarray,
+    tr: np.ndarray,
+    nx: int,
+    ny: int,
+    nz: int,
+    fov_x_m: float,
+    fov_y_m: float,
+    fov_z_m: float,
+    offset_n: tuple[float, float, float] | None = None,
+) -> np.ndarray:
+    """Scatter ``signal_1d`` onto recon-grid k-space; crop samples outside recon range."""
+    ox, oy, oz = offset_n if offset_n is not None else (0.0, 0.0, 0.0)
+    ksp = np.zeros((nx, ny, nz), dtype=np.complex128)
+    kx = tr[:, 0].astype(np.float64, copy=False)
+    ky = tr[:, 1].astype(np.float64, copy=False)
+    kz = tr[:, 2].astype(np.float64, copy=False) if tr.shape[1] >= 3 else np.zeros(tr.shape[0], dtype=np.float64)
+
+    n_samp = min(int(signal_1d.shape[0]), int(tr.shape[0]))
+    nx_n = _axis_int_n(kx[:n_samp], fov_x_m, ox)
+    ny_n = _axis_int_n(ky[:n_samp], fov_y_m, oy)
+    nz_n = _axis_int_n(kz[:n_samp], fov_z_m, oz)
+    keep = (
+        _in_recon_index_range(nx_n, nx)
+        & _in_recon_index_range(ny_n, ny)
+        & _in_recon_index_range(nz_n, nz)
+    )
+    n_kept = int(np.count_nonzero(keep))
+    if n_kept < n_samp:
+        _log_recon(
+            "[recon] k-space crop to recon grid %dx%dx%d: kept %d / %d samples"
+            % (nx, ny, nz, n_kept, n_samp)
+        )
+    if n_kept == 0:
+        _log_recon("[recon] k-space crop: no samples in recon grid")
+        return ksp.astype(np.complex64)
+
+    ix = (nx_n[keep] % nx).astype(np.intp)
+    iy = (ny_n[keep] % ny).astype(np.intp)
+    iz = (nz_n[keep] % nz).astype(np.intp)
+    sig = signal_1d[:n_samp][keep].astype(np.complex128, copy=False)
+    np.add.at(ksp, (ix, iy, iz), sig)
+    return ksp.astype(np.complex64)
+
+
+def _display_align_3d(vol: np.ndarray) -> np.ndarray:
+    """Flip + roll for NIfTI display alignment (magnitude, phase, etc.)."""
+    out = np.ascontiguousarray(np.flip(vol, axis=(0, 1, 2)))
+    for _ax in (0, 1, 2):
+        out = np.roll(out, 1, axis=_ax)
+    return np.ascontiguousarray(out)
+
+
+def _save_image_mag_phase_nifti(
+    reco: np.ndarray,
+    ref_img: nib.Nifti1Image,
+    out_path: str,
+    dx_mm: float,
+    dy_mm: float,
+    dz_mm: float,
+) -> str:
+    """Write 4D NIfTI: frame 0 = |img|, frame 1 = angle(img) in radians."""
+    mag3d = _display_align_3d(np.abs(reco).astype(np.float32))
+    phase3d = _display_align_3d(np.angle(reco).astype(np.float32))
+    vol4d = np.stack([mag3d, phase3d], axis=-1)
+    out = nib.Nifti1Image(vol4d, ref_img.affine)
+    out.header.set_zooms((dx_mm, dy_mm, dz_mm, 1.0))
+    out.set_sform(ref_img.affine, code=2)
+    out.set_qform(ref_img.affine, code=2)
+    nib.save(out, out_path)
+    return out_path
 
 
 def _compute_pipe_menon_dcf(a: NUFFT, n_samples: int, n_iter: int = _DCF_ITERS) -> np.ndarray:
@@ -225,21 +311,85 @@ def _recon_cartesian_ifft(
     ``fftshift`` is applied on the image so DC / anatomy align with display (PyNUFFT adjoint
     was already effectively centered; raw ``ifftn`` leaves energy in array corners).
     """
-    ox, oy, oz = offset_n if offset_n is not None else (0.0, 0.0, 0.0)
-    ksp = np.zeros((nx, ny, nz), dtype=np.complex128)
-    kx = tr[:, 0].astype(np.float64, copy=False)
-    ky = tr[:, 1].astype(np.float64, copy=False)
-    kz = tr[:, 2].astype(np.float64, copy=False) if tr.shape[1] >= 3 else np.zeros(tr.shape[0], dtype=np.float64)
-
-    n_samp = min(int(signal_1d.shape[0]), int(tr.shape[0]))
-    ix = _axis_bins(kx[:n_samp], fov_x_m, ox, nx)
-    iy = _axis_bins(ky[:n_samp], fov_y_m, oy, ny)
-    iz = _axis_bins(kz[:n_samp], fov_z_m, oz, nz)
-    sig = signal_1d[:n_samp].astype(np.complex128, copy=False)
-    np.add.at(ksp, (ix, iy, iz), sig)
+    ksp = _scatter_cartesian_kspace(
+        signal_1d,
+        tr,
+        nx,
+        ny,
+        nz,
+        fov_x_m,
+        fov_y_m,
+        fov_z_m,
+        offset_n=offset_n,
+    )
     reco = np.fft.ifftn(ksp, norm="ortho")
     reco = np.fft.fftshift(reco, axes=(0, 1, 2))
     return reco.astype(np.complex64)
+
+
+def _kspace_log_volume(
+    signal: np.ndarray,
+    tr_np: np.ndarray | None,
+    axis_ok: tuple[bool, bool, bool] | None,
+    offsets_xyz: tuple[float, float, float],
+    nx: int,
+    ny: int,
+    nz: int,
+    fov_x_m: float,
+    fov_y_m: float,
+    fov_z_m: float,
+    dx_mm: float,
+    dy_mm: float,
+    dz_mm: float,
+    matrix: Sequence[int] | None,
+) -> tuple[np.ndarray, tuple[float, float, float]]:
+    """Build ``log(abs(kspace)+1)`` on recon grid (Cartesian) or acquisition matrix fallback."""
+    if tr_np is not None and axis_ok is not None and all(axis_ok):
+        n_cart = min(int(signal.size), int(tr_np.shape[0]))
+        ksp = _scatter_cartesian_kspace(
+            signal[:n_cart],
+            tr_np[:n_cart],
+            nx,
+            ny,
+            nz,
+            fov_x_m,
+            fov_y_m,
+            fov_z_m,
+            offset_n=offsets_xyz,
+        )
+        vol = np.log(np.abs(ksp) + 1.0).astype(np.float32)
+        vol = np.fft.fftshift(vol, axes=(0, 1, 2))
+        _log_recon(
+            "[recon] k-space debug: Cartesian scatter + central crop + log(abs(k)+1) on recon grid %dx%dx%d"
+            % (nx, ny, nz)
+        )
+        return vol, (dx_mm, dy_mm, dz_mm)
+
+    if matrix is not None and len(matrix) >= 2:
+        nr = max(1, int(matrix[0]))
+        np_ = max(1, int(matrix[1]))
+        nz_m = max(1, int(matrix[2])) if len(matrix) >= 3 else 1
+        n_fit = nr * np_ * nz_m
+        n = min(int(signal.size), n_fit)
+        vol = np.log(np.abs(signal[:n]) + 1.0).astype(np.float32)
+        if n < n_fit:
+            pad = np.zeros(n_fit - n, dtype=np.float32)
+            vol = np.concatenate([vol, pad], axis=0)
+        vol = vol.reshape(nr, np_, nz_m, order="C")
+        zooms = (
+            (fov_x_m / nr) * 1e3 if fov_x_m > 0 else dx_mm,
+            (fov_y_m / np_) * 1e3 if fov_y_m > 0 else dy_mm,
+            (fov_z_m / nz_m) * 1e3 if fov_z_m > 0 else dz_mm,
+        )
+        _log_recon(
+            "[recon] k-space debug: matrix reshape %dx%dx%d + log(abs(k)+1) (non-Cartesian fallback)"
+            % (nr, np_, nz_m)
+        )
+        return vol, zooms
+
+    vol = np.log(np.abs(signal) + 1.0).astype(np.float32).reshape(1, -1, 1)
+    _log_recon("[recon] k-space debug: 1xN strip + log(abs(k)+1) (no Cartesian grid / matrix)")
+    return vol, (dx_mm, dy_mm, dz_mm)
 
 
 def _recon_full_nufft(
@@ -302,9 +452,11 @@ def run_sim_recon(
     traj_points: Union[Sequence[Sequence[float]], Any],
     ref_bytes: Union[bytes, Any],
     out_path: str = DEFAULT_OUT_PATH,
+    output_mode: str = "image",
+    matrix: Sequence[int] | None = None,
 ) -> str:
     """
-    Gridding adjoint (NUFFT) magnitude recon on the ref mask grid.
+    Gridding adjoint (NUFFT) magnitude recon on the ref mask grid, or k-space debug output.
 
     Parameters
     ----------
@@ -316,6 +468,11 @@ def run_sim_recon(
         Raw bytes of binary FOV mask NIfTI (reference geometry).
     out_path
         Where to write float32 magnitude NIfTI.
+    output_mode
+        ``"image"`` (default): PyNUFFT / IFFT recon magnitude.
+        ``"kspace_log"``: ``log(abs(kspace)+1)`` on recon grid or acquisition matrix.
+    matrix
+        Optional ``[Nread, Nphase, nz]`` from seq definitions (non-Cartesian fallback).
 
     Returns
     -------
@@ -423,6 +580,31 @@ def run_sim_recon(
             "per-axis k-grid detection skipped"
         )
 
+    if output_mode == "kspace_log":
+        vol, zooms = _kspace_log_volume(
+            signal,
+            tr_np,
+            axis_ok,
+            offsets_xyz,
+            nx,
+            ny,
+            nz_use,
+            fov_x_m,
+            fov_y_m,
+            fov_z_m,
+            dx_mm,
+            dy_mm,
+            dz_mm,
+            matrix,
+        )
+        vol = np.ascontiguousarray(vol)
+        out = nib.Nifti1Image(vol, ref_img.affine)
+        out.header.set_zooms(zooms)
+        out.set_sform(ref_img.affine, code=2)
+        out.set_qform(ref_img.affine, code=2)
+        nib.save(out, out_path)
+        return out_path
+
     reco: np.ndarray | None = None
     if tr_np is not None and axis_ok is not None and all(axis_ok):
         n_cart = min(int(signal.size), int(tr_np.shape[0]))
@@ -439,7 +621,7 @@ def run_sim_recon(
         )
         _log_recon(
             "[recon] transform used: kx=FFT, ky=FFT, kz=FFT "
-            "(numpy.fft.ifftn — Cartesian scatter + separable FFT; median offset_n applied per axis)"
+            "(numpy.fft.ifftn — Cartesian scatter + central crop to recon grid + separable FFT)"
         )
 
     elif tr_np is not None and axis_ok is not None and not all(axis_ok):
@@ -525,18 +707,5 @@ def run_sim_recon(
                 "[recon] transform used: kx=PyNUFFT, ky=PyNUFFT, kz=PyNUFFT "
                 "(pynufft synthetic ω trajectory)"
             )
-    mag3d = np.abs(reco).astype(np.float32)
-
-    # Flip voxel data on all axes for display alignment; affine unchanged.
-    mag3d = np.ascontiguousarray(np.flip(mag3d, axis=(0, 1, 2)))
-    # Compensate ~1-voxel shift (NUFFT / grid centering vs NIfTI voxel centers).
-    for _ax in (0, 1, 2):
-        mag3d = np.roll(mag3d, 1, axis=_ax)
-    mag3d = np.ascontiguousarray(mag3d)
-
-    out = nib.Nifti1Image(np.asarray(mag3d, dtype=np.float32), ref_img.affine)
-    out.header.set_zooms((dx_mm, dy_mm, dz_mm))
-    out.set_sform(ref_img.affine, code=2)
-    out.set_qform(ref_img.affine, code=2)
-    nib.save(out, out_path)
-    return out_path
+    _log_recon("[recon] output: 4D NIfTI frame 0 = |img|, frame 1 = angle(img) [rad]")
+    return _save_image_mag_phase_nifti(reco, ref_img, out_path, dx_mm, dy_mm, dz_mm)

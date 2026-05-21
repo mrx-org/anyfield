@@ -3,7 +3,7 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Any-Field Scanner v0.3.1</title>
+    <title>Any-Field Scanner v0.4.1</title>
     
     <!-- Dependencies for Niivue App -->
     <script src="https://cdn.jsdelivr.net/pyodide/v0.29.0/full/pyodide.js"></script>
@@ -261,7 +261,7 @@
     <div class="lab-shell">
         <header>
             <div class="header-content">
-                <div class="header-title">Any-Field <span class="header-subtitle">Scanner</span><span class="app-version" aria-label="Version v0.3.1">v0.3.1</span></div>
+                <div class="header-title">Any-Field <span class="header-subtitle">Scanner</span><span class="app-version" aria-label="Version v0.4.1">v0.4.1</span></div>
                 <button type="button" id="credits-btn" class="credits-btn" title="Credits &amp; dependencies"><i class="bi bi-award" aria-hidden="true"></i></button>
             </div>
         </header>
@@ -336,9 +336,9 @@
 
     <script type="module">
         import { NiivueModule, ScanPreviewModule, ComparePane } from './niivue_app.js';
-        import { MainHistogramController, PreviewJointHistogramController } from './hist_panel/histogram-clim-mount.js';
+        import { MainHistogramController, PreviewJointHistogramController } from './hist_panel/histogram-clim-panel.js';
         import { SequenceExplorer } from './pypulseq/seq_explorer.js';
-        import { ScanModule } from './scan_zero/scan_module.js';
+        import { ScanModule } from './scan_zero/scan_module.js?v=2';
         import { eventHub } from './event_hub.js';
 
         // URL flags: ?pro=1 pro/debug; readable deep link ?s_category=&s_file=&s_func= or legacy ?init_prot=

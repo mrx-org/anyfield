@@ -1,5 +1,6 @@
 import { Niivue, NVMesh, NVImage, SLICE_TYPE, MULTIPLANAR_TYPE, DRAG_MODE, SHOW_RENDER } from "https://unpkg.com/@niivue/niivue@0.65.0/dist/index.js";
 import { eventHub } from "./event_hub.js";
+import { volumeIs4D, syncVolumeClimsToCurrent4DFrame } from "./hist_panel/histogram-clim-panel.js";
 
 /**
  * Remote base URL for the bundled default nifti_phantom (JSON + NIfTIs), served from GitHub `raw`.
@@ -71,6 +72,8 @@ export class NiivueModule {
     this.radiological = null;
     this.showRender = null;
     this.showCrosshair = null;
+    /** When checked (default), SIM scans run PyNUFFT recon; unchecked writes log|k|-space. */
+    this.scanRecon = null;
     this.zoom2D = null;
     this.zoom2DVal = null;
     this.fovControls = null;
@@ -369,6 +372,9 @@ export class NiivueModule {
             <label class="toggle"><input id="showRender-${this.instanceId}" type="checkbox" checked /> 3D Render</label>
             <label class="toggle"><input id="showCrosshair-${this.instanceId}" type="checkbox" checked /> Crosshair</label>
             <label class="toggle"><input id="compactMode-${this.instanceId}" type="checkbox" /> Compact</label>
+          </div>
+          <div class="row" style="grid-template-columns: 1fr; gap: 4px; margin-top: 4px;">
+            <label class="toggle"><input id="scanRecon-${this.instanceId}" type="checkbox" checked /> recon</label>
           </div>
           <div class="sliderGroup" style="margin-top: 8px;">
             <div class="sliderRow">
@@ -839,6 +845,7 @@ export class NiivueModule {
     this.radiological = qs("radiological");
     this.showRender = qs("showRender");
     this.showCrosshair = qs("showCrosshair");
+    this.scanRecon = qs("scanRecon");
     this.compactMode = qs("compactMode");
     this.zoom2D = qs("zoom2D");
     this.zoom2DVal = qs("zoom2DVal");
@@ -2272,6 +2279,11 @@ os.makedirs('/phantom/averaged', exist_ok=True)
     ];
   }
 
+  /** True when SIM pipeline should PyNUFFT-recon (default); false → log|k|-space NIfTI. */
+  isScanReconEnabled() {
+    return this.scanRecon?.checked !== false;
+  }
+
   getPhantomMatrixDims() {
     return [
       Math.max(1, Math.round(Number(this.phantomX?.value) || 1)),
@@ -3250,6 +3262,44 @@ function getPreviewPeerNv(sourceNv) {
   return null;
 }
 
+/** Step 4D frame on preview B and synced compare C (Niivue default needs cursor-in-bounds). */
+function stepPreviewPanesFrame4D(sourceNv, delta) {
+  if (!sourceNv?.volumes?.length) return false;
+  const srcVol = sourceNv.volumes[0];
+  if (!volumeIs4D(srcVol)) return false;
+
+  const nFr = srcVol.nFrame4D
+    ?? (srcVol.hdr?.dims?.[4] > 1 ? srcVol.hdr.dims[4] : 1);
+  if (!nFr || nFr <= 1) return false;
+
+  const cur = srcVol.frame4D ?? 0;
+  const next = (cur + delta + nFr) % nFr;
+
+  const targets = [sourceNv];
+  const peer = getPreviewPeerNv(sourceNv);
+  if (peer?.volumes?.length) targets.push(peer);
+
+  _previewPeerSyncGuard = true;
+  try {
+    for (const nv of targets) {
+      const vol = nv.volumes[0];
+      if (!vol || !volumeIs4D(vol)) continue;
+      if (typeof nv.setFrame4D === "function") {
+        nv.setFrame4D(vol.id, next);
+      } else {
+        vol.frame4D = next;
+        nv.updateGLVolume?.();
+      }
+      syncVolumeClimsToCurrent4DFrame(vol, nv);
+      nv.drawScene?.();
+    }
+    window.jointHist?.syncFromVolumes?.();
+  } finally {
+    _previewPeerSyncGuard = false;
+  }
+  return true;
+}
+
 /** Push slice layout, clims, and scene sync from sourceNv → peer (both directions via broadcastTo). */
 export function pushPreviewStateFrom(sourceNv) {
   if (_previewPeerSyncGuard || !sourceNv) return;
@@ -3345,8 +3395,8 @@ export class ScanPreviewModule {
     this.role = options.role || 'preview';
     this.labelDefault = options.labelDefault || (this.role === 'compare' ? 'Compare' : 'Scan Preview');
     this.hintText = options.hint ?? (this.role === 'compare'
-      ? 'Synced · V views · Ctrl+dbl-click close'
-      : 'Press V to change views');
+      ? 'Synced · V views · ←/→ 4D · Ctrl+dbl-click close'
+      : 'Press V to change views · ←/→ 4D frame');
     this.viewerClass = this.role === 'compare'
       ? 'viewer scan-preview-viewer compare-preview-viewer'
       : 'viewer scan-preview-viewer';
@@ -3417,7 +3467,7 @@ export class ScanPreviewModule {
       eventHub.on('viewOptionsChange', (opts) => this.applyViewOptions(opts));
       installPreviewSyncHooks(this.nv);
       window.jointHist?.installPreviewHooks?.();
-      this.canvas.addEventListener("keydown", (e) => this._onPreviewViewKey(e));
+      this.canvas.addEventListener("keydown", (e) => this._onPreviewViewKey(e), true);
 
       // Double-click: compare pane Ctrl+dbl-click closes and frees GPU; else maximize
       this.canvas.addEventListener("dblclick", (e) => {
@@ -3473,7 +3523,16 @@ export class ScanPreviewModule {
   }
 
   _onPreviewViewKey(e) {
-    if (e.code !== "KeyV" || e.repeat || e.ctrlKey || e.altKey || e.metaKey) return;
+    if (e.repeat || e.ctrlKey || e.altKey || e.metaKey) return;
+    if (e.code === "ArrowLeft" || e.code === "ArrowRight") {
+      const delta = e.code === "ArrowRight" ? 1 : -1;
+      if (stepPreviewPanesFrame4D(this.nv, delta)) {
+        e.preventDefault();
+        e.stopImmediatePropagation();
+      }
+      return;
+    }
+    if (e.code !== "KeyV") return;
     e.preventDefault();
     this._cyclePreviewSliceView();
   }

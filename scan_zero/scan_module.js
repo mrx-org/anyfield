@@ -21,23 +21,22 @@ export class ScanModule {
         this._toolApiCall = null;
         /** Set during runSimPipeline for _toolOnMessage tagging */
         this._simPipelineJob = null;
-        /** Set after `recon.py` is written into Pyodide FS (once per session). */
-        this._simReconPyMounted = false;
 
         this.setupEventListeners();
     }
 
-    /**
-     * Load `scan_zero/recon.py` into Pyodide VFS so SIM recon runs as normal Python (debuggable).
-     */
+    /** Fetch `scan_zero/recon.py` and stage in Pyodide (source passed to Python via global). */
     async _ensureSimReconPy(nvMod) {
-        if (this._simReconPyMounted) return;
         const url = new URL("./recon.py", import.meta.url);
-        const text = await (await fetch(url)).text();
+        url.searchParams.set("_", String(Date.now()));
+        const text = await (await fetch(url, { cache: "no-store" })).text();
+        if (!text.includes("output_mode")) {
+            throw new Error("Fetched scan_zero/recon.py is stale (missing output_mode). Hard-refresh the page.");
+        }
         const py = nvMod.pyodide;
         py.FS.mkdirTree("/scan_zero");
         py.FS.writeFile("/scan_zero/recon.py", text);
-        this._simReconPyMounted = true;
+        py.globals.set("sim_recon_py_source", text);
     }
 
     setupEventListeners() {
@@ -641,9 +640,11 @@ def load4d(fn):
     cache[fn] = (img.affine, dat)
     return cache[fn]
 def make_vol(arr, aff):
+    vox = np.sqrt((aff[:3,:3]**2).sum(axis=0))
+    diag_aff = np.diag([float(vox[0]), float(vox[1]), float(vox[2]), 1.0])
     return {
         "shape": list(arr.shape),
-        "affine": aff[:3,:4].tolist(),
+        "affine": diag_aff[:3,:4].tolist(),
         "data": np.asarray(arr, dtype=np.float64).ravel(order='C').tolist()
     }
 tissues = {}
@@ -810,7 +811,10 @@ if os.path.exists(_p):
             // 5) PyNUFFT recon: reconRef was built up-front from the same frozen fovSnapshot as
             // the phantom ref (step 2); no late re-read of the live FOV sliders here.
 
-            // 6) PyNUFFT recon: logic in scan_zero/recon.py (run_sim_recon)
+            // 6) Recon or k-space debug (scan_zero/recon.py run_sim_recon)
+            const useRecon = typeof nvMod.isScanReconEnabled === 'function'
+                ? nvMod.isScanReconEnabled()
+                : nvMod.scanRecon?.checked !== false;
             const _t6 = performance.now();
             await nvMod.pyodide.loadPackage(["micropip"]);
             await nvMod.pyodide.runPythonAsync(`
@@ -824,13 +828,40 @@ except Exception:
             nvMod.pyodide.globals.set("sim_signal_pairs", signal);
             nvMod.pyodide.globals.set("sim_traj_points", traj || []);
             nvMod.pyodide.globals.set("sim_ref_bytes", reconRef);
+            nvMod.pyodide.globals.set("sim_output_mode", useRecon ? "image" : "kspace_log");
+            nvMod.pyodide.globals.set("sim_seq_path", job.vfsSeqPath || "");
             const recoPathRes = await nvMod.pyodide.runPythonAsync(`
-import sys
-sys.path.insert(0, '/scan_zero')
-from recon import run_sim_recon
-run_sim_recon(sim_signal_pairs, sim_traj_points, sim_ref_bytes)
+import types
+_matrix = None
+_seq_path = sim_seq_path.to_py() if hasattr(sim_seq_path, 'to_py') else sim_seq_path
+if _seq_path:
+    try:
+        import os
+        import pypulseq as pp
+        _p = str(_seq_path)
+        if os.path.exists(_p):
+            _seq = pp.Sequence()
+            _seq.read(_p)
+            _m = _seq.get_definition('matrix')
+            if _m is not None:
+                _matrix = [int(_m[0]), int(_m[1]), int(_m[2]) if len(_m) > 2 else 1]
+    except Exception:
+        pass
+_src = sim_recon_py_source.to_py() if hasattr(sim_recon_py_source, 'to_py') else str(sim_recon_py_source)
+if "output_mode" not in _src:
+    raise RuntimeError("sim_recon_py_source is stale (missing output_mode)")
+_recon = types.ModuleType("_scan_recon_live")
+_recon.__dict__["__file__"] = "/scan_zero/recon.py"
+exec(compile(_src, "/scan_zero/recon.py", "exec"), _recon.__dict__)
+_recon.run_sim_recon(
+    sim_signal_pairs,
+    sim_traj_points,
+    sim_ref_bytes,
+    output_mode=sim_output_mode,
+    matrix=_matrix,
+)
             `);
-            console.log(`[SIM] PyNUFFT recon: ${(performance.now()-_t6).toFixed(0)}ms`);
+            console.log(`[SIM] ${useRecon ? 'PyNUFFT recon' : 'k-space log'}: ${(performance.now()-_t6).toFixed(0)}ms`);
             const recoPath = (recoPathRes && recoPathRes.toJs) ? recoPathRes.toJs() : recoPathRes;
             if (recoPathRes?.destroy) recoPathRes.destroy();
             const recoBytes = nvMod.pyodide.FS.readFile(String(recoPath));
