@@ -751,7 +751,13 @@ if os.path.exists(_p):
             // 2) Build phantom and recon FOV mask refs up-front from the same frozen snapshot.
             // Different matrix grids (phantom vs recon) share identical mm box + placement.
             const _t2 = performance.now();
-            const phantomRef = nvMod.generateFovMaskNiftiFromSnapshot(job.fovSnapshot, nvMod.getPhantomMatrixDims());
+            const phantomOversample = nvMod.getPhantomOversampleFactors();
+            job.phantomOversample = phantomOversample;
+            const phantomFovSnapshot = nvMod.applyPhantomOversampleToSnapshot(job.fovSnapshot, phantomOversample);
+            const phantomRef = nvMod.generateFovMaskNiftiFromSnapshot(
+                phantomFovSnapshot,
+                nvMod.getSimPhantomMatrixDims(phantomOversample),
+            );
             const reconRef = nvMod.generateFovMaskNiftiFromSnapshot(job.fovSnapshot, nvMod.getReconMatrixDims());
             const resampledEntries = [];
             nvMod.pyodide.globals.set("reference_bytes", phantomRef);

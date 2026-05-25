@@ -107,6 +107,7 @@ export class NiivueModule {
     this.phantomXVal = null;
     this.phantomYVal = null;
     this.phantomZVal = null;
+    this.phantomOversampleInput = null;
     this.downloadFovMeshBtn = null;
     this.azVal = null;
     this.elVal = null;
@@ -805,6 +806,10 @@ export class NiivueModule {
                 <input id="phantomZ-${this.instanceId}" type="range" min="1" max="512" step="1" value="1" />
               </div>
             </div>
+            <div class="phantom-oversample-row">
+              <label for="phantomOversample-${this.instanceId}">Phantom FOV oversampling</label>
+              <input id="phantomOversample-${this.instanceId}" type="text" class="oversample-input mono" value="[1,1,1]" spellcheck="false" title="Sim-only scale [sx,sy,sz]: matrix and FOV mm for phantom resampling (UI box unchanged)" />
+            </div>
           </div>
           <div class="row" style="margin-top: 12px; display: grid; grid-template-columns: 1fr 1fr; gap: 8px;">
             <button id="downloadFovMesh-${this.instanceId}" class="btn btn-secondary btn-md" type="button">
@@ -880,6 +885,7 @@ export class NiivueModule {
     this.phantomXVal = qs("phantomXVal");
     this.phantomYVal = qs("phantomYVal");
     this.phantomZVal = qs("phantomZVal");
+    this.phantomOversampleInput = qs("phantomOversample");
     this.debugInfo = qs("debugInfo");
     this.downloadFovMeshBtn = qs("downloadFovMesh");
     this.azVal = qs("azVal");
@@ -2290,6 +2296,47 @@ os.makedirs('/phantom/averaged', exist_ok=True)
       Math.max(1, Math.round(Number(this.phantomY?.value) || 1)),
       Math.max(1, Math.round(Number(this.phantomZ?.value) || 1)),
     ];
+  }
+
+  /** Parse `[sx,sy,sz]` integer scale factors for sim phantom grid (default `[1,1,1]`). */
+  parsePhantomOversampleFactors(raw) {
+    const fallback = [1, 1, 1];
+    const s = String(raw ?? "").trim();
+    if (!s) return fallback;
+    try {
+      const parsed = JSON.parse(s);
+      if (Array.isArray(parsed) && parsed.length >= 3) {
+        return parsed.slice(0, 3).map((v) => Math.max(1, Math.round(Number(v) || 1)));
+      }
+    } catch (_) { /* fall through */ }
+    const m = s.match(/\[?\s*(\d+)\s*,\s*(\d+)\s*,\s*(\d+)\s*\]?/);
+    if (m) return [m[1], m[2], m[3]].map((n) => Math.max(1, Math.round(Number(n))));
+    return fallback;
+  }
+
+  getPhantomOversampleFactors() {
+    return this.parsePhantomOversampleFactors(this.phantomOversampleInput?.value ?? "[1,1,1]");
+  }
+
+  /** Phantom matrix for SIM resampling (UI sliders × oversampling). */
+  getSimPhantomMatrixDims(factors = null) {
+    const f = factors ?? this.getPhantomOversampleFactors();
+    const base = this.getPhantomMatrixDims();
+    return base.map((d, i) => Math.max(1, Math.round(d * f[i])));
+  }
+
+  /** Scale frozen FOV mm box for sim phantom ref; recon keeps the UI snapshot. */
+  applyPhantomOversampleToSnapshot(snapshot, factors = null) {
+    const f = factors ?? this.getPhantomOversampleFactors();
+    if (!snapshot?.centerWorld || !snapshot?.sizeMm || !snapshot?.rotationDeg) {
+      throw new Error("applyPhantomOversampleToSnapshot: invalid snapshot");
+    }
+    if (f[0] === 1 && f[1] === 1 && f[2] === 1) return snapshot;
+    return {
+      centerWorld: [...snapshot.centerWorld],
+      sizeMm: snapshot.sizeMm.map((s, i) => Number(s) * f[i]),
+      rotationDeg: [...snapshot.rotationDeg],
+    };
   }
 
   rebuildFovLive(forceSync = false) {

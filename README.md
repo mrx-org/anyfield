@@ -1,6 +1,6 @@
 # Niivue minimal app (zero-install)
 
-**Version:** `v0.4.2`
+**Version:** `v0.5.0`
 
 This is a **minimal Niivue viewer** implemented as a single `viewer.html` file.
 
@@ -62,6 +62,9 @@ If no deep link is given, the app starts with the built-in Pulseq interpreter se
 For more insights see insights SPEC_no_field.md
 
 ## Release notes
+
+**v0.5.0**
+- **Phantom FOV oversampling**: FOV tab input `[sx,sy,sz]` (default `[1,1,1]`) scales sim phantom matrix and FOV mm without changing the on-screen FOV box or recon grid.
 
 **v0.4.2**
 - **Rapisim recon orientation (temporary)**: Cartesian recon for **SCAN▶▶** (rapisim) uses `fftn` instead of `ifftn` in `scan_zero/recon.py` until MR0 and rapisim agree on k-space sign convention.
