@@ -2548,8 +2548,12 @@ os.makedirs('/phantom/averaged', exist_ok=True)
         subfolder.file(group.jsonFileName, group.jsonContent);
       }
       for (const vol of group.volumes) {
-        const bytes = this.getVolumeNifti(vol);
+        let bytes = this.getVolumeNifti(vol);
         const fname = vol.name || "volume.nii";
+        if (fname.endsWith(".gz")) {
+          const stream = new Blob([bytes]).stream().pipeThrough(new CompressionStream("gzip"));
+          bytes = new Uint8Array(await new Response(stream).arrayBuffer());
+        }
         subfolder.file(fname, bytes);
       }
       const blob = await zip.generateAsync({ type: "blob" });
