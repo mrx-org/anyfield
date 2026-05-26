@@ -30,7 +30,7 @@ export class ScanModule {
         this.currentFov = null;
         this.scanCounter = 0;
         this._toolApiCall = null;
-        /** Set during runSimPipeline for _toolOnMessage tagging */
+        /** Set during runSimPipeline for per-tool WebSocket log tagging */
         this._simPipelineJob = null;
 
         this.setupEventListeners();
@@ -318,10 +318,40 @@ export class ScanModule {
         return call;
     }
 
-    _toolOnMessage(msg) {
+    /** Short label for a tool WebSocket host, e.g. `tool-trajex.fly.dev` → `trajex`. */
+    _toolChannelFromUrl(url) {
+        try {
+            const host = new URL(url).hostname;
+            const m = host.match(/^tool-([^.]+)/);
+            return m ? m[1] : host;
+        } catch (_) {
+            return String(url);
+        }
+    }
+
+    /** Progress callback for one tool WebSocket session (separate channel per call). */
+    _toolOnMessageFor(channel) {
         const tag = this._simPipelineJob?.simLogLabel || 'SIM';
-        console.log(`${tag} tool:`, msg);
-        return true;
+        const ch = channel || 'tool';
+        return (msg) => {
+            console.log(`${tag} [${ch}]`, msg);
+            return true;
+        };
+    }
+
+    /**
+     * One toolapi-wasm request = one WebSocket to `url`. Sequential pipeline steps must
+     * await each call so channels do not overlap.
+     */
+    async _callTool(url, input, channel) {
+        const call = await this._ensureToolApi();
+        const label = channel || this._toolChannelFromUrl(url);
+        console.log(`${this._simPipelineJob?.simLogLabel || 'SIM'} [${label}] ws open → ${url}`);
+        try {
+            return await call(url, input, this._toolOnMessageFor(label));
+        } finally {
+            console.log(`${this._simPipelineJob?.simLogLabel || 'SIM'} [${label}] ws closed`);
+        }
     }
 
 
@@ -920,10 +950,13 @@ if os.path.exists(_p):
             });
             console.log(`[SIM] _convertResampledGroupToToolPhantom: ${(performance.now()-_t3).toFixed(0)}ms`);
 
-            // 4) JS tools: conseq + trajex + sim backend (rapisim or tool-mr0sim)
+            // 4) JS tools: conseq → trajex → sim backend (rapisim or tool-mr0sim), one WebSocket each
             const _t4 = performance.now();
-            const call = await this._ensureToolApi();
-            const seq = await call(TOOL_CONSEQ, { Dict: { seq_file: { Str: seqText }, exact_trajectory: { Bool: false } } }, (m) => this._toolOnMessage(m));
+            const seq = await this._callTool(
+                TOOL_CONSEQ,
+                { Dict: { seq_file: { Str: seqText }, exact_trajectory: { Bool: false } } },
+                'conseq',
+            );
             console.log(`[SIM] TOOL_CONSEQ: ${(performance.now()-_t4).toFixed(0)}ms`);
             if (seq?.Error || seq?.err) throw new Error(seq.Error || seq.err || 'conseq failed');
             const ev = seq?.TypedList?.InstantSeqEvent;
@@ -931,12 +964,21 @@ if os.path.exists(_p):
                 ? { TypedList: { InstantSeqEvent: ev } }
                 : seq;
             const phantomForSim = this._encodeSegmentedPhantomForToolapi(phantomPayload);
+            const simChannel = String(simToolUrl || '').includes('rapisim') ? 'rapisim' : 'mr0sim';
             const _t5 = performance.now();
-            const [trajResult, signalResult] = await Promise.all([
-                call(TOOL_TRAJEX, { Dict: { sequence: events, t1: { Float: 1.0 }, t2: { Float: 0.1 }, min_mag: { Float: 0.001 } } }, (m) => this._toolOnMessage(m)),
-                call(simToolUrl, { Dict: { sequence: seq, phantom: phantomForSim } }, (m) => this._toolOnMessage(m)),
-            ]);
-            console.log(`[SIM] TOOL_TRAJEX + sim backend (parallel): ${(performance.now()-_t5).toFixed(0)}ms`);
+            const trajResult = await this._callTool(
+                TOOL_TRAJEX,
+                { Dict: { sequence: events, t1: { Float: 1.0 }, t2: { Float: 0.1 }, min_mag: { Float: 0.001 } } },
+                'trajex',
+            );
+            console.log(`[SIM] TOOL_TRAJEX: ${(performance.now()-_t5).toFixed(0)}ms`);
+            const _t5b = performance.now();
+            const signalResult = await this._callTool(
+                simToolUrl,
+                { Dict: { sequence: seq, phantom: phantomForSim } },
+                simChannel,
+            );
+            console.log(`[SIM] ${simChannel}: ${(performance.now()-_t5b).toFixed(0)}ms`);
             const traj = this._trajectoryFromResult(trajResult);
             const signal = this._signalFromResult(signalResult);
             if (!signal?.length) throw new Error(`${job.noSignalName || 'Simulation'} returned no signal.`);
