@@ -1,6 +1,6 @@
 # Niivue minimal app (zero-install)
 
-**Version:** `v0.5.1`
+**Version:** `v0.7.0`
 
 This is a **minimal Niivue viewer** implemented as a single `viewer.html` file.
 
@@ -59,18 +59,56 @@ const url = `http://localhost:8000/?init_prot=${encodeURIComponent(token)}`;
 
 If no deep link is given, the app starts with the built-in Pulseq interpreter selection.
 
+### Remote `.seq` file (`seq_url`)
+
+Load a Pulseq `.seq` from an HTTPS URL into the interpreter (browser `fetch`; host must allow CORS):
+
+```text
+http://localhost:8000/?seq_url=<encodeURIComponent(https://raw.githubusercontent.com/.../my.seq)>
+```
+
+e.g. 
+
+```text
+http://localhost:8000/?seq_url=https://raw.githubusercontent.com/pulseq-frame/test-seqs/refs/heads/main/spiral-TSE/ssTSE.seq
+```
+
+`seq_url` alone selects **builtin / seq_pulseq_interpreter / seq_pulseq_interpreter** automatically.
+
+Combine with an explicit protocol deep link:
+
+```text
+http://localhost:8000/?s_category=builtin&s_file=seq_pulseq_interpreter&s_func=seq_pulseq_interpreter&seq_url=<encoded-url>
+```
+
 For more insights see insights SPEC_no_field.md
 
 ## Release notes
 
+**v0.7.0**
+- **Scan volume tooltips**: Hover a scan in the volume list to see the full protocol snapshot (underlying sequence, `user/prot/N_*.py`, and all parameter defaults used for that run).
+- **B / C volume-list highlights**: Scan rows use **blue** when loaded in preview **B** (click or VIEW SCAN) and **yellow** when loaded in compare **C** (Ctrl+click / Ctrl+VIEW SCAN); neutral border when not active in either pane.
+- **B / C viewer pulse**: Load flash on preview **B** and compare **C** uses matching blue/yellow fade (pane **A** stays green); static accent borders on B/C aligned to the same colors.
+- **Phantom groups**: Multi-phantom folders in the volume list start **collapsed** (▶) by default.
+
+**v0.6.1**
+- **Rapisim button (pro only)**: **SCAN▶▶** (tool-rapisim) is hidden unless the app is opened with `?pro=1` (same flag as the JSON tab and debug UI).
+- **SIM phantom (NIfTI JSON)**: SCAN conversion follows the [NIfTI phantom spec](https://mrsources.github.io/MRzero-Core/nifti-spec.html)—spatial per-tissue **dB0** from file refs and `{file, func}` mappings (e.g. fat chemical shift), full-grid **B1±** maps (not masked to a single tissue), and **T1/T2/ADC** as constants or density-weighted means when map-backed.
+- **Asymmetric TSE/RARE**: fixed default **dTE** in built-in asymmetric protocols.
+
+**v0.6.0**
+- **`seq_url` deep link**: `?seq_url=` fetches a remote `.seq` into the Pulseq interpreter (optional with `s_category` / `s_file` / `s_func`); `seq_url` alone auto-selects the interpreter.
+- **Rapisim spiral / NUFFT recon**: non-Cartesian recon conjugates k-space before PyNUFFT adjoint (`_backend_kspace_fix`); Cartesian still uses `fftn` vs `ifftn`.
+- Added warmup for API calls and earlier toolapi load.
+
 **v0.5.1**
 - **Fix phantom zip download**: `.nii.gz` volumes were written uncompressed into the zip archive. They are now gzip-compressed before packing, matching the single-file download behaviour.
-
+- 
 **v0.5.0**
 - **Phantom FOV oversampling**: FOV tab input `[sx,sy,sz]` (default `[1,1,1]`) scales sim phantom matrix and FOV mm without changing the on-screen FOV box or recon grid.
 
 **v0.4.2**
-- **Rapisim recon orientation (temporary)**: Cartesian recon for **SCAN▶▶** (rapisim) uses `fftn` instead of `ifftn` in `scan_zero/recon.py` until MR0 and rapisim agree on k-space sign convention.
+- **Rapisim recon orientation (temporary)**: Cartesian recon for **SCAN▶▶** (rapisim) uses `fftn` instead of `ifftn`; non-Cartesian uses conjugated k-space before NUFFT — until MR0 and rapisim agree on k-space sign convention.
 - **User protocols**: Fixed loading saved protocols from the sequence tree (`user/prot/…`) — parameters and execute no longer fail with `VFS file not found`; protocol source is restored from in-memory code, mirrored to the Pyodide VFS with absolute paths, and persisted in `localStorage` across reloads.
 
 **v0.4.1**

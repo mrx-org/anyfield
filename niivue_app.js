@@ -134,7 +134,8 @@ export class NiivueModule {
     this.jsonTabCurrentName = null;
     /** Set when default phantom fetch finishes before shared Pyodide is attached (bootstrap sync). */
     this._pendingPhantomVfs = null;
-    this.collapsedGroups = new Set();
+    /** Phantom group ids explicitly expanded in the volume list (default: collapsed). */
+    this.expandedGroups = new Set();
     this._initWaiters = [];
     this.selectedVolume = null; // Track which volume is selected for preview (pane B)
     this.compareVolume = null; // Volume shown in lazy compare pane C
@@ -2816,6 +2817,11 @@ os.makedirs('/phantom/averaged', exist_ok=True)
       else if (isMask) row.classList.add('mask-item');
       if (isSelected) row.classList.add('selected');
       if (isCompare) row.classList.add('compare-selected');
+      let protocolTooltip = "";
+      if (isScan && typeof window !== "undefined" && window.scanModule?.getProtocolTooltipForVolume) {
+        protocolTooltip = window.scanModule.getProtocolTooltipForVolume(vol) || "";
+        if (protocolTooltip) row.classList.add("has-protocol-tooltip");
+      }
 
       if (!noCheckbox) {
         const cb = document.createElement("input");
@@ -2881,7 +2887,13 @@ os.makedirs('/phantom/averaged', exist_ok=True)
       const title = document.createElement("div");
       title.className = "volume-row-title";
       title.textContent = titleText;
-      if (dimTooltip) title.title = dimTooltip;
+      if (protocolTooltip) {
+        const tipParts = [protocolTooltip];
+        if (dimTooltip) tipParts.push("", "— volume —", dimTooltip);
+        row.title = tipParts.join("\n");
+      } else if (dimTooltip) {
+        title.title = dimTooltip;
+      }
       info.appendChild(title);
       if (!noMeta) {
         const meta = document.createElement("div");
@@ -2939,7 +2951,7 @@ os.makedirs('/phantom/averaged', exist_ok=True)
     };
 
     const createGroupRow = (group) => {
-      const expanded = !this.collapsedGroups.has(group.id);
+      const expanded = this.expandedGroups.has(group.id);
       const row = document.createElement("div");
       row.className = "volume-row volume-group-parent";
       // Native tooltip: phantom JSON (truncated — very long configs would overwhelm the UI / browser)
@@ -2995,8 +3007,8 @@ os.makedirs('/phantom/averaged', exist_ok=True)
       row.appendChild(actions);
       toggle.onclick = (e) => {
         e.stopPropagation();
-        if (this.collapsedGroups.has(group.id)) this.collapsedGroups.delete(group.id);
-        else this.collapsedGroups.add(group.id);
+        if (this.expandedGroups.has(group.id)) this.expandedGroups.delete(group.id);
+        else this.expandedGroups.add(group.id);
         this.updateVolumeList();
       };
       return row;
@@ -3013,7 +3025,7 @@ os.makedirs('/phantom/averaged', exist_ok=True)
       this.volumeListContainer.appendChild(createHeader("Phantoms"));
       this.volumeGroups.forEach(group => {
         this.volumeListContainer.appendChild(createGroupRow(group));
-        const expanded = !this.collapsedGroups.has(group.id);
+        const expanded = this.expandedGroups.has(group.id);
         if (expanded) {
           group.volumes.forEach(vol => {
             const idx = this.nv.volumes.indexOf(vol);

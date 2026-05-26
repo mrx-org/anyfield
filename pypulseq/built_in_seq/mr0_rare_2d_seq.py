@@ -9,7 +9,7 @@ Original file is located at
 '''
 !pip install pypulseq &> /dev/null
 !pip install  npkbnufft --no-deps
-!pip install ismrmrd
+!pip install ismrmrd==1.14.2
 !pip install MRzeroCore --no-deps
 !pip install pydisseqt
 
@@ -241,7 +241,7 @@ def prot_RARE_2D_asym_ex(
     PE_grad_on=True,
     RO_grad_on=True,
     dwell=50e-6 * 2,
-    dTE=0.0087,
+    dTE=0.00065,
 ):
     """Same as prot_RARE_2D but with asymmetric excitation enabled by default (dTE = 0.0087 s)."""
     kwargs = locals().copy()

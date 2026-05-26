@@ -178,13 +178,20 @@
   background: rgba(34, 197, 94, 0.15);
 }
 .niivue-app .layout.standalone-layout .standalone-sidebar .volume-row.scan-item {
-  border-left: 3px solid #22c55e;
+  border-left: 3px solid rgba(148, 163, 184, 0.55);
 }
 .niivue-app .layout.standalone-layout .standalone-sidebar .volume-row.scan-item.selected {
-  border-left: 4px solid #22c55e;
+  background: rgba(59, 130, 246, 0.18);
+  border-left: 4px solid #3b82f6;
 }
-.niivue-app .layout.standalone-layout .standalone-sidebar .volume-row.compare-selected,
-.niivue-app .volume-row.compare-selected {
+.niivue-app .layout.standalone-layout .standalone-sidebar .volume-row.scan-item.compare-selected,
+.niivue-app .volume-row.scan-item.compare-selected {
+  background: rgba(234, 179, 8, 0.2);
+  border-left: 4px solid #ca8a04;
+  box-shadow: none;
+}
+.niivue-app .layout.standalone-layout .standalone-sidebar .volume-row.compare-selected:not(.scan-item),
+.niivue-app .volume-row.compare-selected:not(.scan-item) {
   box-shadow: inset 3px 0 0 #a78bfa;
 }
 .niivue-app .layout.standalone-layout .standalone-sidebar .volume-row.mask-item {
@@ -330,12 +337,12 @@
 }
 
 /* Preview / compare pane accent (replaces histogram legend) */
-#nv-scan-preview-container .viewer.scan-preview-viewer {
-  border: 2px solid rgba(91, 164, 230, 0.8);
+#nv-scan-preview-container .viewer.scan-preview-viewer:not(.compare-preview-viewer) {
+  border: 2px solid rgba(59, 130, 246, 0.75);
 }
 
 #nv-compare-container:not(.compare-pane-hidden) .viewer.compare-preview-viewer {
-  border: 2px solid rgba(230, 170, 60, 0.85);
+  border: 2px solid rgba(202, 138, 4, 0.85);
 }
 
 .clim-edit-dialog-overlay {
@@ -484,23 +491,58 @@
   cursor: not-allowed;
 }
 
+/* Pane A — main viewer (phantoms / FOV planning) */
 @keyframes highlight-fade {
-  0% { 
+  0% {
     outline: 2px solid #22c55e;
     outline-offset: -2px;
     background: rgba(34, 197, 94, 0.1);
   }
-  100% { 
+  100% {
     outline: 2px solid transparent;
     outline-offset: -2px;
     background: transparent;
   }
 }
 
-.niivue-app .highlight-add,
-.scan-preview-viewer.highlight-add,
-.compare-preview-viewer.highlight-add {
+/* Pane B — scan preview */
+@keyframes highlight-fade-preview {
+  0% {
+    outline: 2px solid #3b82f6;
+    outline-offset: -2px;
+    background: rgba(59, 130, 246, 0.14);
+  }
+  100% {
+    outline: 2px solid transparent;
+    outline-offset: -2px;
+    background: transparent;
+  }
+}
+
+/* Pane C — compare */
+@keyframes highlight-fade-compare {
+  0% {
+    outline: 2px solid #ca8a04;
+    outline-offset: -2px;
+    background: rgba(234, 179, 8, 0.14);
+  }
+  100% {
+    outline: 2px solid transparent;
+    outline-offset: -2px;
+    background: transparent;
+  }
+}
+
+.niivue-app .viewer.highlight-add:not(.scan-preview-viewer):not(.compare-preview-viewer) {
   animation: highlight-fade 3s ease-out forwards;
+}
+
+.scan-preview-viewer.highlight-add:not(.compare-preview-viewer) {
+  animation: highlight-fade-preview 3s ease-out forwards;
+}
+
+.compare-preview-viewer.highlight-add {
+  animation: highlight-fade-compare 3s ease-out forwards;
 }
 
 .niivue-app .kv {

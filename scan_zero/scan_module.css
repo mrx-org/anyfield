@@ -26,6 +26,14 @@
     border-bottom: 1px solid var(--border, rgba(255, 255, 255, 0.12));
 }
 
+/* Rapisim (SCAN▶▶): pro only — ?pro=1 sets html.pro-user in index.html */
+.scan-module #btn-start-sim-fast {
+    display: none !important;
+}
+html.pro-user .scan-module #btn-start-sim-fast {
+    display: flex !important;
+}
+
 /* Multiple RUN buttons in one row (CROP / SCAN▶ / SCAN▶▶); avoid global .scan-btn width:100% here */
 .scan-header .scan-btn {
     width: auto;

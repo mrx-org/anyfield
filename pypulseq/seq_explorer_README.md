@@ -109,7 +109,7 @@ A modular, flexible widget for exploring sequences/protocols organized by file, 
     type: 'github_raw',
     url: 'https://raw.githubusercontent.com/user/repo/main/file.py',
     name: 'Display Name',
-    dependencies: ['numpy>=2.0.0', { name: 'mrseq', deps: false }, 'ismrmrd']  // Optional
+    dependencies: ['numpy>=2.0.0', { name: 'mrseq', deps: false }, 'ismrmrd==1.14.2']  // Optional
 }
 ```
 
@@ -119,7 +119,7 @@ A modular, flexible widget for exploring sequences/protocols organized by file, 
                     'name': 'mrseq',
                     'type': 'pyodide_module',
                     'module': 'mrseq.scripts',
-                    'dependencies': ['numpy>=2.0.0', 'pypulseq', {'name': 'mrseq', 'deps': False}, 'ismrmrd']
+                    'dependencies': ['numpy>=2.0.0', 'pypulseq', {'name': 'mrseq', 'deps': False}, 'ismrmrd==1.14.2']
                 },
                 {
                     'name': 'pypulseq_examples',
@@ -169,7 +169,7 @@ Each source can specify `dependencies` that will be automatically installed via 
     dependencies: [
         'numpy>=2.0.0',           // Version specification
         { name: 'mrseq', deps: false },  // Install without dependency checks
-        'ismrmrd'                  // Simple package name
+        'ismrmrd==1.14.2'          // Pinned version (Pyodide / micropip)
     ]
 }
 ```
@@ -233,7 +233,7 @@ const explorer = new SequenceExplorer('explorer', {
             'name': 'mrseq',
             'type': 'pyodide_module',
             'module': 'mrseq.scripts',
-            'dependencies': ['numpy>=2.0.0', 'pypulseq', {'name': 'mrseq', 'deps': False}, 'ismrmrd']
+            'dependencies': ['numpy>=2.0.0', 'pypulseq', {'name': 'mrseq', 'deps': False}, 'ismrmrd==1.14.2']
         },
         {
             'name': 'pypulseq_examples',

@@ -44,7 +44,7 @@ sources = [
         'name': 'mrseq.scripts',
         'path': 'mrseq.scripts',
         'seq_func': None,
-        'dependencies': ['numpy>=2.0.0', _pypulseq, {'name': 'mrseq', 'deps': False}, 'ismrmrd']
+        'dependencies': ['numpy>=2.0.0', _pypulseq, {'name': 'mrseq', 'deps': False}, 'ismrmrd==1.14.2']
     },
     {
         'type': 'folder',

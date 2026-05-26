@@ -385,10 +385,12 @@ def recon_signal_traj_to_image(
 
     from scan_zero.recon import (
         _GRID_TOL,
+        _backend_kspace_fix,
         _cartesian_use_fftn,
         _per_axis_cartesian_and_offsets,
         _recon_cartesian_ifft,
         _recon_full_nufft,
+        _is_rapisim_backend,
     )
 
     signal = np.asarray(signal_1d, dtype=np.complex128).ravel()
@@ -438,8 +440,12 @@ def recon_signal_traj_to_image(
             kmax_y,
             kmax_z,
             apply_dcf=True,
+            sim_backend=sim_backend,
         )
-        return reco, "PyNUFFT + Pipe-Menon DCF"
+        label = "PyNUFFT + Pipe-Menon DCF"
+        if _is_rapisim_backend(sim_backend):
+            label += " + conj(k)"
+        return reco, label
 
     om = None
     use_2d_plan = int(nz_use) == 1
@@ -466,7 +472,7 @@ def recon_signal_traj_to_image(
         om = np.stack([kxg.ravel(), kyg.ravel(), kzg.ravel()], axis=-1)
 
     n = min(int(signal.size), int(om.shape[0]))
-    signal_n = signal[:n].astype(np.complex64)
+    signal_n = _backend_kspace_fix(signal[:n].astype(np.complex64), sim_backend)
     om_n = om[:n]
     a = NUFFT()
     if use_2d_plan:

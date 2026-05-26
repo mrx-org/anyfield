@@ -99,6 +99,7 @@ This application uses the following open-source software. We are grateful to the
 - **License:** [GNU Affero General Public License v3.0 (AGPL-3.0)](https://www.gnu.org/licenses/agpl-3.0.html)
 
 ### ISMRMRD (ismrmrd)
+- **Version:** 1.14.2 (pinned in Pyodide via `micropip`)
 - **Description:** Python API for the ISMRMRD (ISMRM Raw Data) file format; used for raw MRI data handling in the sequence explorer.
 - **URL:** https://github.com/ismrmrd/ismrmrd-python
 - **License:** [ISMRMRD Software License](https://github.com/ismrmrd/ismrmrd-python/blob/master/LICENSE) (public domain / NIH)
