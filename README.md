@@ -1,6 +1,6 @@
 # Niivue minimal app (zero-install)
 
-**Version:** `v0.5.0`
+**Version:** `v0.5.1`
 
 This is a **minimal Niivue viewer** implemented as a single `viewer.html` file.
 
@@ -62,6 +62,9 @@ If no deep link is given, the app starts with the built-in Pulseq interpreter se
 For more insights see insights SPEC_no_field.md
 
 ## Release notes
+
+**v0.5.1**
+- **Fix phantom zip download**: `.nii.gz` volumes were written uncompressed into the zip archive. They are now gzip-compressed before packing, matching the single-file download behaviour.
 
 **v0.5.0**
 - **Phantom FOV oversampling**: FOV tab input `[sx,sy,sz]` (default `[1,1,1]`) scales sim phantom matrix and FOV mm without changing the on-screen FOV box or recon grid.
