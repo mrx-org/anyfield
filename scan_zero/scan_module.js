@@ -514,6 +514,9 @@ export class ScanModule {
         _t('start');
         if (window.seqExplorer) {
             await window.seqExplorer.executeFunction(true, this.scanCounter);
+            if (window.seqExplorer._lastProtocolSnapshotPath) {
+                job.protocolPath = window.seqExplorer._lastProtocolSnapshotPath;
+            }
         }
         _t('after executeFunction');
         const nvMod = window.nvModule;
@@ -1153,6 +1156,28 @@ data
         if (job?.status === 'done' && window.scanCompare) {
             await window.scanCompare.loadFromJob(job);
         }
+    }
+
+    /** Match a loaded scan NIfTI volume to its queue job (by baseName). */
+    getJobForVolume(vol) {
+        if (!vol?.name?.startsWith('scan_')) return null;
+        const base = vol.name.replace(/\.nii(\.gz)?$/i, '');
+        return this.queue.find((j) => j.baseName === base) || null;
+    }
+
+    /** Native tooltip: full protocol parameters for a scan volume row. */
+    getProtocolTooltipForVolume(vol) {
+        const explorer = window.seqExplorer;
+        if (!explorer) return null;
+        const job = this.getJobForVolume(vol);
+        const protocolPath = job?.protocolPath
+            || (job?.scanNumber != null ? explorer.findProtocolPathForScanNumber(job.scanNumber) : null)
+            || (() => {
+                const m = vol?.name?.match(/^scan_(\d+)_/);
+                return m ? explorer.findProtocolPathForScanNumber(m[1]) : null;
+            })();
+        if (!protocolPath) return null;
+        return explorer.formatProtocolTooltip(protocolPath);
     }
 
     async loadJob(jobId, syncFov = true) {

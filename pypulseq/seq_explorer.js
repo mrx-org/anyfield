@@ -886,6 +886,82 @@ plt.rcParams['font.size'] = 8`;
         return (name && name.trim()) ? name : '';
     }
 
+    /** Normalize a sequences key to a VFS-style path (user/prot/1_prot_gre.py). */
+    _sequenceKeyToPath(key) {
+        if (!key) return '';
+        let s = key.includes('/') ? key : key.replace(/\./g, '/');
+        if (!/\.py$/i.test(s)) s += '.py';
+        return s;
+    }
+
+    /** Find user protocol snapshot saved for scan N (e.g. user/prot/1_prot_gre.py). */
+    findProtocolPathForScanNumber(scanNumber) {
+        const n = String(scanNumber);
+        const prefix = `user/prot/${n}_`;
+        for (const key of Object.keys(this.sequences)) {
+            const path = this._sequenceKeyToPath(key);
+            if (!path.startsWith(prefix) || !path.endsWith('.py')) continue;
+            const fd = this.sequences[key];
+            const isProtocol = fd?.source?.itemKind === 'protocol'
+                || fd?.functions?.some((f) => f.name?.startsWith('prot_'));
+            if (isProtocol) return path;
+        }
+        return null;
+    }
+
+    /**
+     * Tooltip text: protocol file path, underlying sequence, and all parameter defaults.
+     * @param {string} protocolPath - e.g. user/prot/1_prot_gre.py
+     * @returns {string|null}
+     */
+    formatProtocolTooltip(protocolPath) {
+        if (!protocolPath) return null;
+        const norm = protocolPath.replace(/\\/g, '/');
+        let key = this.sequences[norm] ? norm : null;
+        if (!key) {
+            key = Object.keys(this.sequences).find((k) => this._sequenceKeyToPath(k) === norm) || null;
+        }
+        const fileData = key ? this.sequences[key] : null;
+        const code = fileData?.code;
+        if (!code || typeof code !== 'string') return null;
+
+        const lines = [];
+        const src = fileData.source || {};
+        const seqFunc = src.seq_func || '';
+        const seqFile = src.seq_func_file || '';
+        if (seqFunc || seqFile) {
+            const seqLabel = this.getProtocolDisplayNameFromSeqFuncFile(seqFile) || seqFunc || seqFile;
+            lines.push(`Sequence: ${seqLabel}`);
+            if (seqFile && seqFile !== seqLabel) lines.push(`  ${seqFile}`);
+        }
+        lines.push(`Protocol: ${norm}`);
+
+        const defMatch = code.match(/def\s+(prot_\w+)\s*\(\s*([\s\S]*?)\)\s*:/);
+        if (defMatch) {
+            lines.push('');
+            lines.push(`${defMatch[1]}:`);
+            const paramsBody = defMatch[2].trim();
+            if (!paramsBody) {
+                lines.push('  (no parameters)');
+            } else {
+                paramsBody.split(',').forEach((chunk) => {
+                    const p = chunk.trim();
+                    if (p) lines.push(`  ${p}`);
+                });
+            }
+        } else {
+            lines.push('');
+            lines.push(code.trim());
+        }
+
+        const TOOLTIP_MAX = 14000;
+        const raw = lines.join('\n');
+        if (raw.length > TOOLTIP_MAX) {
+            return `${raw.slice(0, TOOLTIP_MAX)}\n… (${raw.length - TOOLTIP_MAX} more characters)`;
+        }
+        return raw;
+    }
+
     /**
      * Path to use for display name: for module sources, prefer fileName (full module path e.g. mrseq.scripts.radial_flash)
      * over source.path (package only e.g. mrseq.scripts) so we show "radial_flash" not "scripts".
@@ -2802,8 +2878,9 @@ json.dumps(_result)
         }
 
         // If a protocolName is provided, save a snapshot first
+        this._lastProtocolSnapshotPath = null;
         if (protocolName) {
-            await this.saveProtocolSnapshot(protocolName);
+            this._lastProtocolSnapshotPath = await this.saveProtocolSnapshot(protocolName);
         }
         
         const paramsRoot = this.paramsTarget || this.container;

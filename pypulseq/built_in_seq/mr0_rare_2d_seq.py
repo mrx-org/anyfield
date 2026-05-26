@@ -9,7 +9,7 @@ Original file is located at
 '''
 !pip install pypulseq &> /dev/null
 !pip install  npkbnufft --no-deps
-!pip install ismrmrd
+!pip install ismrmrd==1.14.2
 !pip install MRzeroCore --no-deps
 !pip install pydisseqt
 

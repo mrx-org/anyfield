@@ -122,12 +122,27 @@
     background: var(--success-bg);
 }
 
+/* Scans: neutral until assigned to preview (B) or compare (C) */
 .volume-row.scan-item {
-    border-left: 3px solid var(--success);
+    border-left: 3px solid rgba(148, 163, 184, 0.55);
 }
 
+/* Pane B — scan preview (click row or VIEW SCAN) */
 .volume-row.scan-item.selected {
-    border-left: 4px solid var(--success);
+    background: rgba(59, 130, 246, 0.18);
+    border-left: 4px solid #3b82f6;
+}
+
+/* Pane C — compare (Ctrl+click or Ctrl+VIEW SCAN) */
+.volume-row.scan-item.compare-selected {
+    background: rgba(234, 179, 8, 0.2);
+    border-left: 4px solid #ca8a04;
+    box-shadow: none;
+}
+
+.volume-row.scan-item.selected.compare-selected {
+    background: linear-gradient(90deg, rgba(59, 130, 246, 0.16) 0%, rgba(234, 179, 8, 0.2) 100%);
+    border-left: 4px solid #ca8a04;
 }
 
 .volume-row.mask-item {
