@@ -472,12 +472,63 @@ export class NiivueModule {
     if (el) el.textContent = msg || '';
   }
 
+  /** Basename of the JSON config for a volume group (matches JSON tab / VFS keys). */
+  _groupJsonFileName(group) {
+    if (!group) return null;
+    if (group.jsonFileName) return group.jsonFileName;
+    const jn = group.jsonName;
+    if (!jn || String(jn).endsWith('_resampled') || String(jn).endsWith('_averaged')) return null;
+    return `${jn}.json`;
+  }
+
+  _volumeGroupMatchesJsonFile(group, jsonFileName) {
+    if (!group || !jsonFileName) return false;
+    const want = String(jsonFileName).toLowerCase();
+    if (group.jsonFileName && String(group.jsonFileName).toLowerCase() === want) return true;
+    const derived = group.jsonName ? `${group.jsonName}.json`.toLowerCase() : '';
+    return derived === want;
+  }
+
+  /** First loaded phantom group used by resample / SIM (not executed / resampled derivatives). */
+  getActivePhantomGroup() {
+    return this.volumeGroups?.find(
+      (g) => g.volumes?.length
+        && !String(g.jsonName || '').endsWith('_resampled')
+        && !String(g.jsonName || '').endsWith('_averaged'),
+    ) ?? null;
+  }
+
+  /**
+   * Latest JSON for SIM / execute: same file as the active phantom group, preferring
+   * editor (when that file is selected) then VFS (after Save) then in-memory cache.
+   */
+  getPhantomJsonContent(group) {
+    const g = group ?? this.getActivePhantomGroup();
+    if (!g) return null;
+    const fn = this._groupJsonFileName(g);
+    if (!fn) return g.jsonContent != null ? String(g.jsonContent) : null;
+
+    if (this.jsonTabCurrentName === fn) {
+      const fromEditor = this.getJsonEditorValue();
+      if (String(fromEditor).trim()) return fromEditor;
+    }
+
+    if (this.pyodide) {
+      try {
+        const vfs = this.pyodide.FS.readFile(`/phantom/${fn}`, { encoding: 'utf8' });
+        if (String(vfs).trim()) return vfs;
+      } catch (_) { /* no VFS copy yet */ }
+    }
+
+    return g.jsonContent != null ? String(g.jsonContent) : null;
+  }
+
   /** Keep scan/sim pipeline (uses volumeGroups[].jsonContent) aligned with VFS / editor. */
   _syncJsonContentToVolumeGroups(jsonFileName, raw) {
     if (!jsonFileName || raw == null) return;
     const s = String(raw);
     for (const g of this.volumeGroups) {
-      if (g.jsonFileName === jsonFileName) g.jsonContent = s;
+      if (this._volumeGroupMatchesJsonFile(g, jsonFileName)) g.jsonContent = s;
     }
   }
 
@@ -634,6 +685,7 @@ export class NiivueModule {
     }
     try {
       this.pyodide.FS.writeFile(`/phantom/${name}`, jsonBody);
+      this._syncJsonContentToVolumeGroups(name, jsonBody);
     } catch (e) {
       this.setJsonTabStatus(`Could not write JSON to VFS: ${e.message}`);
       return;

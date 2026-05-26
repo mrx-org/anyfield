@@ -1,6 +1,6 @@
 # Niivue minimal app (zero-install)
 
-**Version:** `v0.7.0`
+**Version:** `v0.7.1`
 
 This is a **minimal Niivue viewer** implemented as a single `viewer.html` file.
 
@@ -84,6 +84,10 @@ http://localhost:8000/?s_category=builtin&s_file=seq_pulseq_interpreter&s_func=s
 For more insights see insights SPEC_no_field.md
 
 ## Release notes
+
+**v0.7.1**
+- **JSON Save → SIM**: Saving a phantom JSON config in the JSON tab now updates what **SCAN▶** / **SCAN▶▶** use. SIM previously kept the in-memory `jsonContent` from load time; it now resolves the latest text via editor (when that file is selected), Pyodide `/phantom/` VFS (after Save), then the cached copy.
+- **JSON sync**: Save / Save As / Revert / Execute update all matching volume groups (`jsonFileName` or `jsonName.json`), not only an exact `jsonFileName` match.
 
 **v0.7.0**
 - **Scan volume tooltips**: Hover a scan in the volume list to see the full protocol snapshot (underlying sequence, `user/prot/N_*.py`, and all parameter defaults used for that run).

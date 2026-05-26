@@ -854,7 +854,9 @@ if os.path.exists(_p):
             // Ensure run_resampling / run_resampling_serial3d_to_4d are defined.
             await nvMod.initPyodide();
             await nvMod._ensureNibabelReady();
-            const activeGroup = nvMod.volumeGroups?.find(g => g.volumes?.length && !String(g.jsonName || '').endsWith('_resampled') && !String(g.jsonName || '').endsWith('_averaged'));
+            const activeGroup = typeof nvMod.getActivePhantomGroup === 'function'
+                ? nvMod.getActivePhantomGroup()
+                : nvMod.volumeGroups?.find(g => g.volumes?.length && !String(g.jsonName || '').endsWith('_resampled') && !String(g.jsonName || '').endsWith('_averaged'));
             if (!activeGroup) throw new Error("No phantom group with JSON found. Load phantom via Add Folder/Add File first.");
 
             // 1) Silent seq execute + protocol snapshot + sequence_fov_dims → Niivue FOV mm from seq.definitions
@@ -905,10 +907,15 @@ if os.path.exists(_p):
 
             // 3) Phantom dict for toolapi (temp FS dir, deleted after)
             const _t3 = performance.now();
+            const phantomJsonFileName = activeGroup.jsonFileName
+                || (activeGroup.jsonName ? `${activeGroup.jsonName}.json` : null);
+            const phantomJsonContent = typeof nvMod.getPhantomJsonContent === 'function'
+                ? nvMod.getPhantomJsonContent(activeGroup)
+                : activeGroup.jsonContent;
             const phantomPayload = await this._convertResampledGroupToToolPhantom(nvMod, {
                 jsonName: activeGroup.jsonName,
-                jsonFileName: activeGroup.jsonFileName,
-                jsonContent: activeGroup.jsonContent,
+                jsonFileName: phantomJsonFileName,
+                jsonContent: phantomJsonContent,
                 resampledEntries,
             });
             console.log(`[SIM] _convertResampledGroupToToolPhantom: ${(performance.now()-_t3).toFixed(0)}ms`);
