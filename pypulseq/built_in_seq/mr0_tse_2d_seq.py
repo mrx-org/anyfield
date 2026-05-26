@@ -63,8 +63,8 @@ def seq_TSE_2D(
 
     seq = pp.Sequence(system)
 
-    FA_val = float(FA)
-    FA_ref_val = float(FA_ref)
+    FA_val = float(FA)* np.pi / 180
+    FA_ref_val = float(FA_ref)* np.pi / 180
     TE_val = float(TE)
     TR_val = float(TR)
 
@@ -181,8 +181,8 @@ if __name__ == '__main__':
     TE = TE_ms * 1e-3
     TR = 5.0
     TI_s = 0
-    FA = 90 * np.pi / 180
-    FA_ref = 120 * np.pi / 180
+    FA = 90
+    FA_ref = 120
     PEtype = 'linear'
     r_spoil = 2
     PE_grad_on = True
@@ -218,8 +218,8 @@ def prot_TSE_2D(
     fov=(200e-3, 200e-3, 8e-3),
     Nread=42,
     Nphase=42,
-    FA=90 * np.pi / 180,
-    FA_ref=120 * np.pi / 180,
+    FA=90,
+    FA_ref=120,
     TR=5.0,
     TE=5e-3,
     slice_thickness=8e-3,
@@ -244,8 +244,8 @@ def prot_TSE_2D_asym_ex(
     fov=(200e-3, 200e-3, 8e-3),
     Nread=128,
     Nphase=128,
-    FA=90 * np.pi / 180,
-    FA_ref=120 * np.pi / 180,
+    FA=90 ,
+    FA_ref=120,
     TR=5.0,
     TE=5e-3,
     slice_thickness=8e-3,

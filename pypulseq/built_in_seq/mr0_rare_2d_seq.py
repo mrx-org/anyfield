@@ -29,8 +29,8 @@ def seq_RARE_2D(
     Nread=32,
     Nphase=32,
     Npart=1,
-    FA=90 * np.pi / 180,  # Can be float or array
-    FA_ref=180 * np.pi / 180,  # Can be float or array
+    FA=90 ,  # Can be float or array
+    FA_ref=180,  # Can be float or array
     TE=5e-3,  # Can be float or array
     experiment_id='RARE_2D',
     system=None,
@@ -86,8 +86,8 @@ def seq_RARE_2D(
 
     # Define RF events
     # Handle both arrays and scalars
-    FA_val = float(FA)
-    FA_ref_val = float(FA_ref)
+    FA_val = float(FA)* np.pi / 180
+    FA_ref_val = float(FA_ref)* np.pi / 180
     
     rf1, gz1, gzr1 = pp.make_sinc_pulse(
         flip_angle=FA_val, phase_offset=90 * np.pi / 180, duration=1e-3,
@@ -190,8 +190,8 @@ if __name__ == '__main__':
         Nread=Nread,
         Nphase=Nphase,
         Npart=Npart,
-        FA=FA * np.pi / 180,
-        FA_ref=FA_ref * np.pi / 180,
+        FA=FA ,
+        FA_ref=FA_ref,
         TE=TE,
         slice_thickness=slice_thickness,
         experiment_id=experiment_id,
@@ -207,8 +207,8 @@ def prot_RARE_2D(
     Nread=32,
     Nphase=32,
     Npart=1,
-    FA=90 * np.pi / 180,
-    FA_ref=180 * np.pi / 180,
+    FA=90 ,
+    FA_ref=180,
     TE=5e-3,
     slice_thickness=8e-3,
     experiment_id="RARE_2D",
@@ -230,8 +230,8 @@ def prot_RARE_2D_asym_ex(
     Nread=32,
     Nphase=32,
     Npart=1,
-    FA=90 * np.pi / 180,
-    FA_ref=180 * np.pi / 180,
+    FA=90 ,
+    FA_ref=180 ,
     TE=5e-3,
     slice_thickness=8e-3,
     experiment_id="RARE_2D_asym_ex",
