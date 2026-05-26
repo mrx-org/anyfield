@@ -861,7 +861,7 @@ export class NiivueModule {
             </div>
             <div class="phantom-oversample-row">
               <label for="phantomOversample-${this.instanceId}">Phantom FOV oversampling</label>
-              <input id="phantomOversample-${this.instanceId}" type="text" class="oversample-input mono" value="[1,1,1]" spellcheck="false" title="Sim-only scale [sx,sy,sz]: matrix and FOV mm for phantom resampling (UI box unchanged)" />
+              <input id="phantomOversample-${this.instanceId}" type="text" class="oversample-input mono" value="[2,2,1]" spellcheck="false" title="Sim-only scale [sx,sy,sz]: matrix and FOV mm for phantom resampling (UI box unchanged)" />
             </div>
           </div>
           <div class="row" style="margin-top: 12px; display: grid; grid-template-columns: 1fr 1fr; gap: 8px;">
@@ -2351,9 +2351,9 @@ os.makedirs('/phantom/averaged', exist_ok=True)
     ];
   }
 
-  /** Parse `[sx,sy,sz]` integer scale factors for sim phantom grid (default `[1,1,1]`). */
+  /** Parse `[sx,sy,sz]` integer scale factors for sim phantom grid (default `[2,2,1]`). */
   parsePhantomOversampleFactors(raw) {
-    const fallback = [1, 1, 1];
+    const fallback = [2, 2, 1];
     const s = String(raw ?? "").trim();
     if (!s) return fallback;
     try {
@@ -2368,7 +2368,7 @@ os.makedirs('/phantom/averaged', exist_ok=True)
   }
 
   getPhantomOversampleFactors() {
-    return this.parsePhantomOversampleFactors(this.phantomOversampleInput?.value ?? "[1,1,1]");
+    return this.parsePhantomOversampleFactors(this.phantomOversampleInput?.value ?? "[2,2,1]");
   }
 
   /** Phantom matrix for SIM resampling (UI sliders × oversampling). */
