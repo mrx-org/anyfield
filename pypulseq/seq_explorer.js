@@ -685,8 +685,8 @@ plt.rcParams['font.size'] = 8`;
         
         await Promise.all(loadPromises);
         
-        // Preload a built-in .seq file into the virtual filesystem for the Pulseq interpreter
-        if (this.config.pyodide) {
+        // Preload built-in ute.seq unless ?seq_url= will supply the interpreter file
+        if (this.config.pyodide && !(this.config.initialSeqUrl || '').trim()) {
             try {
                 await this.preloadBuiltinInterpreterSeq();
             } catch (e) {
@@ -703,13 +703,56 @@ plt.rcParams['font.size'] = 8`;
             // Run selectInitialSequence in the background — parameter loading imports pypulseq
             // which takes several seconds, and we don't want to block the loader overlay on it.
             // The tree is already visible; the parameter panel will fill in asynchronously.
-            Promise.resolve().then(() => this.selectInitialSequence()).catch((err) => {
-                console.error('[init_prot] selectInitialSequence failed:', err);
-                this.selectFirstSequence();
-            });
+            Promise.resolve()
+                .then(() => this.selectInitialSequence())
+                .catch((err) => {
+                    console.error('[init_prot] selectInitialSequence failed:', err);
+                    this.selectFirstSequence();
+                });
         } else {
             this.showStatus('No sequences found. Check console for errors.', 'error');
         }
+    }
+
+    /**
+     * Fetch a remote .seq URL into Pyodide VFS under /uploads/.
+     * @param {string} url
+     * @param {string} [preferredName] optional filename (e.g. ute.seq)
+     * @returns {Promise<string>} VFS path
+     */
+    async fetchSeqUrlToVfs(url, preferredName = null) {
+        const pyodide = this.config.pyodide;
+        if (!pyodide?.FS) throw new Error('Pyodide FS not available for .seq download');
+        const response = await fetch(url);
+        if (!response.ok) {
+            throw new Error(`Failed to fetch .seq (${response.status} ${response.statusText})`);
+        }
+        const buffer = await response.arrayBuffer();
+        const baseDir = '/uploads';
+        try {
+            if (!pyodide.FS.analyzePath(baseDir).exists) {
+                pyodide.FS.mkdir(baseDir);
+            }
+        } catch (err) {
+            if (err.code !== 'EEXIST') throw err;
+        }
+        let safeName = preferredName;
+        if (!safeName) {
+            try {
+                const u = new URL(url);
+                safeName = (u.pathname.split('/').pop() || '').trim();
+            } catch (_) {
+                safeName = '';
+            }
+        }
+        safeName = String(safeName || 'remote.seq')
+            .replace(/[/\\:?*[\]"]/g, '_')
+            .replace(/_+/g, '_')
+            .replace(/^_|_$/g, '') || 'remote.seq';
+        if (!safeName.toLowerCase().endsWith('.seq')) safeName += '.seq';
+        const vfsPath = `${baseDir}/${safeName}`;
+        pyodide.FS.writeFile(vfsPath, new Uint8Array(buffer), { encoding: 'binary' });
+        return vfsPath;
     }
 
     /**
@@ -718,33 +761,38 @@ plt.rcParams['font.size'] = 8`;
      */
     async preloadBuiltinInterpreterSeq() {
         if (!this.config.pyodide) return;
-        const pyodide = this.config.pyodide;
-        if (!pyodide.FS) {
-            console.warn('Pyodide FS not available to preload interpreter .seq file');
-            return;
-        }
         try {
             const url = this.resolvePath('built_in_seq/ute.seq') + '?t=' + Date.now();
-            const response = await fetch(url);
-            if (!response.ok) {
-                console.warn('Failed to fetch built_in_seq/ute.seq for interpreter default:', response.status, response.statusText);
-                return;
-            }
-            const buffer = await response.arrayBuffer();
-            const baseDir = '/uploads';
-            try {
-                if (!pyodide.FS.analyzePath(baseDir).exists) {
-                    pyodide.FS.mkdir(baseDir);
-                }
-            } catch (err) {
-                if (err.code !== 'EEXIST') throw err;
-            }
-            const vfsPath = `${baseDir}/ute.seq`;
-            pyodide.FS.writeFile(vfsPath, new Uint8Array(buffer), { encoding: 'binary' });
+            const vfsPath = await this.fetchSeqUrlToVfs(url, 'ute.seq');
             this.defaultInterpreterSeqPath = vfsPath;
             console.log('Preloaded built-in interpreter .seq file at', vfsPath);
         } catch (e) {
             console.warn('Error preloading built-in interpreter .seq file:', e);
+        }
+    }
+
+    /**
+     * Apply ?seq_url= after the Pulseq interpreter is selected: fetch into VFS and set seq_file param.
+     */
+    async applyInitialSeqUrl() {
+        const url = (this.config.initialSeqUrl || '').trim();
+        if (!url) return;
+        const fn = this.selectedSequence?.functionName;
+        if (fn !== 'seq_pulseq_interpreter') {
+            console.warn('[seq_url] ignored: selected function is not seq_pulseq_interpreter:', fn);
+            return;
+        }
+        try {
+            this.showStatus('Loading .seq from URL…', 'info');
+            const vfsPath = await this.fetchSeqUrlToVfs(url);
+            this.defaultInterpreterSeqPath = vfsPath;
+            const input = (this.paramsTarget || this.container)?.querySelector('#seq-param-seq_file');
+            if (input) input.value = vfsPath;
+            this.showStatus(`Loaded .seq: ${vfsPath}`, 'success');
+            console.log('[seq_url] applied', url, '→', vfsPath);
+        } catch (e) {
+            console.error('[seq_url] failed:', e);
+            this.showStatus(`seq_url failed: ${e.message}`, 'error');
         }
     }
 
@@ -1139,6 +1187,7 @@ result
         }
         if (fileName && await this.selectSequenceByFileAndFunction(fileName, parsed.functionName)) {
             console.log('[init_prot] OK selected', token);
+            await this.applyInitialSeqUrl();
             return;
         }
         console.warn('[init_prot] primary selection failed → fallback', { token, fileName, wantedFunc: parsed.functionName });
@@ -1151,6 +1200,7 @@ result
         console.log('[init_prot] tryFallbackInit', { explicitInitFailed, reason, fbKey, hasFile: fbKey ? !!this.sequences[fbKey] : false });
         if (fbKey && await this.selectSequenceByFileAndFunction(fbKey, 'seq_pulseq_interpreter')) {
             if (explicitInitFailed) console.log('[init_prot] fell back to default Pulseq interpreter');
+            await this.applyInitialSeqUrl();
             return;
         }
         if (!fbKey) {

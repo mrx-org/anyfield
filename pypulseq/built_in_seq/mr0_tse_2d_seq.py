@@ -260,7 +260,7 @@ def prot_TSE_2D_asym_ex(
     dumshots=0,
     dumref=1,
     dwell=50e-6 * 2,
-    dTE=0.0087,
+    dTE=0.00065,
 ):
     """Same as prot_TSE_2D but with asymmetric excitation enabled by default (dTE = 0.0087 s)."""
     kwargs = locals().copy()

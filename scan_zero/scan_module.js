@@ -7,6 +7,17 @@ export const TOOL_TRAJEX = 'wss://tool-trajex.fly.dev/tool';
 export const TOOL_RAPISIM = 'wss://tool-rapisim.fly.dev/tool';
 export const TOOL_MR0SIM = 'wss://tool-mr0sim.fly.dev/tool';
 
+const TOOL_FLY_HOSTS = [TOOL_CONSEQ, TOOL_TRAJEX, TOOL_RAPISIM, TOOL_MR0SIM].map(
+    (url) => new URL(url).hostname,
+);
+
+/** True when URL has ?pro=1 (or true/yes); matches index.html `window.pro`. */
+export function isProUser() {
+    if (typeof window !== 'undefined' && window.pro) return true;
+    if (typeof window === 'undefined' || !window.location?.search) return false;
+    return /^1|true|yes$/i.test(new URLSearchParams(window.location.search).get('pro') || '');
+}
+
 /**
  * ScanModule - Handles the scanning simulation queue
  * Borrows resampling logic from NiivueModule for FOV crop (no sequence run)
@@ -69,9 +80,11 @@ export class ScanModule {
                     <button id="btn-start-sim-mr0" class="scan-btn" title="MR0 (tool-mr0sim)">
                         SCAN<span class="icon">▶</span> 
                     </button>
+                    ${isProUser() ? `
                     <button id="btn-start-sim-fast" class="scan-btn" title="Rapisim (tool-rapisim)">
                          SCAN<span class="icon">▶▶</span>
                     </button>
+                    ` : ''}
                     <div class="active-info">
                         Ready: <span id="ready-seq-name">${this.currentSequence ? (this.currentSequence.displayName || this.currentSequence.name) : 'None'}</span>
                     </div>
@@ -84,7 +97,8 @@ export class ScanModule {
 
         this.container.querySelector('#btn-start-crop').onclick = () => this.startCrop();
         this.container.querySelector('#btn-start-sim-mr0').onclick = () => this.startSimMr0();
-        this.container.querySelector('#btn-start-sim-fast').onclick = () => this.startSimFast();
+        const fastBtn = this.container.querySelector('#btn-start-sim-fast');
+        if (fastBtn) fastBtn.onclick = () => this.startSimFast();
         
         // Make this instance available globally for UI callbacks if needed
         window.scanModule = this;
@@ -156,6 +170,7 @@ export class ScanModule {
     }
 
     async startSimFast() {
+        if (!isProUser()) return;
         if (!this.currentSequence) {
             alert("Please select a sequence in the Explorer first.");
             return;
@@ -281,6 +296,18 @@ export class ScanModule {
         }
 
         this.updateQueueUI();
+    }
+
+    /**
+     * Wake Fly tool machines (HTTP) and preload toolapi-wasm. Fire-and-forget; does not block bootstrap.
+     */
+    prewarmToolBackends() {
+        for (const host of TOOL_FLY_HOSTS) {
+            fetch(`https://${host}/`, { mode: 'no-cors', cache: 'no-store' }).catch(() => {});
+        }
+        this._ensureToolApi().catch((err) => {
+            console.warn('ScanModule: toolapi preload failed:', err);
+        });
     }
 
     async _ensureToolApi() {
@@ -610,7 +637,7 @@ os.makedirs(_p, exist_ok=True)
         let phantomObj;
         try {
             phantomObj = await nvMod.pyodide.runPythonAsync(`
-import json, numpy as np, nibabel as nib, re, tempfile, os
+import json, numpy as np, nibabel as nib, re, tempfile, os, shutil
 from nibabel.filebasedimages import ImageFileError
 cfg_name = sim_json_name.to_py() if hasattr(sim_json_name, 'to_py') else sim_json_name
 base = sim_phantom_base.to_py() if hasattr(sim_phantom_base, 'to_py') else str(sim_phantom_base)
@@ -618,9 +645,35 @@ with open(os.path.join(base, cfg_name), 'r', encoding='utf-8') as f:
     cfg = json.load(f)
 cache = {}
 def parse_ref(s):
-    m = re.match(r"^(.+)\\[(\\d+)\\]$", s)
+    m = re.match(r"^(.+)\\[(\\d+)\\]$", str(s).strip())
     if not m: raise ValueError(f'Invalid ref: {s}')
     return m.group(1), int(m.group(2))
+def _collect_nifti_refs(val, out):
+    if isinstance(val, str) and '[' in val:
+        try:
+            out.add(parse_ref(val)[0])
+        except ValueError:
+            pass
+    elif isinstance(val, dict) and 'file' in val:
+        _collect_nifti_refs(val['file'], out)
+    elif isinstance(val, list):
+        for item in val:
+            _collect_nifti_refs(item, out)
+def _ensure_staged_nifti(fname):
+    dst = os.path.join(base, fname)
+    if os.path.isfile(dst):
+        return
+    src = os.path.join('/phantom', fname)
+    if os.path.isfile(src):
+        os.makedirs(os.path.dirname(dst) or base, exist_ok=True)
+        shutil.copy2(src, dst)
+_ref_names = set()
+for _t in cfg.get('tissues', {}).values():
+    if isinstance(_t, dict):
+        for _k, _v in _t.items():
+            _collect_nifti_refs(_v, _ref_names)
+for _fn in _ref_names:
+    _ensure_staged_nifti(_fn)
 def load4d(fn):
     if fn in cache: return cache[fn]
     path = base + '/' + fn
@@ -647,26 +700,89 @@ def make_vol(arr, aff):
         "affine": diag_aff[:3,:4].tolist(),
         "data": np.asarray(arr, dtype=np.float64).ravel(order='C').tolist()
     }
+def _load_prop_map(prop_val, shape, prop_name):
+    """Load 3D map from constant / file_ref / mapping (no tissue mask)."""
+    if isinstance(prop_val, (int, float)):
+        return np.full(shape, float(prop_val), dtype=np.float64)
+    if isinstance(prop_val, str):
+        fn, idx = parse_ref(prop_val)
+        _, v4 = load4d(fn)
+        x = np.asarray(v4[:, :, :, idx], dtype=np.float64)
+        if x.shape != shape:
+            raise ValueError(
+                f'{prop_name} map {prop_val!r} shape {x.shape} != grid shape {shape}'
+            )
+        return x
+    if isinstance(prop_val, dict):
+        fn, idx = parse_ref(prop_val['file'])
+        _, v4 = load4d(fn)
+        x = np.asarray(v4[:, :, :, idx], dtype=np.float64)
+        if x.shape != shape:
+            raise ValueError(
+                f'{prop_name} file {prop_val.get("file")!r} shape {x.shape} != grid shape {shape}'
+            )
+        x_min = float(x.min())
+        x_max = float(x.max())
+        x_mean = float(x.mean())
+        x_std = float(x.std())
+        vol = eval(
+            prop_val['func'],
+            {'__builtins__': {}},
+            {'x': x, 'x_min': x_min, 'x_max': x_max, 'x_mean': x_mean, 'x_std': x_std},
+        )
+        vol = np.asarray(vol, dtype=np.float64)
+        if vol.shape != shape:
+            raise ValueError(
+                f'{prop_name} func result shape {vol.shape} != grid shape {shape}'
+            )
+        return vol
+    raise ValueError(f'Unsupported {prop_name} type: {type(prop_val)}')
+def resolve_vol(prop_val, dens, prop_name='property'):
+    """Per-tissue 3D property masked by that tissue's density."""
+    mask = dens > 0
+    if isinstance(prop_val, (int, float)):
+        out = np.zeros(dens.shape, dtype=np.float64)
+        out[mask] = float(prop_val)
+        return out
+    vol = _load_prop_map(prop_val, dens.shape, prop_name)
+    return np.where(mask, vol, 0.0)
+def prop_scalar(prop_val, default, prop_name):
+    """Scalar for toolapi (T1, T2, …): constant or PD-weighted mean in tissue."""
+    if isinstance(prop_val, (int, float)):
+        return float(prop_val)
+    if isinstance(prop_val, str):
+        fn, idx = parse_ref(prop_val)
+        _, v4 = load4d(fn)
+        vv = np.asarray(v4[:, :, :, idx], dtype=np.float64).ravel(order='C')
+        dd = dens.ravel(order='C')
+        s = float(dd.sum())
+        return float((dd * vv).sum() / s) if s > 0 else float(default)
+    if isinstance(prop_val, dict):
+        vol = _load_prop_map(prop_val, dens.shape, prop_name)
+        dd = dens.ravel(order='C')
+        vv = vol.ravel(order='C')
+        s = float(dd.sum())
+        return float((dd * vv).sum() / s) if s > 0 else float(default)
+    return float(default)
 tissues = {}
 first = None
 all_tissues = list(cfg.get('tissues', {}).values())
+ref_shape = None
+ref_aff = None
 for n,t in cfg.get('tissues',{}).items():
     if first is None: first = t
     dfn,didx = parse_ref(t['density'])
     aff,d4 = load4d(dfn); dens = d4[:,:,:,didx]
-    def prop(k,default):
-        p = t.get(k, default)
-        if isinstance(p,(int,float)): return float(p)
-        if isinstance(p,str):
-            fn,idx = parse_ref(p); _,v4 = load4d(fn); vv = v4[:,:,:,idx].ravel(order='C'); dd=dens.ravel(order='C'); s=float(dd.sum()); return float((dd*vv).sum()/s) if s>0 else float(default)
-        return float(default)
+    if ref_shape is None:
+        ref_shape = dens.shape
+        ref_aff = aff
     tissues[n] = {
         "density": make_vol(dens, aff),
-        "db0": make_vol(np.ones_like(dens)*prop('dB0', 1.0), aff),
-        "t1": prop('T1', float('inf')),
-        "t2": prop('T2', float('inf')),
-        "t2dash": prop("T2'", float('inf')),
-        "adc": prop('ADC', 0.0),
+        "db0": make_vol(resolve_vol(t.get('dB0', 0.0), dens, 'dB0'), aff),
+        "t1": prop_scalar(t.get('T1', float('inf')), float('inf'), 'T1'),
+        "t2": prop_scalar(t.get('T2', float('inf')), float('inf'), 'T2'),
+        "t2dash": prop_scalar(t.get("T2'", float('inf')), float('inf'), "T2'"),
+        "adc": prop_scalar(t.get('ADC', 0.0), 0.0, 'ADC'),
     }
 b1_tx=[]; b1_rx=[]
 def _first_nonempty_b1(key):
@@ -684,20 +800,21 @@ if tx_vals is None and first:
     tx_vals = first.get('B1+', [1.0])
 if rx_vals is None and first:
     rx_vals = first.get('B1-', [1.0])
+def b1_channel_vol(p, label):
+    # B1 maps are global (not masked to one tissue); see nifti_phantom_v1 spec.
+    if isinstance(p, (int, float)):
+        return make_vol(np.ones(ref_shape, dtype=np.float64) * float(p), ref_aff)
+    return make_vol(_load_prop_map(p, ref_shape, label), ref_aff)
 for p in (tx_vals or [1.0]):
-    if isinstance(p,(int,float)):
-        arr=np.ones_like(dens)*float(p); v=make_vol(arr, aff); b1_tx.append(v)
+    b1_tx.append(b1_channel_vol(p, 'B1+'))
 for p in (rx_vals or [1.0]):
-    if isinstance(p,(int,float)):
-        arr=np.ones_like(dens)*float(p); v=make_vol(arr, aff); b1_rx.append(v)
+    b1_rx.append(b1_channel_vol(p, 'B1-'))
 # MR0SIM expects at least one TX map; keep parity with phantomlib-style defaults.
 if len(b1_tx) == 0:
-    arr = np.ones_like(dens) * 1.0
-    b1_tx.append(make_vol(arr, aff))
+    b1_tx.append(make_vol(np.ones(ref_shape, dtype=np.float64), ref_aff))
 # Also keep RX non-empty for robustness.
 if len(b1_rx) == 0:
-    arr = np.ones_like(dens) * 1.0
-    b1_rx.append(make_vol(arr, aff))
+    b1_rx.append(make_vol(np.ones(ref_shape, dtype=np.float64), ref_aff))
 {"tissues": tissues, "b1_tx": b1_tx, "b1_rx": b1_rx}
         `);
         } finally {

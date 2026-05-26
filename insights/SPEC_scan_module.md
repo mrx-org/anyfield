@@ -44,8 +44,8 @@ Uses `executeFunction` and prepares `/outputs/<baseName>.seq` for the external s
 ## NIfTI -> toolapi phantom conversion
 - **Source**: Resampled NIfTI volumes are staged in Pyodide temp FS (`/tmp/__sim_phantom_staging`) together with the active phantom JSON.
 - **Loader behavior**: JSON tissue refs like `file.nii.gz[idx]` are resolved; each referenced 3D map is loaded from the staged files (4D inputs split by index). Misnamed plain `.nii` files with `.nii.gz` extension are handled via a temporary fallback load path.
-- **Per-tissue fields**: For each tissue, conversion creates `density` and `db0` as full `Volume` grids, plus scalar `t1`, `t2`, `t2dash`, `adc` (density-weighted averages when properties are map-backed).
-- **B1 handling**: `b1_tx`/`b1_rx` are built from `B1+`/`B1-` entries (searched across tissues); if missing/empty, fallback constant maps are inserted so toolapi payloads are never TX/RX-empty.
+- **Per-tissue fields**: All JSON property forms go through `resolve_vol` (scalar, NIfTI ref, `{file, func}` — same as `execute_json._resolve`). `density` and `db0` are full `Volume` grids; `t1`, `t2`, `t2dash`, `adc` are toolapi scalars via density-weighted mean of the resolved 3D map when map-backed.
+- **B1 handling**: `b1_tx`/`b1_rx` load full-grid maps via `_load_prop_map` (no single-tissue density mask); lists come from the first non-empty tissue `B1+`/`B1-`. Per-tissue `dB0` uses `resolve_vol` (map × tissue density mask). Fallback `1.0` maps if TX/RX would be empty.
 - **Wire format**: JS encodes the plain dict to toolapi `SegmentedPhantom` with `Volume.data` serialized as `TypedList::Float` (`{ Float: [...] }`) to match toolapi-wasm expectations.
 
 ## Rotated FOV and the sim coordinate contract
