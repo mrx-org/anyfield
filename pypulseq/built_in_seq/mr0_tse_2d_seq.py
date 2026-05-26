@@ -216,8 +216,8 @@ if __name__ == '__main__':
 
 def prot_TSE_2D(
     fov=(200e-3, 200e-3, 8e-3),
-    Nread=42,
-    Nphase=42,
+    Nread=128,
+    Nphase=128,
     FA=90,
     FA_ref=120,
     TR=5.0,
@@ -230,7 +230,7 @@ def prot_TSE_2D(
     r_spoil=2,
     PE_grad_on=True,
     RO_grad_on=True,
-    shots=2,
+    shots=10,
     dumshots=0,
     dumref=1,
     dwell=50e-6 * 2,
