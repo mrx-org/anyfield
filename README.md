@@ -101,6 +101,9 @@ For more insights see insights SPEC_no_field.md
 - **Rapisim spiral / NUFFT recon**: non-Cartesian recon conjugates k-space before PyNUFFT adjoint (`_backend_kspace_fix`); Cartesian still uses `fftn` vs `ifftn`.
 - Added warmup for API calls and earlier toolapi load.
 
+**v0.5.1**
+- **Fix phantom zip download**: `.nii.gz` volumes were written uncompressed into the zip archive. They are now gzip-compressed before packing, matching the single-file download behaviour.
+- 
 **v0.5.0**
 - **Phantom FOV oversampling**: FOV tab input `[sx,sy,sz]` (default `[1,1,1]`) scales sim phantom matrix and FOV mm without changing the on-screen FOV box or recon grid.
 
