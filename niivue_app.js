@@ -14,8 +14,7 @@ export class NiivueModule {
   constructor(options = {}) {
     this.instanceId = Math.random().toString(36).substr(2, 5);
     this.canvasId = `gl-${Math.random().toString(36).substr(2, 9)}`;
-    // JSON tab: show when ?pro=1 (window.pro) or when options.showJsonTab is true
-    this.options = { ...options, showJsonTab: options.showJsonTab === true || !!(typeof window !== 'undefined' && window.pro) };
+    this.options = { ...options };
     this.nv = new Niivue({ 
       logging: false,
       loadingText: "Load a phantom.",
@@ -29,7 +28,6 @@ export class NiivueModule {
     this.voxelSpacingMm = null;
     this.fullFovMm = null;
     this.fovMesh = null;
-    this.isAddingVolume = false;
     this.currentAxCorSag = null;
     /** Pane (0=axial, 1=coronal, 2=sagittal) for active FOV rotate gesture; not overwritten by onLocationChange. */
     this.fovRotateAxCorSag = null;
@@ -64,7 +62,6 @@ export class NiivueModule {
     this.statusOverlay = null;
     this.crosshairIntensityEl = null;
     this.statusText = null;
-    this.fileInput = null;
     this.dirInput = null;
     this.btnDemo = null;
     this.showFov = null;
@@ -114,9 +111,8 @@ export class NiivueModule {
     this.voxVal = null;
     this.mmVal = null;
     this.locStrVal = null;
-    this.volumeListContainer = null;
-    this.btnNewFile = null;
-    this.btnAddFile = null;
+    this.scanVolumeListContainer = null;
+    this.phantomVolumeListContainer = null;
     this.btnAddFolder = null;
     this.resampleToFovBtn = null;
     this._nibabelReady = null;
@@ -252,7 +248,7 @@ export class NiivueModule {
     if (!useTabs) {
       this.containerControls.innerHTML = `
         <div class="options-grid standalone-controls">
-          ${this._getPanelSourceHtml()}
+          ${this._getPanelScansHtml()}${this._getPanelPhantomsHtml()}
           ${this._getPanelViewHtml()}
           <div class="panel-flat">
             ${this._getPanelFovHtml(true)}
@@ -263,18 +259,17 @@ export class NiivueModule {
         </div>
       `;
     } else {
-      const showJsonTab = this.options.showJsonTab === true;
       this.containerControls.innerHTML = `
         <div class="tabbed-controls">
           <div class="tabs-header">
-            <button class="tab-btn active" data-tab="source">VIEWER</button>
-            <button class="tab-btn" data-tab="view">OPTIONS</button>
+            <button class="tab-btn active" data-tab="scans">SCANS</button>
+            <button class="tab-btn" data-tab="phantoms">PHANTOMS</button>
             <button class="tab-btn" data-tab="fov">FOV</button>
-            ${showJsonTab ? '<button class="tab-btn" data-tab="json">JSON</button>' : ''}
+            <button class="tab-btn" data-tab="view">OPTIONS</button>
           </div>
           <div class="tabs-content">
-            <div class="tab-pane active" id="tab-source-${this.instanceId}">${this._getPanelSourceHtml()}</div>
-            <div class="tab-pane" id="tab-view-${this.instanceId}">${this._getPanelViewHtml()}</div>
+            <div class="tab-pane active" id="tab-scans-${this.instanceId}">${this._getPanelScansHtml()}</div>
+            <div class="tab-pane" id="tab-phantoms-${this.instanceId}">${this._getPanelPhantomsHtml()}</div>
             <div class="tab-pane" id="tab-fov-${this.instanceId}">
                 <div class="panel-flat">
                     ${this._getPanelFovHtml(true)}
@@ -283,80 +278,94 @@ export class NiivueModule {
                     </div>
                 </div>
             </div>
-            ${showJsonTab ? `<div class="tab-pane" id="tab-json-${this.instanceId}">${this._getPanelJsonHtml()}</div>` : ''}
+            <div class="tab-pane" id="tab-view-${this.instanceId}">${this._getPanelViewHtml()}</div>
           </div>
         </div>
       `;
       
-      // Bind tab switching (click active VIEWER tab toggles collapse: whole sidebar narrows, main gets full width)
       const buttons = this.containerControls.querySelectorAll('.tab-btn');
       const panes = this.containerControls.querySelectorAll('.tab-pane');
       const tabsContent = this.containerControls.querySelector('.tabs-content');
-      const viewerBtn = this.containerControls.querySelector('.tab-btn[data-tab="source"]');
-      if (viewerBtn) {
-        if (!viewerBtn.dataset.fullLabel) viewerBtn.dataset.fullLabel = viewerBtn.textContent || 'VIEWER';
-        if (!viewerBtn.dataset.collapsedLabel) viewerBtn.dataset.collapsedLabel = 'V';
+      const scansBtn = this.containerControls.querySelector('.tab-btn[data-tab="scans"]');
+      if (scansBtn) {
+        if (!scansBtn.dataset.fullLabel) scansBtn.dataset.fullLabel = scansBtn.textContent || 'SCANS';
+        if (!scansBtn.dataset.collapsedLabel) scansBtn.dataset.collapsedLabel = 'S';
       }
       buttons.forEach(btn => {
         btn.onclick = () => {
           if (window.viewManager && window.viewManager.currentMode !== 'planning') {
             window.viewManager.setMode('planning');
           }
-          // Resolve at click time (controls may have been in module-cache at setup)
           const slotSidebar = this.containerControls.closest('#slot-sidebar');
           const labGrid = this.containerControls.closest('.lab-grid');
           const wasActive = btn.classList.contains('active');
-          const isSource = btn.dataset.tab === 'source';
-          if (wasActive && isSource) {
+          const isScans = btn.dataset.tab === 'scans';
+          if (wasActive && isScans) {
             const willCollapse = !(slotSidebar && slotSidebar.classList.contains('sidebar-collapsed'));
             if (tabsContent) tabsContent.classList.toggle('panel-collapsed');
             if (slotSidebar) slotSidebar.classList.toggle('sidebar-collapsed');
             if (labGrid) labGrid.classList.toggle('sidebar-collapsed');
-            if (viewerBtn) {
-              viewerBtn.textContent = willCollapse
-                ? (viewerBtn.dataset.collapsedLabel || 'V')
-                : (viewerBtn.dataset.fullLabel || 'VIEWER');
+            if (scansBtn) {
+              scansBtn.textContent = willCollapse
+                ? (scansBtn.dataset.collapsedLabel || 'S')
+                : (scansBtn.dataset.fullLabel || 'SCANS');
             }
             return;
           }
           if (tabsContent) tabsContent.classList.remove('panel-collapsed');
           if (slotSidebar) slotSidebar.classList.remove('sidebar-collapsed');
           if (labGrid) labGrid.classList.remove('sidebar-collapsed');
-          if (viewerBtn) {
-            viewerBtn.textContent = viewerBtn.dataset.fullLabel || 'VIEWER';
+          if (scansBtn) {
+            scansBtn.textContent = scansBtn.dataset.fullLabel || 'SCANS';
           }
           buttons.forEach(b => b.classList.remove('active'));
           panes.forEach(p => p.classList.remove('active'));
           btn.classList.add('active');
           const tab = btn.dataset.tab;
           this.containerControls.querySelector(`#tab-${tab}-${this.instanceId}`).classList.add('active');
-          if (tab === 'json' && this.jsonEditorCm) this.jsonEditorCm.refresh();
+          if (tab === 'phantoms' && this.jsonEditorCm) this.jsonEditorCm.refresh();
         };
       });
     }
 
     this.bindControlElements();
     this.setupEventListeners();
-    if (this.options.showJsonTab) this.initJsonEditor();
+    if ((this.containerControls || document).querySelector(`#json-editor-${this.instanceId}`)) this.initJsonEditor();
     // Do not auto-initialize Pyodide here; let the bootstrap process handle it
     // or call it manually if needed.
   }
 
-  _getPanelSourceHtml() {
+  _getPanelScansHtml() {
     return `
-        <div id="panel-viewer-controls-${this.instanceId}" class="panel-flat" style="display: flex; flex-direction: column; height: 100%; box-sizing: border-box; overflow: hidden;">
-          <h3 class="panel-title">VIEWER</h3>
+        <div id="panel-scans-${this.instanceId}" class="panel-flat" style="display: flex; flex-direction: column; height: 100%; box-sizing: border-box; overflow: hidden;">
+          <div id="scan-volume-list-${this.instanceId}" style="display: flex; flex-direction: column; gap: 4px; flex: 1; overflow-y: auto;"></div>
+        </div>
+    `;
+  }
+
+  _getPanelPhantomsHtml() {
+    return `
+        <div id="panel-phantoms-${this.instanceId}" class="panel-flat" style="display: flex; flex-direction: column; height: 100%; box-sizing: border-box; overflow: hidden;">
           <div class="row" style="display: flex; flex-direction: column; gap: 4px; flex-shrink: 0;">
             <div style="display: flex; gap: 4px; flex-wrap: wrap;">
-              <button id="btn-add-file-${this.instanceId}" class="btn btn-secondary btn-sm btn-flex">Add File</button>
-              <button id="btn-add-folder-${this.instanceId}" class="btn btn-secondary btn-sm btn-flex" title="Select folder with JSON + NIfTIs">Add Folder</button>
+              <button id="btn-add-folder-${this.instanceId}" class="btn btn-secondary btn-sm btn-flex" title="Select folder with JSON + NIfTIs">Add (json/nii)</button>
               <button id="load-demo-${this.instanceId}" class="btn btn-secondary btn-sm btn-flex" title="Reload bundled brain default phantom">Default phantom</button>
-              <input id="file-${this.instanceId}" type="file" accept=".nii,.nii.gz,.gz,.json" multiple style="display: none;" />
               <input id="dir-${this.instanceId}" type="file" webkitdirectory directory multiple style="display: none;" />
             </div>
           </div>
-          <div id="volume-list-${this.instanceId}" style="margin-top: 6px; display: flex; flex-direction: column; gap: 4px; flex: 1; overflow-y: auto; border-top: 1px solid var(--border); padding-top: 4px;">
-            <!-- Volume checkboxes will be added here -->
+          <div id="phantom-volume-list-${this.instanceId}" style="margin-top: 6px; display: flex; flex-direction: column; gap: 4px; flex: 0 0 auto; max-height: 90px; overflow-y: auto; border-top: 1px solid var(--border); padding-top: 4px;"></div>
+          <div class="json-tab-panel" style="display: flex; flex-direction: column; flex: 1; min-height: 0; overflow: hidden; margin-top: 8px; border-top: 1px solid var(--border); padding-top: 8px;">
+            <select id="json-config-select-${this.instanceId}" class="json-config-select" style="margin-bottom: 6px; flex-shrink: 0;"></select>
+            <div class="row json-tab-actions" style="flex-shrink: 0; gap: 6px; margin-bottom: 6px; display: flex; flex-wrap: wrap; align-items: center; width: 100%;">
+              <button type="button" id="json-save-${this.instanceId}" class="btn btn-secondary btn-sm" title="Save (update in VFS)">Save</button>
+              <button type="button" id="json-save-as-${this.instanceId}" class="btn btn-secondary btn-sm" title="Save as new config in VFS">Save As</button>
+              <button type="button" id="json-revert-${this.instanceId}" class="btn btn-secondary btn-sm" title="Reload current file (discard unsaved edits)">Revert</button>
+              <span id="json-tab-status-${this.instanceId}" class="json-tab-status" style="flex: 1; min-width: 0;"></span>
+              ${typeof window !== 'undefined' && window.pro ? `<button type="button" id="json-execute-${this.instanceId}" class="btn btn-primary btn-sm" title="Execute JSON phantom config" style="margin-left: auto;">Execute</button>` : ''}
+            </div>
+            <div id="json-editor-wrap-${this.instanceId}" class="json-editor-wrap" style="flex: 1; min-height: 120px; display: flex; flex-direction: column; overflow: hidden;">
+              <textarea id="json-editor-${this.instanceId}" class="json-editor" placeholder="Add a folder with JSON + NIfTIs to see configs." style="flex: 1; min-height: 0; font-size: 11px;"></textarea>
+            </div>
           </div>
         </div>
     `;
@@ -395,27 +404,6 @@ export class NiivueModule {
             Left/Right: 4D frame (when volume has 4D)
           </div>
           ${typeof window !== 'undefined' && window.pro ? `<div id="debugInfo-${this.instanceId}" class="hint" style="font-family:monospace;font-size:10px;white-space:pre;line-height:1.4;margin-top:4px;color:#aaa;"></div>` : ''}
-        </div>
-    `;
-  }
-
-  _getPanelJsonHtml() {
-    return `
-        <div class="panel-flat json-tab-panel" style="display: flex; flex-direction: column; height: 100%; overflow: hidden;">
-          <h3 class="panel-title">JSON config</h3>
-          <div id="json-tab-list-${this.instanceId}" class="json-tab-list" style="display: flex; flex-direction: column; gap: 6px; margin-bottom: 8px; max-height: 120px; overflow-y: auto; flex-shrink: 0;">
-            <!-- Filled by updateJsonTab() -->
-          </div>
-          <div id="json-editor-wrap-${this.instanceId}" class="json-editor-wrap" style="flex: 1; min-height: 120px; display: flex; flex-direction: column; overflow: hidden;">
-            <textarea id="json-editor-${this.instanceId}" class="json-editor" placeholder="Add a folder with JSON + NIfTIs to see configs." style="flex: 1; min-height: 0; font-size: 11px;"></textarea>
-          </div>
-          <div class="row json-tab-actions" style="flex-shrink: 0; gap: 6px; margin-top: 8px; display: flex; flex-wrap: wrap; align-items: center;">
-            <button type="button" id="json-execute-${this.instanceId}" class="btn btn-primary btn-sm" title="Execute JSON phantom config">Execute</button>
-            <button type="button" id="json-save-${this.instanceId}" class="btn btn-secondary btn-sm" title="Save (update in VFS)">Save</button>
-            <button type="button" id="json-save-as-${this.instanceId}" class="btn btn-secondary btn-sm" title="Save as new config in VFS">Save As</button>
-            <button type="button" id="json-revert-${this.instanceId}" class="btn btn-secondary btn-sm" title="Reload current file (discard unsaved edits)">Revert</button>
-            <span id="json-tab-status-${this.instanceId}" class="json-tab-status"></span>
-          </div>
         </div>
     `;
   }
@@ -487,6 +475,71 @@ export class NiivueModule {
     if (group.jsonFileName && String(group.jsonFileName).toLowerCase() === want) return true;
     const derived = group.jsonName ? `${group.jsonName}.json`.toLowerCase() : '';
     return derived === want;
+  }
+
+  _isDerivativePhantomGroup(group) {
+    const jn = String(group?.jsonName || '');
+    return jn.endsWith('_resampled') || jn.endsWith('_averaged') || jn.endsWith('_executed');
+  }
+
+  _niftiNamesForPhantomGroup(group) {
+    const names = new Set();
+    for (const v of group?.volumes || []) {
+      const n = v?.name;
+      if (n && /\.nii(\.gz)?$/i.test(n)) names.add(String(n).replace(/^\/+/, ""));
+    }
+    const raw = group?.jsonContent;
+    if (raw) {
+      const re = /[\w+.-]+\.nii(?:\.gz)?/gi;
+      let m;
+      while ((m = re.exec(String(raw)))) names.add(m[0]);
+    }
+    return names;
+  }
+
+  _removePhantomGroup(group) {
+    if (!group) return;
+    const jsonFn = this._groupJsonFileName(group);
+    const ids = new Set([group.id]);
+    if (jsonFn && !this._isDerivativePhantomGroup(group)) {
+      for (const g of this.volumeGroups) {
+        if (g.id !== group.id && this._volumeGroupMatchesJsonFile(g, jsonFn) && this._isDerivativePhantomGroup(g)) {
+          ids.add(g.id);
+        }
+      }
+    }
+    const niftiNames = new Set();
+    for (const g of this.volumeGroups) {
+      if (!ids.has(g.id)) continue;
+      for (const n of this._niftiNamesForPhantomGroup(g)) niftiNames.add(n);
+    }
+    for (const g of this.volumeGroups) {
+      if (!ids.has(g.id)) continue;
+      g.volumes.forEach((v) => this.nv.removeVolume(v));
+    }
+    this.volumeGroups = this.volumeGroups.filter((g) => !ids.has(g.id));
+    const stillNeeded = new Set();
+    for (const g of this.volumeGroups) {
+      for (const v of g.volumes || []) {
+        const n = v?.name;
+        if (n && /\.nii(\.gz)?$/i.test(n)) stillNeeded.add(String(n).replace(/^\/+/, ""));
+      }
+    }
+    const jsonStillUsed = jsonFn && this.volumeGroups.some((g) => this._volumeGroupMatchesJsonFile(g, jsonFn));
+    if (this.pyodide) {
+      for (const name of niftiNames) {
+        if (stillNeeded.has(name)) continue;
+        for (const p of [`/phantom/${name}`, `/phantom/averaged/${name}`]) {
+          try { this.pyodide.FS.unlink(p); } catch (_) {}
+        }
+      }
+      if (jsonFn && !jsonStillUsed) {
+        try { this.pyodide.FS.unlink(`/phantom/${jsonFn}`); } catch (_) {}
+      }
+    }
+    if (jsonFn && !jsonStillUsed && this.jsonTabCurrentName === jsonFn) {
+      this.jsonTabCurrentName = null;
+    }
   }
 
   /** First loaded phantom group used by resample / SIM (not executed / resampled derivatives). */
@@ -630,7 +683,7 @@ export class NiivueModule {
       try {
         this.pyodide.FS.writeFile(`/phantom/${fileName}`, raw);
         this._syncJsonContentToVolumeGroups(fileName, raw);
-        if (this.options.showJsonTab) this.updateJsonTab();
+        this.updateJsonTab();
         this.setJsonTabStatus(`Saved as ${fileName}.`);
       } catch (e) {
         this.setJsonTabStatus(`Save failed: ${e.message}`);
@@ -941,7 +994,6 @@ export class NiivueModule {
     const root = this.containerControls || document;
     const qs = (id) => root.querySelector(`#${id}-${this.instanceId}`);
     this.statusText = qs("statusText");
-    this.fileInput = qs("file");
     this.btnDemo = qs("load-demo");
     this.showFov = qs("showFov");
     this.sliceMM = qs("sliceMM");
@@ -991,8 +1043,8 @@ export class NiivueModule {
     this.voxVal = qs("voxVal");
     this.mmVal = qs("mmVal");
     this.locStrVal = qs("locStrVal");
-    this.volumeListContainer = qs("volume-list");
-    this.btnAddFile = qs("btn-add-file");
+    this.scanVolumeListContainer = qs("scan-volume-list");
+    this.phantomVolumeListContainer = qs("phantom-volume-list");
     this.btnAddFolder = qs("btn-add-folder");
     this.dirInput = qs("dir");
     this.resampleToFovBtn = qs("resampleToFov");
@@ -1394,10 +1446,6 @@ os.makedirs('/phantom/averaged', exist_ok=True)
   }
 
   setupEventListeners() {
-    this.btnAddFile.addEventListener("click", () => {
-      this.isAddingVolume = true;
-      this.fileInput.click();
-    });
     if (this.btnAddFolder && this.dirInput) {
       this.btnAddFolder.addEventListener("click", () => this.dirInput.click());
       this.dirInput.onchange = async (e) => {
@@ -1434,12 +1482,10 @@ os.makedirs('/phantom/averaged', exist_ok=True)
           chosenName = chosen.name;
         }
         this.jsonTabCurrentName = chosenName;
-        if (this.options.showJsonTab) this.updateJsonTab();
+        this.updateJsonTab();
         const chosenJsonFile = jsonFiles.find(f => f.name === chosenName) || jsonFiles[0];
         await this.loadMultiPhantomFromFiles(chosenJsonFile, niftiFiles);
-        if (this.options.showJsonTab) {
-          this.setStatus(`NIfTIs loaded. Open the JSON tab and click Execute to build averaged maps.`);
-        }
+        this.setStatus(`NIfTIs loaded. PHANTOMS → Execute to build averaged maps.`);
       };
     }
 
@@ -1496,35 +1542,7 @@ os.makedirs('/phantom/averaged', exist_ok=True)
       if (!await this.confirmPhantomReset()) return;
       this.resetViewer();
       await this.loadBundledDefaultPhantom();
-      if (this.options.showJsonTab) this.updateJsonTab();
-    };
-    this.fileInput.onchange = async (e) => {
-      const files = Array.from(e.target.files || []);
-      e.target.value = "";
-      if (!files.length) return;
-      const jsonFile = files.find(f => f.name.toLowerCase().endsWith('.json'));
-      const niftiFiles = files.filter(f => /\.nii(\.gz)?$/i.test(f.name));
-      if (jsonFile && niftiFiles.length > 0) {
-        if (!await this.confirmPhantomReset()) return;
-        this.resetViewer();
-        await this.populatePyodideVFS(niftiFiles, [jsonFile]);
-        await this.loadMultiPhantomFromFiles(jsonFile, niftiFiles);
-        if (this.options.showJsonTab) this.updateJsonTab();
-      } else if (jsonFile && niftiFiles.length === 0) {
-        this.setStatus("Use Add Folder to select a directory with JSON + NIfTIs, or select both together.");
-      } else if (files.length === 1) {
-        const f = files[0];
-        const u = URL.createObjectURL(f);
-        this.loadUrl(u, f.name, this.isAddingVolume).finally(() => {
-          setTimeout(() => URL.revokeObjectURL(u), 30000);
-        });
-      } else {
-        for (const f of niftiFiles) {
-          const u = URL.createObjectURL(f);
-          await this.loadUrl(u, f.name, true);
-          setTimeout(() => URL.revokeObjectURL(u), 30000);
-        }
-      }
+      this.updateJsonTab();
     };
 
     // Listen for FOV updates coming from the sequence explorer (seq → Niivue, dimensions only)
@@ -2876,8 +2894,11 @@ os.makedirs('/phantom/averaged', exist_ok=True)
   }
 
   updateVolumeList() {
-    if (!this.volumeListContainer) return;
-    this.volumeListContainer.innerHTML = "";
+    const scanEl = this.scanVolumeListContainer;
+    const phantomEl = this.phantomVolumeListContainer;
+    if (!scanEl && !phantomEl) return;
+    if (scanEl) scanEl.innerHTML = "";
+    if (phantomEl) phantomEl.innerHTML = "";
     const volSet = new Set(this.nv.volumes);
     this.volumeGroups = this.volumeGroups.filter(g => {
       g.volumes = g.volumes.filter(v => volSet.has(v));
@@ -2894,13 +2915,6 @@ os.makedirs('/phantom/averaged', exist_ok=True)
         phantoms.push({ vol, index });
       }
     });
-
-    const createHeader = (title) => {
-      const h = document.createElement("div");
-      h.className = "section-header";
-      h.textContent = title;
-      return h;
-    };
 
     const createRow = (vol, originalIndex, opts = {}) => {
       const { noDownload, noRemove, noCheckbox, noMeta, shortTitle } = opts;
@@ -3058,7 +3072,7 @@ os.makedirs('/phantom/averaged', exist_ok=True)
         const raw = String(group.jsonContent);
         row.title =
           raw.length > JSON_TOOLTIP_MAX
-            ? `${raw.slice(0, JSON_TOOLTIP_MAX)}\n… (${raw.length - JSON_TOOLTIP_MAX} more characters — use JSON tab for full file)`
+            ? `${raw.slice(0, JSON_TOOLTIP_MAX)}\n… (${raw.length - JSON_TOOLTIP_MAX} more characters — PHANTOMS editor for full file)`
             : raw;
       } else if (group.jsonFileName) {
         row.title = `No JSON text in memory (${group.jsonFileName})`;
@@ -3092,8 +3106,7 @@ os.makedirs('/phantom/averaged', exist_ok=True)
       rm.className = "btn volume-row-btn";
       rm.onclick = (e) => {
         e.stopPropagation();
-        group.volumes.forEach(v => this.nv.removeVolume(v));
-        this.volumeGroups = this.volumeGroups.filter(g => g.id !== group.id);
+        this._removePhantomGroup(group);
         this.updateVolumeList();
         this.updatePreviewFromSelection();
       };
@@ -3118,31 +3131,29 @@ os.makedirs('/phantom/averaged', exist_ok=True)
       return row;
     };
 
-    if (phantoms.length > 0 || this.volumeGroups.length > 0) {
-      this.volumeListContainer.appendChild(createHeader("Phantoms"));
+    if (phantomEl && (phantoms.length > 0 || this.volumeGroups.length > 0)) {
       this.volumeGroups.forEach(group => {
-        this.volumeListContainer.appendChild(createGroupRow(group));
+        phantomEl.appendChild(createGroupRow(group));
         const expanded = this.expandedGroups.has(group.id);
         if (expanded) {
           group.volumes.forEach(vol => {
             const idx = this.nv.volumes.indexOf(vol);
-            if (idx >= 0) this.volumeListContainer.appendChild(createSubRow(vol, idx));
+            if (idx >= 0) phantomEl.appendChild(createSubRow(vol, idx));
           });
         }
       });
-      phantoms.forEach(p => this.volumeListContainer.appendChild(createRow(p.vol, p.index)));
+      phantoms.forEach(p => phantomEl.appendChild(createRow(p.vol, p.index)));
     }
 
-    if (scans.length > 0) {
-      this.volumeListContainer.appendChild(createHeader("Scans"));
-      [...scans].reverse().forEach(s => this.volumeListContainer.appendChild(createRow(s.vol, s.index)));
+    if (scanEl && scans.length > 0) {
+      [...scans].reverse().forEach(s => scanEl.appendChild(createRow(s.vol, s.index)));
     }
 
-    if (this.options.showJsonTab) this.updateJsonTab();
+    this.updateJsonTab();
     if (typeof window !== "undefined") window.mainHist?.scheduleRefresh?.();
   }
 
-  /** JSON text still in memory on volume groups when /phantom was never filled (default bundle, Add File). */
+  /** JSON text still in memory on volume groups when /phantom was never filled (default bundle). */
   _jsonConfigsFromVolumeGroups() {
     const map = new Map();
     for (const g of this.volumeGroups) {
@@ -3154,39 +3165,10 @@ os.makedirs('/phantom/averaged', exist_ok=True)
     return map;
   }
 
-  _bindJsonTabListButtons(listEl, jsonNames, getContent) {
-    jsonNames.forEach((name) => {
-      const btn = document.createElement("button");
-      btn.type = "button";
-      btn.className = "btn json-tab-list-btn";
-      btn.style.cssText = "text-align:left; padding:8px 10px; justify-content:flex-start;";
-      btn.textContent = name;
-      btn.onclick = () => {
-        listEl.querySelectorAll(".json-tab-list-btn.active").forEach((b) => b.classList.remove("active"));
-        btn.classList.add("active");
-        this.jsonTabCurrentName = name;
-        try {
-          const content = getContent(name);
-          this.setJsonEditorValue(content ?? "");
-        } catch (_) {
-          this.setJsonEditorValue("");
-        }
-      };
-      listEl.appendChild(btn);
-    });
-    if (jsonNames.length > 0) {
-      const prevIdx = this.jsonTabCurrentName ? jsonNames.indexOf(this.jsonTabCurrentName) : -1;
-      const toSelect = prevIdx >= 0 ? prevIdx : 0;
-      listEl.querySelectorAll(".json-tab-list-btn")[toSelect]?.click();
-    }
-  }
-
   updateJsonTab() {
-    if (!this.options.showJsonTab) return;
     const root = this.containerControls || document;
-    const listEl = root.querySelector(`#json-tab-list-${this.instanceId}`);
-    if (!listEl) return;
-    listEl.innerHTML = "";
+    const sel = root.querySelector(`#json-config-select-${this.instanceId}`);
+    if (!sel) return;
 
     let jsonNames = [];
     if (this.pyodide) {
@@ -3194,23 +3176,44 @@ os.makedirs('/phantom/averaged', exist_ok=True)
         jsonNames = this.pyodide.FS.readdir("/phantom").filter((f) => f.endsWith(".json"));
       } catch (_) {}
     }
+    const fromGroups = jsonNames.length === 0 ? this._jsonConfigsFromVolumeGroups() : null;
 
-    if (jsonNames.length > 0) {
-      this._bindJsonTabListButtons(listEl, jsonNames, (name) =>
-        this.pyodide.FS.readFile(`/phantom/${name}`, { encoding: "utf8" })
-      );
+    if (jsonNames.length === 0 && fromGroups?.size) {
+      jsonNames = [...fromGroups.keys()].sort();
+    }
+
+    sel.innerHTML = "";
+    jsonNames.forEach((name) => {
+      const opt = document.createElement("option");
+      opt.value = name;
+      opt.textContent = name;
+      sel.appendChild(opt);
+    });
+
+    if (jsonNames.length === 0) {
+      this.jsonTabCurrentName = null;
+      this.setJsonEditorValue("");
       return;
     }
 
-    const fromGroups = this._jsonConfigsFromVolumeGroups();
-    if (fromGroups.size > 0) {
-      const names = [...fromGroups.keys()].sort();
-      this._bindJsonTabListButtons(listEl, names, (name) => fromGroups.get(name));
-      return;
-    }
+    const pick = this.jsonTabCurrentName && jsonNames.includes(this.jsonTabCurrentName)
+      ? this.jsonTabCurrentName
+      : jsonNames[0];
+    sel.value = pick;
+    this.jsonTabCurrentName = pick;
+    const content = fromGroups
+      ? fromGroups.get(pick)
+      : this.pyodide.FS.readFile(`/phantom/${pick}`, { encoding: "utf8" });
+    this.setJsonEditorValue(content ?? "");
 
-    this.jsonTabCurrentName = null;
-    this.setJsonEditorValue("");
+    sel.onchange = () => {
+      this.jsonTabCurrentName = sel.value;
+      if (this.pyodide) {
+        this.setJsonEditorValue(this.pyodide.FS.readFile(`/phantom/${sel.value}`, { encoding: "utf8" }));
+        return;
+      }
+      this.setJsonEditorValue(this._jsonConfigsFromVolumeGroups().get(sel.value) ?? "");
+    };
   }
 
   updatePreviewFromSelection() {
@@ -3234,7 +3237,7 @@ os.makedirs('/phantom/averaged', exist_ok=True)
   }
 
   /**
-   * Fetch bundled nifti_phantom_v1 folder (JSON + NIfTIs) and load like Add File / Add Folder.
+   * Fetch bundled nifti_phantom_v1 folder (JSON + NIfTIs) and load like Add (json/nii).
    * Base URL may be absolute (GitHub raw) or relative to the current page.
    */
   async loadBundledDefaultPhantom() {
@@ -3272,7 +3275,7 @@ os.makedirs('/phantom/averaged', exist_ok=True)
       throw e;
     }
     this.jsonTabCurrentName = jsonFile.name;
-    if (this.options.showJsonTab) this.updateJsonTab();
+    this.updateJsonTab();
   }
 
   async loadMultiPhantomFromFiles(jsonFile, niftiFiles) {

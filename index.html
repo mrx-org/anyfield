@@ -3,7 +3,7 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Any-Field Scanner v0.7.2 </title>
+    <title>Any-Field Scanner v0.8.0 </title>
     
     <!-- Dependencies for Niivue App -->
     <script src="https://cdn.jsdelivr.net/pyodide/v0.29.0/full/pyodide.js"></script>
@@ -155,6 +155,7 @@
             flex: 0 0 auto;
             min-height: 34px;
         }
+        #slot-sidebar.sidebar-collapsed .tab-btn[data-tab="phantoms"],
         #slot-sidebar.sidebar-collapsed .tab-btn[data-tab="view"],
         #slot-sidebar.sidebar-collapsed .tab-btn[data-tab="fov"] {
             display: none;
@@ -261,7 +262,7 @@
     <div class="lab-shell">
         <header>
             <div class="header-content">
-                <div class="header-title">Any-Field <span class="header-subtitle">Scanner</span><span class="app-version" aria-label="Version v0.7.2">v0.7.2</span></div>
+                <div class="header-title">Any-Field <span class="header-subtitle">Scanner</span><span class="app-version" aria-label="Version v0.8.0">v0.8.0</span></div>
                 <button type="button" id="credits-btn" class="credits-btn" title="Credits &amp; dependencies"><i class="bi bi-award" aria-hidden="true"></i></button>
             </div>
         </header>
@@ -736,13 +737,13 @@ await micropip.install('pypulseq==1.4.2.post2', deps=False)
                     const labGrid = document.querySelector('.lab-grid');
                     const slotSidebar = document.getElementById('slot-sidebar');
                     const tabsContent = document.querySelector('.tabs-content');
-                    const viewerBtn = document.querySelector('.tab-btn[data-tab="source"]');
+                    const scansBtn = document.querySelector('.tab-btn[data-tab="scans"]');
                     if (labGrid && slotSidebar) {
                         labGrid.classList.add('sidebar-collapsed');
                         slotSidebar.classList.add('sidebar-collapsed');
                         if (tabsContent) tabsContent.classList.add('panel-collapsed');
-                        if (viewerBtn) {
-                            viewerBtn.textContent = viewerBtn.dataset.collapsedLabel || 'V';
+                        if (scansBtn) {
+                            scansBtn.textContent = scansBtn.dataset.collapsedLabel || 'S';
                         }
                     }
                 })();
@@ -761,7 +762,7 @@ await micropip.install('pypulseq==1.4.2.post2', deps=False)
                         if (!window.matchMedia('(max-width: 768px)').matches) return;
                         const endX = e.changedTouches[0].clientX;
                         const delta = startX - endX;
-                        const btn = sidebar.querySelector('.tab-btn[data-tab="source"]');
+                        const btn = sidebar.querySelector('.tab-btn[data-tab="scans"]');
                         const labGrid = sidebar.closest('.lab-grid');
                         const tabsContent = sidebar.querySelector('.tabs-content');
                         if (!btn || !labGrid || !btn.classList.contains('active')) return;
@@ -770,14 +771,14 @@ await micropip.install('pypulseq==1.4.2.post2', deps=False)
                                 labGrid.classList.add('sidebar-collapsed');
                                 sidebar.classList.add('sidebar-collapsed');
                                 if (tabsContent) tabsContent.classList.add('panel-collapsed');
-                                btn.textContent = btn.dataset.collapsedLabel || 'V';
+                                btn.textContent = btn.dataset.collapsedLabel || 'S';
                             }
                         } else if (delta < -threshold) {
                             if (labGrid.classList.contains('sidebar-collapsed')) {
                                 labGrid.classList.remove('sidebar-collapsed');
                                 sidebar.classList.remove('sidebar-collapsed');
                                 if (tabsContent) tabsContent.classList.remove('panel-collapsed');
-                                btn.textContent = btn.dataset.fullLabel || 'VIEWER';
+                                btn.textContent = btn.dataset.fullLabel || 'SCANS';
                             }
                         }
                     }, { passive: true });
@@ -808,7 +809,7 @@ await micropip.install('pypulseq==1.4.2.post2', deps=False)
                         }
                         nvModule._pendingPhantomVfs = null;
                     }
-                    if (nvModule.options.showJsonTab) nvModule.updateJsonTab();
+                    nvModule.updateJsonTab();
                     hideLoaderAndShowFooter();
                     // Phantom and plot stack finish in background (viewer shows waiting state via CSS until phantom ready)
                     phantomReady.catch(() => {});
