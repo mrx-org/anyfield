@@ -355,6 +355,18 @@
         const initialProtFromLegacy =
             initialProtRaw != null && String(initialProtRaw).trim() !== '' ? String(initialProtRaw).trim() : undefined;
         const initialSeqUrl = (urlParams.get('seq_url') || '').trim();
+        let initialSeqParams = null;
+        for (const [key, val] of urlParams) {
+            if (!key.startsWith('sp_')) continue;
+            if (!initialSeqParams) initialSeqParams = {};
+            const name = key.slice(3);
+            let parsed;
+            if (val === 'true') parsed = true;
+            else if (val === 'false') parsed = false;
+            else if (val.startsWith('[')) { try { parsed = JSON.parse(val); } catch(e) { parsed = val; } }
+            else parsed = isNaN(val) || val === '' ? val : Number(val);
+            initialSeqParams[name] = parsed;
+        }
         let initialProt = initialProtFromSplit ?? initialProtFromLegacy;
         if (initialSeqUrl && !initialProt) {
             initialProt = 'builtin/seq_pulseq_interpreter:seq_pulseq_interpreter';
@@ -624,6 +636,7 @@ await micropip.install('pypulseq==1.4.2.post2', deps=False)
                     sources: [],
                     initialProt,
                     initialSeqUrl,
+                    initialSeqParams,
                     onFunctionStart: () => {
                         if (window.viewManager) {
                             window.viewManager.setMode('sequence');
