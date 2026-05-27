@@ -16,7 +16,7 @@ type = "file"
 
 
 def seq_pulseq_interpreter(
-    seq_file: Annotated[str, "file"] = "fn.seq",
+    seq_file: Annotated[str, "file"] = "built_in_seq/epi_se_rs.seq",
 ):
     """
     Load a Pulseq sequence from a .seq file.

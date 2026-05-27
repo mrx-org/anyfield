@@ -57,7 +57,7 @@ const url = `http://localhost:8000/?init_prot=${encodeURIComponent(token)}`;
 5. pypulseq `write_radial_gre` / `main`  
    `http://localhost:8000/?s_category=pypulseq&s_file=write_radial_gre&s_func=main`
 
-If no deep link is given, the app starts with the built-in Pulseq interpreter selection.
+If no deep link is given, the app starts with the built-in **GRE** (`builtin/gre_seq:seq_gre`).
 
 ### Remote `.seq` file (`seq_url`)
 

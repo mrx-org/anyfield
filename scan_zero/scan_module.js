@@ -74,9 +74,11 @@ export class ScanModule {
                     <h3 class="section-title" style="margin: 0;">RUN</h3>
                 </div>
                 <div class="scan-header" style="display: flex; flex-wrap: wrap; align-items: center; gap: 0.5rem;">
+                    ${isProUser() ? `
                     <button id="btn-start-crop" class="scan-btn" title="Resample first volume to FOV (crop to box)">
                         CROP
                     </button>
+                    ` : ''}
                     <button id="btn-start-sim-mr0" class="scan-btn" title="MR0 (tool-mr0sim)">
                         SCAN<span class="icon">▶</span> 
                     </button>
@@ -95,7 +97,8 @@ export class ScanModule {
             </div>
         `;
 
-        this.container.querySelector('#btn-start-crop').onclick = () => this.startCrop();
+        const cropBtn = this.container.querySelector('#btn-start-crop');
+        if (cropBtn) cropBtn.onclick = () => this.startCrop();
         this.container.querySelector('#btn-start-sim-mr0').onclick = () => this.startSimMr0();
         const fastBtn = this.container.querySelector('#btn-start-sim-fast');
         if (fastBtn) fastBtn.onclick = () => this.startSimFast();
@@ -111,6 +114,7 @@ export class ScanModule {
     }
 
     async startCrop() {
+        if (!isProUser()) return;
         // CROP = resample current viewer volume to FOV mask only (no seq execution / no .seq artifact)
         const nvMod = window.nvModule;
         if (!nvMod || !nvMod.nv?.volumes?.length) {

@@ -685,7 +685,7 @@ plt.rcParams['font.size'] = 8`;
         
         await Promise.all(loadPromises);
         
-        // Preload built-in ute.seq unless ?seq_url= will supply the interpreter file
+        // Preload built-in epi_se_rs.seq unless ?seq_url= will supply the interpreter file
         if (this.config.pyodide && !(this.config.initialSeqUrl || '').trim()) {
             try {
                 await this.preloadBuiltinInterpreterSeq();
@@ -762,8 +762,8 @@ plt.rcParams['font.size'] = 8`;
     async preloadBuiltinInterpreterSeq() {
         if (!this.config.pyodide) return;
         try {
-            const url = this.resolvePath('built_in_seq/ute.seq') + '?t=' + Date.now();
-            const vfsPath = await this.fetchSeqUrlToVfs(url, 'ute.seq');
+            const url = this.resolvePath('built_in_seq/epi_se_rs.seq') + '?t=' + Date.now();
+            const vfsPath = await this.fetchSeqUrlToVfs(url, 'epi_se_rs.seq');
             this.defaultInterpreterSeqPath = vfsPath;
             console.log('Preloaded built-in interpreter .seq file at', vfsPath);
         } catch (e) {
@@ -1093,8 +1093,8 @@ result
 `.trim();
     }
 
-    /** Default initial selection when ?init_prot= is absent (Pulseq interpreter). */
-    static DEFAULT_INIT_PROT = 'builtin/seq_pulseq_interpreter:seq_pulseq_interpreter';
+    /** Default initial selection when ?init_prot= is absent (built-in GRE). */
+    static DEFAULT_INIT_PROT = 'builtin/gre_seq:seq_gre';
 
     /**
      * Parse init_prot token: namespace/file_stem:function_name
@@ -1256,7 +1256,7 @@ result
     }
 
     /**
-     * After loadSequences: apply ?init_prot= or default Pulseq interpreter; fallback to first item.
+     * After loadSequences: apply ?init_prot= or default built-in GRE; fallback to first item.
      */
     async selectInitialSequence() {
         const raw = this.config.initialProt;
@@ -1296,21 +1296,23 @@ result
         await this.tryFallbackInit(useExplicit, 'primary_failed');
     }
 
-    /** Fallback: builtin interpreter, then first tree item. */
+    /** Fallback: default protocol (GRE), then first tree item. */
     async tryFallbackInit(explicitInitFailed, reason = '') {
-        const fbKey = this.resolveInitProtToSequenceKey('builtin', 'seq_pulseq_interpreter');
-        console.log('[init_prot] tryFallbackInit', { explicitInitFailed, reason, fbKey, hasFile: fbKey ? !!this.sequences[fbKey] : false });
-        if (fbKey && await this.selectSequenceByFileAndFunction(fbKey, 'seq_pulseq_interpreter')) {
-            if (explicitInitFailed) console.log('[init_prot] fell back to default Pulseq interpreter');
+        const parsed = this.parseInitProt(SequenceExplorer.DEFAULT_INIT_PROT);
+        const fbKey = parsed ? this.resolveInitProtToSequenceKey(parsed.namespace, parsed.fileStem) : null;
+        const fbFn = parsed?.functionName;
+        console.log('[init_prot] tryFallbackInit', { explicitInitFailed, reason, fbKey, fbFn, hasFile: fbKey ? !!this.sequences[fbKey] : false });
+        if (fbKey && fbFn && await this.selectSequenceByFileAndFunction(fbKey, fbFn)) {
+            if (explicitInitFailed) console.log('[init_prot] fell back to default', SequenceExplorer.DEFAULT_INIT_PROT);
             await this.applyInitialSeqUrl();
             return;
         }
-        if (!fbKey) {
-            console.warn('[init_prot] fallback: no built_in seq_pulseq_interpreter key. Keys sample:', Object.keys(this.sequences).slice(0, 30));
+        if (!fbKey || !fbFn) {
+            console.warn('[init_prot] fallback: could not resolve', SequenceExplorer.DEFAULT_INIT_PROT);
         } else {
             const fds = this.sequences[fbKey];
-            const hasFn = fds && fds.functions.some((f) => f.name === 'seq_pulseq_interpreter');
-            console.warn('[init_prot] fallback: could not select interpreter', { fbKey, hasFn, funcNames: fds ? fds.functions.map((f) => f.name) : [] });
+            const hasFn = fds && fds.functions.some((f) => f.name === fbFn);
+            console.warn('[init_prot] fallback: could not select default', { fbKey, fbFn, hasFn, funcNames: fds ? fds.functions.map((f) => f.name) : [] });
         }
         this.selectFirstSequence();
     }
@@ -2730,7 +2732,7 @@ json.dumps(_result)
                     (this.selectedSequence.functionName === 'seq_pulseq_interpreter' ||
                      this.selectedSequence.name === 'seq_pulseq_interpreter')
                 ) {
-                    const fallbackPath = '/uploads/ute.seq';
+                    const fallbackPath = '/uploads/epi_se_rs.seq';
                     input.value = this.defaultInterpreterSeqPath || fallbackPath;
                 }
                 wrapper.appendChild(input);

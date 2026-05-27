@@ -6,14 +6,14 @@ import pypulseq as pp
 
 
 def seq_gre(
-    fov_xy: tuple = (256e-3, 256e-3),                  # Define FOV and resolution
+    fov_xy: tuple = (220e-3, 220e-3),                  # Define FOV and resolution
     slice_thickness: float = 3e-3,        # slice
-    Nread: int = 64,
-    Nphase: int = 64,
-    alpha: float = 10,                    # flip angle
+    Nread: int = 96,
+    Nphase: int = 96,
+    alpha: float = 4,                    # flip angle
     TR: float = 12e-3,                    # Repetition time
     TE: float = 5e-3,                     # Echo time
-    rf_spoiling_inc: float = 117 ,         # RF spoiling increment
+    rf_spoiling_inc: float = 84 ,         # RF spoiling increment
     plot: bool = False,
     write_seq: bool = False,
     seq_filename: str = 'gre_pypulseq.seq',
@@ -103,7 +103,8 @@ def seq_gre(
     delta_ky = 1 / fov_xy[1]
     gx = pp.make_trapezoid(channel='x', flat_area=Nread * delta_kx, flat_time=3.2e-3, system=system)
     adc = pp.make_adc(num_samples=Nread, duration=gx.flat_time, delay=gx.rise_time, system=system)
-    gx_pre = pp.make_trapezoid(channel='x', area=-gx.area / 2, duration=1e-3, system=system)
+    
+    gx_pre = pp.make_trapezoid(channel='x', area=-gx.area / 2-0.5*delta_kx, duration=1e-3, system=system)
     gz_reph = pp.make_trapezoid(channel='z', area=-gz.area / 2, duration=1e-3, system=system)
     phase_areas = (np.arange(Nphase) - Nphase / 2) * delta_ky
 
