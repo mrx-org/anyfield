@@ -28,7 +28,7 @@
       // Standalone mode: auto-initialize
       window.addEventListener('DOMContentLoaded', async () => {
         try {
-          await initNiivueApp('niivue-container', {}); // JSON tab shown when ?pro=1 (window.pro)
+          await initNiivueApp('niivue-container', {});
         } catch (e) {
           console.error("Initialization failed:", e);
         }

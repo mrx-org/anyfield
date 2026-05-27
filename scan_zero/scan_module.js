@@ -887,7 +887,7 @@ if os.path.exists(_p):
             const activeGroup = typeof nvMod.getActivePhantomGroup === 'function'
                 ? nvMod.getActivePhantomGroup()
                 : nvMod.volumeGroups?.find(g => g.volumes?.length && !String(g.jsonName || '').endsWith('_resampled') && !String(g.jsonName || '').endsWith('_averaged'));
-            if (!activeGroup) throw new Error("No phantom group with JSON found. Load phantom via Add Folder/Add File first.");
+            if (!activeGroup) throw new Error("No phantom group with JSON found. Load phantom via Add (json/nii) first.");
 
             // 1) Silent seq execute + protocol snapshot + sequence_fov_dims → Niivue FOV mm from seq.definitions
             const _t0 = performance.now();

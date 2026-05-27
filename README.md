@@ -1,6 +1,6 @@
 # Niivue minimal app (zero-install)
 
-**Version:** `v0.7.1`
+**Version:** `v0.8.0`
 
 This is a **minimal Niivue viewer** implemented as a single `viewer.html` file.
 
@@ -84,6 +84,13 @@ http://localhost:8000/?s_category=builtin&s_file=seq_pulseq_interpreter&s_func=s
 For more insights see insights SPEC_no_field.md
 
 ## Release notes
+
+**v0.8.0**
+- **Sidebar: SCANS / PHANTOMS**: Replaced the old VIEWER + optional JSON tab with **SCANS** (recon volumes only) and **PHANTOMS** (load controls, phantom list, JSON editor). Default tab is **SCANS**; collapsed sidebar shows **S**. Tab order: SCANS → PHANTOMS → FOV → OPTIONS.
+- **Phantom JSON UI**: Config picker is a compact **dropdown** (dark-themed). Save / Save As / Revert always visible; **Execute** (averaged maps) is **pro only** (`?pro=1`). JSON for **SCAN▶** / **SCAN▶▶** follows the selected config (editor → VFS → cache).
+- **Load phantoms**: Removed **Add File**; folder picker is **Add (json/nii)**. **Default phantom** unchanged.
+- **Delete phantom group**: Removing a main phantom also drops linked `*_averaged` / `*_resampled` groups and deletes that bundle’s **`.json` and `.nii`** from Pyodide `/phantom/` (and `/phantom/averaged/` where present).
+- **Tool API**: SIM runs **conseq → trajex → mr0sim/rapisim** sequentially (one WebSocket per stage; no parallel `Promise.all`).
 
 **v0.7.1**
 - **JSON Save → SIM**: Saving a phantom JSON config in the JSON tab now updates what **SCAN▶** / **SCAN▶▶** use. SIM previously kept the in-memory `jsonContent` from load time; it now resolves the latest text via editor (when that file is selected), Pyodide `/phantom/` VFS (after Save), then the cached copy.

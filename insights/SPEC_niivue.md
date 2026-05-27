@@ -57,7 +57,7 @@ A live debug info panel (in the FOV tab hint area) shows:
 - **Class**: `NiivueModule`
 - **Parts**: 
   - `renderViewer(target)`: The WebGL canvas and status overlay.
-  - `renderControls(target)`: Compact tabbed UI (VIEWER, OPTIONS, FOV).
+  - `renderControls(target)`: Compact tabbed UI (SCANS, PHANTOMS, FOV, OPTIONS).
 - **Key Methods**:
   - `getVolumeInfo(targetVol?)`: Single source of truth for volume metadata with affine flattening.
   - `loadUrl(url, name, isAdding, syncFovOnScan=true)`: Robust additive or destructive volume loading with initialization queuing. When loading a `scan_*` volume, `syncFovOnScan=true` (default) also syncs the FOV box to the scan's affine; auto-load right after a scan completes passes `false` to preserve in-progress FOV planning.
@@ -105,8 +105,9 @@ In **Planning** mode, `slot-main` hosts up to three Niivue canvases in a horizon
 - **Flow**: Resample maps to FOV **in memory / `/tmp/__sim_phantom_staging` only** (no extra Niivue volumes, no long-lived `/phantom` copies for resampled maps) → conseq / trajex → chosen sim tool → PyNUFFT → magnitude NIfTI saved as **3D** `(nx, ny, nz)` on the **same grid as the FOV mask** (`generateFovMaskNifti`). **Always 3D NUFFT** with shape `(nx, ny, max(nz,1))` — including **`nz == 1` (singleton z)** — with **ω always (kx, ky, kz)**; 2D traj uses **ω_z = 0** (kz zero-fill). Traj column 3 supplies kz when present. Output: **fresh** NIfTI header + mask `set_zooms`. **CROP** only resamples the first viewer volume for the queue; it does not run this pipeline.
 - **FOV from scan NIfTI** (`nii2fovbox` / `affineToFovParams`): bounding box uses continuous voxel **face** corners **−½ … n−½** (not voxel-center indices `0 … n−1`) so inferred mm size matches **N·Δ** and does not shrink by one voxel each resync.
 
-## Phantom JSON Execution (viewer)
-- **JSON tab** (only when using `viewer.html`): Lists JSON phantom config filenames from the current session; selecting one shows its content in a CodeMirror editor. Buttons: **Save** / **Save As** / **Revert** (in VFS), **Execute** (runs phantom and loads result into the viewer).
-- **Add Folder**: User selects a folder; all NIfTIs and JSONs are uploaded to Pyodide's VFS under `/phantom`. The chosen JSON's NIfTIs are loaded into Niivue (same as Add File). If multiple JSONs exist, a dialog picks which config is active. The user can then open the **JSON** tab and click **Execute** to build averaged maps (not automatic).
-- **Execute**: Calls the same logic as the standalone `data/execute_json.py` inside Pyodide: `write_executed=False`, `write_averaged=True`, output to `/phantom/averaged`. Produces 3D density-weighted averaged maps (density, T1, T2, T2', ADC, dB0, B1+, B1-) with NaN where total density <= threshold (default 0.01). Resulting NIfTIs are read from VFS and loaded into Niivue as one volume group (label `*_averaged`).
+## Phantom JSON Execution
+- **PHANTOMS tab**: Phantom load controls, phantom volume list, and JSON config **select** + CodeMirror editor (always available). **Save** / **Save As** / **Revert** always; **Execute** (`?pro=1` only). Active config for SCAN is the selected option (`jsonTabCurrentName`).
+- **SCANS tab**: Volume list for `scan_*` recon outputs only.
+- **Add (json/nii)**: User selects a folder; all NIfTIs and JSONs are uploaded to Pyodide's VFS under `/phantom`. The chosen JSON's NIfTIs are loaded into Niivue. If multiple JSONs exist, a dialog picks which config is active. **Execute** on PHANTOMS builds averaged maps (not automatic).
+- **Execute** (pro only): Calls the same logic as the standalone `data/execute_json.py` inside Pyodide: `write_executed=False`, `write_averaged=True`, output to `/phantom/averaged`. Produces 3D density-weighted averaged maps (density, T1, T2, T2', ADC, dB0, B1+, B1-) with NaN where total density <= threshold (default 0.01). Resulting NIfTIs are read from VFS and loaded into Niivue as one volume group (label `*_averaged`).
 - **Single source of truth**: Phantom execution logic lives in `data/execute_json.py`; the viewer fetches and runs that script in Pyodide, so CLI and browser stay in sync.

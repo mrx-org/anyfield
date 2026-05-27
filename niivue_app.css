@@ -263,15 +263,26 @@
   color: white;
 }
 
-/* JSON tab (viewer.html only when showJsonTab) */
-.niivue-app .json-tab-panel .json-tab-list-btn {
+.niivue-app .json-tab-panel select.json-config-select,
+.niivue-app .json-tab-panel #json-config-select {
+  width: 100%;
+  box-sizing: border-box;
+  background-color: var(--bg-panel);
+  color: var(--text);
+  border: 1px solid var(--border);
+  border-radius: 4px;
+  padding: 3px 6px;
   font-size: 11px;
+  cursor: pointer;
+  color-scheme: dark;
 }
-.niivue-app .json-tab-panel .json-tab-list-btn.active {
-  background: rgba(59, 130, 246, 0.25);
-  border-color: var(--accent);
+
+.niivue-app .json-tab-panel select.json-config-select option,
+.niivue-app .json-tab-panel #json-config-select option {
+  background-color: var(--bg-panel);
   color: var(--text);
 }
+
 .niivue-app .json-tab-panel .json-tab-status {
   font-size: 11px;
   color: var(--muted);
