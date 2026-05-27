@@ -774,6 +774,25 @@ plt.rcParams['font.size'] = 8`;
     /**
      * Apply ?seq_url= after the Pulseq interpreter is selected: fetch into VFS and set seq_file param.
      */
+    applyInitialSeqParams() {
+        const overrides = this.config.initialSeqParams;
+        if (!overrides || !this.functionParams) return;
+        const root = this.paramsTarget || this.container;
+        for (const param of this.functionParams) {
+            if (!(param.name in overrides)) continue;
+            const input = root.querySelector(`#seq-param-${param.name}`);
+            if (!input) continue;
+            const val = overrides[param.name];
+            if (param.type === 'bool') {
+                input.checked = Boolean(val);
+            } else if (param.type === 'list' || param.type === 'ndarray') {
+                input.value = JSON.stringify(val);
+            } else {
+                input.value = String(val);
+            }
+        }
+    }
+
     async applyInitialSeqUrl() {
         const url = (this.config.initialSeqUrl || '').trim();
         if (!url) return;
@@ -1149,14 +1168,20 @@ result
                 return (
                     n === norm(key) ||
                     n.replace(/\.py$/i, '') === `mrseq.scripts.${fileStem}` ||
-                    (n.includes('mrseq.scripts') && n.endsWith(`.${fileStem}.py`))
+                    (n.includes('mrseq.scripts') && n.endsWith(`.${fileStem}.py`)) ||
+                    (n === `${fileStem}.py` && String(this.sequences[k]?.source?.fullModulePath || this.sequences[k]?.source?.path || '').includes('mrseq'))
                 );
             });
             if (!found) {
-                const mrseqKeys = keys.filter((k) => norm(k).includes('mrseq.scripts'));
+                const mrseqKeys = keys.filter((k) => {
+                    const n = norm(k);
+                    if (n.includes('mrseq.scripts')) return true;
+                    const src = this.sequences[k]?.source;
+                    return String(src?.fullModulePath || src?.path || '').includes('mrseq');
+                });
                 const stems = mrseqKeys.map((k) => {
-                    const m = norm(k).match(/mrseq\.scripts\.(.+?)\.py$/i);
-                    return m ? m[1] : norm(k);
+                    const m = norm(k).match(/mrseq\.scripts\.(.+?)(?:\.py)?$/i);
+                    return m ? m[1] : norm(k).replace(/\.py$/i, '');
                 });
                 console.warn(
                     '[init_prot] mrseq: no module mrseq.scripts.' + fileStem + ' — use file stem from the tree (e.g. radial_flash, not radial_gre). Loaded stems sample:',
@@ -1263,6 +1288,7 @@ result
         }
         if (fileName && await this.selectSequenceByFileAndFunction(fileName, parsed.functionName)) {
             console.log('[init_prot] OK selected', token);
+            this.applyInitialSeqParams();
             await this.applyInitialSeqUrl();
             return;
         }

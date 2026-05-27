@@ -1,6 +1,6 @@
 # Niivue minimal app (zero-install)
 
-**Version:** `v0.7.1`
+**Version:** `v0.7.2`
 
 This is a **minimal Niivue viewer** implemented as a single `viewer.html` file.
 
@@ -84,6 +84,10 @@ http://localhost:8000/?s_category=builtin&s_file=seq_pulseq_interpreter&s_func=s
 For more insights see insights SPEC_no_field.md
 
 ## Release notes
+
+**v0.7.2**
+- **Sequence parameter deep links**: URL params prefixed with `sp_` pre-fill sequence parameters on load — supports float (`&sp_dTE=0.0007`), int (`&sp_Nfe=128`), bool (`&sp_use_fat=true`), list/ndarray (`&sp_fov=[0.2,0.2,0.01]`), string.
+- **Fix mrseq deep link**: `?s_category=mrseq&s_file=<stem>&s_func=<fn>` now correctly resolves mrseq sequences whose keys are stored as stem-only (e.g. `spiral_flash.py`) rather than full module path.
 
 **v0.7.1**
 - **JSON Save → SIM**: Saving a phantom JSON config in the JSON tab now updates what **SCAN▶** / **SCAN▶▶** use. SIM previously kept the in-memory `jsonContent` from load time; it now resolves the latest text via editor (when that file is selected), Pyodide `/phantom/` VFS (after Save), then the cached copy.

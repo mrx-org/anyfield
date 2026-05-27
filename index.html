@@ -3,7 +3,7 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Any-Field Scanner v0.7.1 </title>
+    <title>Any-Field Scanner v0.7.2 </title>
     
     <!-- Dependencies for Niivue App -->
     <script src="https://cdn.jsdelivr.net/pyodide/v0.29.0/full/pyodide.js"></script>
@@ -261,7 +261,7 @@
     <div class="lab-shell">
         <header>
             <div class="header-content">
-                <div class="header-title">Any-Field <span class="header-subtitle">Scanner</span><span class="app-version" aria-label="Version v0.7.1">v0.7.1</span></div>
+                <div class="header-title">Any-Field <span class="header-subtitle">Scanner</span><span class="app-version" aria-label="Version v0.7.2">v0.7.2</span></div>
                 <button type="button" id="credits-btn" class="credits-btn" title="Credits &amp; dependencies"><i class="bi bi-award" aria-hidden="true"></i></button>
             </div>
         </header>
@@ -354,6 +354,18 @@
         const initialProtFromLegacy =
             initialProtRaw != null && String(initialProtRaw).trim() !== '' ? String(initialProtRaw).trim() : undefined;
         const initialSeqUrl = (urlParams.get('seq_url') || '').trim();
+        let initialSeqParams = null;
+        for (const [key, val] of urlParams) {
+            if (!key.startsWith('sp_')) continue;
+            if (!initialSeqParams) initialSeqParams = {};
+            const name = key.slice(3);
+            let parsed;
+            if (val === 'true') parsed = true;
+            else if (val === 'false') parsed = false;
+            else if (val.startsWith('[')) { try { parsed = JSON.parse(val); } catch(e) { parsed = val; } }
+            else parsed = isNaN(val) || val === '' ? val : Number(val);
+            initialSeqParams[name] = parsed;
+        }
         let initialProt = initialProtFromSplit ?? initialProtFromLegacy;
         if (initialSeqUrl && !initialProt) {
             initialProt = 'builtin/seq_pulseq_interpreter:seq_pulseq_interpreter';
@@ -623,6 +635,7 @@ await micropip.install('pypulseq==1.4.2.post2', deps=False)
                     sources: [],
                     initialProt,
                     initialSeqUrl,
+                    initialSeqParams,
                     onFunctionStart: () => {
                         if (window.viewManager) {
                             window.viewManager.setMode('sequence');
