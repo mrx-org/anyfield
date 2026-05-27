@@ -937,11 +937,17 @@ if os.path.exists(_p):
 
             // 3) Phantom dict for toolapi (temp FS dir, deleted after)
             const _t3 = performance.now();
-            const phantomJsonFileName = activeGroup.jsonFileName
+            const selectedJson = typeof nvMod.getSelectedJsonForSim === 'function'
+                ? nvMod.getSelectedJsonForSim(activeGroup)
+                : null;
+            const phantomJsonFileName = selectedJson?.fileName
+                || activeGroup.jsonFileName
                 || (activeGroup.jsonName ? `${activeGroup.jsonName}.json` : null);
-            const phantomJsonContent = typeof nvMod.getPhantomJsonContent === 'function'
-                ? nvMod.getPhantomJsonContent(activeGroup)
-                : activeGroup.jsonContent;
+            const phantomJsonContent = selectedJson?.content != null
+                ? selectedJson.content
+                : (typeof nvMod.getPhantomJsonContent === 'function'
+                    ? nvMod.getPhantomJsonContent(activeGroup)
+                    : activeGroup.jsonContent);
             const phantomPayload = await this._convertResampledGroupToToolPhantom(nvMod, {
                 jsonName: activeGroup.jsonName,
                 jsonFileName: phantomJsonFileName,

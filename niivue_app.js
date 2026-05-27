@@ -523,6 +523,51 @@ export class NiivueModule {
     return g.jsonContent != null ? String(g.jsonContent) : null;
   }
 
+  /** Return JSON text by filename, preferring editor (if selected) then VFS then in-memory groups. */
+  getJsonContentByFileName(jsonFileName) {
+    const fn = jsonFileName != null ? String(jsonFileName).trim() : "";
+    if (!fn) return null;
+
+    if (this.jsonTabCurrentName === fn) {
+      const fromEditor = this.getJsonEditorValue();
+      if (String(fromEditor).trim()) return fromEditor;
+    }
+
+    if (this.pyodide) {
+      try {
+        const vfs = this.pyodide.FS.readFile(`/phantom/${fn}`, { encoding: 'utf8' });
+        if (String(vfs).trim()) return vfs;
+      } catch (_) { /* no VFS copy */ }
+    }
+
+    const g = this.volumeGroups?.find((vg) => this._volumeGroupMatchesJsonFile(vg, fn) && vg.jsonContent != null);
+    if (g) return String(g.jsonContent);
+    return null;
+  }
+
+  /**
+   * JSON config chosen for SIM: active JSON-tab selection if available, otherwise the
+   * active phantom group's own JSON.
+   */
+  getSelectedJsonForSim(group) {
+    const g = group ?? this.getActivePhantomGroup();
+    if (!g) return { fileName: null, content: null };
+
+    const activeName = this.jsonTabCurrentName ? String(this.jsonTabCurrentName).trim() : "";
+    if (activeName) {
+      const activeContent = this.getJsonContentByFileName(activeName);
+      if (String(activeContent || "").trim()) {
+        return { fileName: activeName, content: String(activeContent) };
+      }
+    }
+
+    const fallbackName = this._groupJsonFileName(g);
+    return {
+      fileName: fallbackName,
+      content: this.getPhantomJsonContent(g),
+    };
+  }
+
   /** Keep scan/sim pipeline (uses volumeGroups[].jsonContent) aligned with VFS / editor. */
   _syncJsonContentToVolumeGroups(jsonFileName, raw) {
     if (!jsonFileName || raw == null) return;

@@ -35,6 +35,11 @@ Uses `executeFunction` and prepares `/outputs/<baseName>.seq` for the external s
 3. **`generateFovMaskNiftiFromSnapshot(job.fovSnapshot, …)`** — build **both** phantom ref (`getPhantomMatrixDims`) and recon ref (`getReconMatrixDims`) up-front from the same frozen snapshot. Phantom and recon grids differ in matrix resolution but share identical mm box + world placement.
 4. Resample phantom volumes to the phantom ref → conseq / trajex → sim tool → PyNUFFT on the recon ref.
 
+**Tool API call policy (design contract):**
+- Calls to external tool backends are **sequential** for each SIM job: `conseq` → `trajex` → (`tool-mr0sim` or `tool-rapisim`).
+- The pipeline must **not** use `Promise.all` for these tool stages.
+- Each stage is treated as its own tool channel / WebSocket session (separate progress logs per tool), avoiding mixed progress streams and reducing cross-tool contention.
+
 **Why the snapshot:** the recon reference determines the output NIfTI's affine/zooms (see `run_sim_recon` in `scan_zero/recon.py`). Previously it was re-derived from live sliders *after* the long-running toolapi calls, so any FOV change in between (user input, `syncFovFromScanVolume` after a prior scan completing, `applySequenceFovDimensions` from a subsequent seq prep) desynced the recon grid from the phantom grid — signal encoded old FOV, output stamped with new affine. The per-job snapshot isolates each in-flight pipeline from later slider mutations. Because `centerWorld` is stored in absolute RAS mm, swapping the "selected" volume mid-pipeline does not shift the snapshot.
 
 **PyNUFFT:** Implemented in **`scan_zero/recon.py`** (`run_sim_recon`). On SIM, the file is fetched and written to Pyodide as `/scan_zero/recon.py` once per session, then imported (keeps recon out of inline JS strings).
