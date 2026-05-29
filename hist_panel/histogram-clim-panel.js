@@ -149,21 +149,18 @@ export function computeSlabRobustClims(vol, lowPct = 0.02, highPct = 0.98) {
   return { calMin: lo, calMax: hi };
 }
 
-export function syncVolumeClimsToCurrent4DFrame(vol, nv) {
+export function syncVolumeClimsToCurrent4DFrame(vol, nv, frameIdxOverride = null) {
   if (!vol?.img) return { calMin: vol?.cal_min ?? 0, calMax: vol?.cal_max ?? 1 };
+  const hasOverride = Number.isFinite(frameIdxOverride);
+  const targetFrame = hasOverride ? Math.max(0, Math.floor(frameIdxOverride)) : (vol.frame4D ?? 0);
   if (volumeIs4D(vol)) {
-    if (typeof vol.calMinMax === "function") {
-      try {
-        vol.calMinMax(vol.frame4D ?? 0);
-      } catch {
-        try {
-          vol.calMinMax();
-        } catch {
-          const r = computeSlabRobustClims(vol);
-          vol.cal_min = r.calMin;
-          vol.cal_max = r.calMax;
-        }
-      }
+    // Deterministic per-frame clims: avoid depending on Niivue internals that can
+    // keep frame-0 style clims on some 4D datasets.
+    vol.frame4D = targetFrame;
+    const frameRange = computeSlabDataRange(vol, false);
+    if (Number.isFinite(frameRange.lo) && Number.isFinite(frameRange.hi) && frameRange.lo < frameRange.hi) {
+      vol.cal_min = frameRange.lo;
+      vol.cal_max = frameRange.hi;
     } else {
       const r = computeSlabRobustClims(vol);
       vol.cal_min = r.calMin;
@@ -691,7 +688,8 @@ export function attachNiivueHistogramPanel(config) {
     prevOnFrameChange?.(changedVol, _frameIdx);
     if (changedVol !== vol || histogramMode !== "currentFrame" || !volumeIs4D(vol)) return;
     if (syncClimsOn4DFrame) {
-      ({ calMin, calMax } = syncVolumeClimsToCurrent4DFrame(vol, nv));
+      const effectiveFrameIdx = Number.isFinite(_frameIdx) ? _frameIdx : (changedVol?.frame4D ?? vol?.frame4D ?? 0);
+      ({ calMin, calMax } = syncVolumeClimsToCurrent4DFrame(vol, nv, effectiveFrameIdx));
     } else {
       calMin = vol.cal_min;
       calMax = vol.cal_max;
@@ -918,15 +916,21 @@ export function attachDualNiivueHistogramPanel(config) {
   function install4DFrameHooks() {
     for (const getter of [getSourceA, getSourceB]) {
       const src = getter();
-      if (!src?.nv || !src?.vol || !volumeIs4D(src.vol) || src.nv._dualHistFrameHook) continue;
+      if (!src?.nv || src.nv._dualHistFrameHook) continue;
       src.nv._dualHistFrameHook = true;
       const prev = src.nv.onFrameChange;
-      const volRef = src.vol;
       const nvRef = src.nv;
       src.nv.onFrameChange = (changedVol, frameIdx) => {
         prev?.(changedVol, frameIdx);
-        if (changedVol !== volRef) return;
-        syncVolumeClimsToCurrent4DFrame(volRef, nvRef);
+        // Resolve the live volume for this nv every time: a volume captured at
+        // install can go stale when a new scan is loaded into the same nv, which
+        // would otherwise leave windowing/histogram stuck on the first scan's frame 0.
+        const liveVol = nvRef.volumes?.[0] ?? null;
+        if (!liveVol || changedVol !== liveVol || !volumeIs4D(liveVol)) return;
+        const effectiveFrameIdx = Number.isFinite(frameIdx)
+          ? frameIdx
+          : (changedVol?.frame4D ?? liveVol.frame4D ?? 0);
+        syncVolumeClimsToCurrent4DFrame(liveVol, nvRef, effectiveFrameIdx);
         readClimFromVolumes();
         recomputeAxisAndBars();
         syncInputs();
@@ -1059,9 +1063,22 @@ export class MainHistogramController {
   }
 
   _volumeIndex() {
+    const volumes = this.nvModule?.nv?.volumes ?? [];
+    if (!volumes.length) return -1;
+
+    // Pane A histogram must stay anchored to the active phantom, not to selected scans.
+    const phantomVol = volumes.find((v) => {
+      const name = String(v?.name ?? "").toLowerCase();
+      const isScan = name.startsWith("scan_");
+      const isMask = name.includes("mask");
+      return !!v?.img && !isScan && !isMask;
+    });
+    if (phantomVol) return volumes.indexOf(phantomVol);
+
+    // Fallback to previous behavior when no phantom is available.
     const { vol } = this.nvModule.getVolumeForIntensity();
     if (!vol?.img) return -1;
-    return this.nvModule.nv.volumes.indexOf(vol);
+    return volumes.indexOf(vol);
   }
 
   refresh() {

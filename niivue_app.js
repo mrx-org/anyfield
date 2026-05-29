@@ -1,6 +1,6 @@
 import { Niivue, NVMesh, NVImage, SLICE_TYPE, MULTIPLANAR_TYPE, DRAG_MODE, SHOW_RENDER } from "https://unpkg.com/@niivue/niivue@0.65.0/dist/index.js";
 import { eventHub } from "./event_hub.js";
-import { volumeIs4D, syncVolumeClimsToCurrent4DFrame } from "./hist_panel/histogram-clim-panel.js";
+import { volumeIs4D, syncVolumeClimsToCurrent4DFrame, getNVox3D } from "./hist_panel/histogram-clim-panel.js";
 
 /**
  * Remote base URL for the bundled default nifti_phantom (JSON + NIfTIs), served from GitHub `raw`.
@@ -1115,6 +1115,7 @@ export class NiivueModule {
     
     this.setStatus("initializing…");
     await this.nv.attachTo(this.canvasId);
+    installFrameAwareContrastDrag(this.nv);
     
     try {
       this.nv.setSliceType(SLICE_TYPE.MULTIPLANAR);
@@ -3453,7 +3454,7 @@ function stepPreviewPanesFrame4D(sourceNv, delta) {
         vol.frame4D = next;
         nv.updateGLVolume?.();
       }
-      syncVolumeClimsToCurrent4DFrame(vol, nv);
+      syncVolumeClimsToCurrent4DFrame(vol, nv, next);
       nv.drawScene?.();
     }
     window.jointHist?.syncFromVolumes?.();
@@ -3507,9 +3508,43 @@ export function unlinkScanPreviewPanes(previewNv, compareNv) {
   }
 }
 
+/**
+ * Niivue's native right-drag contrast windowing (`calculateNewRange`) indexes the image
+ * buffer as a pure 3D volume (`z*nx*ny + y*nx + x`) with no 4D frame offset, so it always
+ * samples frame 0. For 4D scans (e.g. phase in frame index 1) this windows the wrong frame.
+ * We wrap it to point `vol.img` at the current frame's slab during the computation so the
+ * existing frame-0 indexing reads the active frame, then restore the full buffer.
+ */
+export function installFrameAwareContrastDrag(nv) {
+  if (!nv || nv._frameAwareRangeHook || typeof nv.calculateNewRange !== "function") return;
+  nv._frameAwareRangeHook = true;
+  const origCalcRange = nv.calculateNewRange.bind(nv);
+  nv.calculateNewRange = (opts = {}) => {
+    const volIdx = opts.volIdx ?? 0;
+    const vol = nv.volumes?.[volIdx];
+    if (vol?.img && volumeIs4D(vol)) {
+      const nVox = getNVox3D(vol);
+      const nFr = vol.nFrame4D ?? (nVox > 0 ? Math.max(1, Math.floor(vol.img.length / nVox)) : 1);
+      const fi = Math.min(Math.max(0, vol.frame4D ?? 0), Math.max(0, nFr - 1));
+      const start = fi * nVox;
+      if (nVox > 0 && fi > 0 && start + nVox <= vol.img.length) {
+        const savedImg = vol.img;
+        vol.img = savedImg.subarray(start, start + nVox);
+        try {
+          return origCalcRange(opts);
+        } finally {
+          vol.img = savedImg;
+        }
+      }
+    }
+    return origCalcRange(opts);
+  };
+}
+
 export function installPreviewSyncHooks(nv) {
   if (!nv || nv._previewSyncHooksInstalled) return;
   nv._previewSyncHooksInstalled = true;
+  installFrameAwareContrastDrag(nv);
   const prevLoc = nv.onLocationChange;
   nv.onLocationChange = (data) => {
     if (typeof prevLoc === 'function') prevLoc(data);
