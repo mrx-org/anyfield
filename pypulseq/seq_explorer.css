@@ -231,6 +231,16 @@ body {
     font-size: 0.875rem;
 }
 
+.seq-current-name {
+    margin-top: 0.25rem;
+    cursor: help;
+}
+
+.seq-current-name .seq-current-path {
+    font-size: 0.7rem;
+    color: var(--muted);
+}
+
 .seq-function-doc {
     font-size: 0.75rem;
     color: var(--muted);
@@ -543,6 +553,57 @@ body {
 
 #seq-execute-btn {
     /* Kept for ID specificity if needed, but uses .btn classes now */
+}
+
+/* Compact CROP / SCAN under protocol actions — visible in mobile / compact layout only */
+#seq-params-section .seq-mobile-run-btns {
+    display: none;
+    flex-direction: row;
+    flex-wrap: nowrap;
+    align-items: center;
+    gap: 0.4rem;
+    justify-content: flex-end;
+    max-width: 100%;
+}
+#seq-params-section .seq-mobile-pipeline-status {
+    flex-shrink: 0;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+}
+#seq-params-section .seq-mobile-pipeline-status[hidden] {
+    display: none !important;
+}
+#seq-params-section .seq-mobile-pipeline-status .scan-pipeline-progress {
+    width: 22px;
+    height: 22px;
+}
+#seq-params-section .seq-mobile-run-btns-group {
+    display: flex;
+    flex: 1 1 auto;
+    flex-wrap: wrap;
+    gap: 0.35rem;
+    justify-content: flex-end;
+    min-width: 0;
+}
+#seq-params-section .seq-mobile-run-btns.is-busy .scan-btn-compact {
+    opacity: 0.42;
+    filter: grayscale(0.35);
+    cursor: not-allowed;
+    pointer-events: none;
+}
+#seq-params-section .seq-mobile-run-btns .scan-btn-compact {
+    width: auto;
+    flex: 1 1 0;
+    min-width: 3.25rem;
+    max-width: 5.5rem;
+    padding: 0.3rem 0.4rem;
+    font-size: 0.68rem;
+    min-height: 26px;
+    border-radius: var(--radius-md, 4px);
+}
+#seq-params-section .seq-mobile-run-btns .scan-btn-compact .icon {
+    font-size: 0.75em;
 }
 
 /* Code Editor Modal */

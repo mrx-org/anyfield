@@ -1,6 +1,6 @@
 # Niivue minimal app (zero-install)
 
-**Version:** `v0.8.0`
+**Version:** `v0.8.1`
 
 This is a **minimal Niivue viewer** implemented as a single `viewer.html` file.
 
@@ -85,6 +85,10 @@ For more insights see insights SPEC_no_field.md
 
 ## Release notes
 
+
+**v0.8.1**
+- **Mobile / Compact footer**: Compact **CROP** / **SCAN▶** / **SCAN▶▶** under Protocol; pipeline ring + greyed buttons while a scan runs (desktop RUN unchanged). Footer tab **scans**; picking a sequence jumps to **prot**.
+- **UI polish**: Multi-line empty SCANS hint; preview crosshair / labels; removed main viewer status overlay; JSON Save → SIM uses fresh editor content; startup loader no longer blocked on plot patch.
 
 **v0.8.0**
 - **Sidebar: SCANS / PHANTOMS**: Replaced the old VIEWER + optional JSON tab with **SCANS** (recon volumes only) and **PHANTOMS** (load controls, phantom list, JSON editor). Default tab is **SCANS**; collapsed sidebar shows **S**. Tab order: SCANS → PHANTOMS → FOV → OPTIONS.

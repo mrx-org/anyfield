@@ -72,6 +72,14 @@
     #slot-footer #col-params { order: 2; }
     #slot-footer #col-scan { order: 3; }
 
+    /* Protocol panel: compact CROP / SCAN (RUN tab keeps queue only) */
+    #seq-params-section .seq-mobile-run-btns {
+        display: flex;
+    }
+    .scan-module .scan-header {
+        display: none !important;
+    }
+
     /* Each footer column is a full-width card */
     #slot-footer .footer-col,
     #slot-footer #col-tree,

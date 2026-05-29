@@ -55,7 +55,7 @@ const SEQ_TEMPLATES = {
                         <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 0.5rem;">
                             <div>
                             <h3 class="section-title" style="margin: 0;">Protocol</h3>
-                                <div id="seq-current-name" style="font-size: 0.7rem; color: var(--muted); margin-top: 0.25rem; cursor: help;" title=""></div>
+                                <div id="seq-current-name" class="seq-current-name" title=""></div>
                             </div>
                             <div style="display: flex; gap: 0.5rem; align-items: center;">
                                 <button id="seq-get-fov-btn" style="padding: 0.4rem 0.32rem; background: rgba(255, 255, 255, 0.08); color: var(--text, #ddd); border: 1px solid var(--border, #333); border-radius: 4px; cursor: pointer; font-size: 0.75rem; font-weight: 500;">↖ set FOV</button>
@@ -102,17 +102,30 @@ const SEQ_TEMPLATES = {
                 </div>
             </div>`;
     },
+    mobileRunButtons() {
+        return `<div id="seq-mobile-run-btns" class="seq-mobile-run-btns" aria-label="Run scan">
+                    <div id="seq-mobile-pipeline-status" class="seq-mobile-pipeline-status" hidden aria-hidden="true"></div>
+                    <div class="seq-mobile-run-btns-group">
+                    <button id="seq-mobile-crop" type="button" class="scan-btn scan-btn-compact" title="Resample first volume to FOV (crop to box)">CROP</button>
+                    <button id="seq-mobile-scan-mr0" type="button" class="scan-btn scan-btn-compact" title="MR0 (tool-mr0sim)">SCAN<span class="icon">▶</span></button>
+                    <button id="seq-mobile-scan-fast" type="button" class="scan-btn scan-btn-compact" title="Rapisim (tool-rapisim)">SCAN<span class="icon">▶▶</span></button>
+                    </div>
+                </div>`;
+    },
     paramsSection() {
         return `<div id="seq-params-section">
                 <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 0.5rem;">
                     <div>
                         <h3 class="section-title" style="margin: 0;">Protocol</h3>
-                        <div id="seq-current-name" style="font-size: 0.7rem; color: var(--muted); margin-top: 0.25rem; cursor: help;" title=""></div>
+                        <div id="seq-current-name" class="seq-current-name" title=""></div>
                     </div>
+                    <div style="display: flex; flex-direction: column; align-items: flex-end; gap: 0.35rem;">
                     <div style="display: flex; gap: 0.5rem; align-items: center;">
                     <button id="seq-get-fov-btn" class="btn btn-secondary btn-md">↖ set FOV</button>
                     <button id="seq-edit-btn" class="btn btn-secondary btn-md">edit code</button>
                     <button id="seq-execute-btn" class="btn btn-secondary btn-md">plot seq</button>
+                    </div>
+                    ${SEQ_TEMPLATES.mobileRunButtons()}
                     </div>
                 </div>
                 <div id="seq-error-display" class="seq-error-message" style="display: none;"></div>
@@ -160,6 +173,22 @@ const SEQ_TEMPLATES = {
             </div>`;
     }
 };
+
+export async function patchSequencePlotFromCode(pyodide, plotUtilsCode) {
+    await pyodide.runPythonAsync(plotUtilsCode);
+    await pyodide.runPythonAsync('patch_pypulseq()');
+}
+
+/** Fetch seq_plot_utils.py and patch pypulseq.Sequence.plot (blocks main thread while Python runs). */
+export async function patchSequencePlot(pyodide, resolvePath) {
+    const url = typeof resolvePath === 'function'
+        ? resolvePath('seq_plot_utils.py')
+        : 'pypulseq/seq_plot_utils.py';
+    const response = await fetch(`${url}?${Date.now()}`);
+    if (!response.ok) throw new Error(`Could not load seq_plot_utils.py: ${response.status}`);
+    const plotUtilsCode = await response.text();
+    await patchSequencePlotFromCode(pyodide, plotUtilsCode);
+}
 
 export class SequenceExplorer {
     /** Default plot speed (must match `SEQ_DEFAULT_PLOT_SPEED` and template `selected` option). */
@@ -210,7 +239,7 @@ export class SequenceExplorer {
         this.filterSeqPrefix = this.config.onlySeqPrefix;
         this.installedPackages = new Set(); // Track installed packages to avoid reinstalling
         this.defaultInterpreterSeqPath = null; // Preloaded default .seq path for interpreter
-        this._plotStackReady = null; // Promise: matplotlib + installOptimizedPlotFunction (set by bootstrap, non-blocking)
+        this._plotStackReady = null; // Promise: plot patch complete (set by bootstrap; await before first plot)
         this._seqChartGpuDisconnect = null;
         this._seqChartGpuCharts = null;
         this._seqChartGpuDevice = null;
@@ -258,6 +287,16 @@ export class SequenceExplorer {
             getFovBtn.addEventListener('click', () => this.getFovFromSequence());
         }
 
+        this._bindMobileScanButtons(this.paramsTarget);
+    }
+
+    _bindMobileScanButtons(root) {
+        const crop = root.querySelector('#seq-mobile-crop');
+        const mr0 = root.querySelector('#seq-mobile-scan-mr0');
+        const fast = root.querySelector('#seq-mobile-scan-fast');
+        if (crop) crop.addEventListener('click', () => window.scanModule?.startCrop?.());
+        if (mr0) mr0.addEventListener('click', () => window.scanModule?.startSimMr0?.());
+        if (fast) fast.addEventListener('click', () => window.scanModule?.startSimFast?.());
     }
 
     async renderPlot(target) {
@@ -513,16 +552,8 @@ plt.rcParams['font.size'] = 8`;
             console.warn('Pyodide not available, cannot install optimized plot function');
             return;
         }
-        
-        const pyodide = this.config.pyodide;
-        
         try {
-            // Load and execute the standalone plot utils file
-            const response = await fetch(this.resolvePath('seq_plot_utils.py?') + Date.now());
-            const plotUtilsCode = await response.text();
-            
-            await pyodide.runPythonAsync(plotUtilsCode);
-            await pyodide.runPythonAsync('patch_pypulseq()');
+            await patchSequencePlot(this.config.pyodide, (p) => this.resolvePath(p));
         } catch (error) {
             console.error('Error installing optimized plot function:', error);
             throw error;
@@ -2251,6 +2282,9 @@ json.dumps(functions)
                 const fileName = item.dataset.file;
                 const functionName = item.dataset.function;
                 void this.selectSequenceByFileAndFunction(fileName, functionName);
+                if (typeof window.goToFooterCard === 'function') {
+                    window.goToFooterCard(1);
+                }
             });
         });
     }
@@ -2448,6 +2482,54 @@ json.dumps(_result)
         }
     }
     
+    /** Full path label for params header (e.g. built_in_seq/gre_seq). */
+    _getSeqFilePathLabel(fileName, source) {
+        let path = fileName || '';
+        if (source?.path && source.type !== 'pyodide_module') {
+            path = source.path;
+        } else if (source?.type === 'pyodide_module' && !(String(fileName).includes('/') || String(fileName).includes('\\'))) {
+            path = source.fullModulePath || source.module || fileName;
+        }
+        return String(path).replace(/^user\//, '').replace(/\\/g, '/').replace(/\.py$/i, '');
+    }
+
+    /** Short file stem matching the sequence tree (e.g. gre_seq). */
+    _getSeqDisplayFileStem(fileName, source, isProtocol) {
+        let displayFileName = fileName;
+        if (isProtocol) {
+            displayFileName = source?.displayName || this.getProtocolDisplayNameFromSeqFuncFile(this.getPathForDisplayName(fileName, source));
+            if (!displayFileName) {
+                const pathOrModule = source?.path || fileName;
+                if (pathOrModule.includes('.') && !pathOrModule.includes('/') && !pathOrModule.includes('\\')) {
+                    displayFileName = pathOrModule.replace(/\.py$/i, '').split('.').pop();
+                } else {
+                    displayFileName = pathOrModule.split('/').pop().replace(/\.py$/, '');
+                }
+            }
+        } else if (source?.isUserEdited && source?.displayName) {
+            displayFileName = source.displayName;
+        } else if (fileName.startsWith('user/')) {
+            displayFileName = fileName.split('/').pop().replace(/\.py$/, '');
+        } else {
+            let shortFileName = fileName.split('/').pop().split('\\').pop();
+            if (shortFileName.endsWith('.py')) {
+                const pyIndex = shortFileName.length - 3;
+                const lastDotBeforePy = shortFileName.lastIndexOf('.', pyIndex - 1);
+                if (lastDotBeforePy > 0) {
+                    shortFileName = shortFileName.substring(lastDotBeforePy + 1);
+                }
+            }
+            if (shortFileName.includes('.') && !shortFileName.includes('/') && !shortFileName.includes('\\')) {
+                shortFileName = shortFileName.replace(/\.py$/i, '').split('.').pop();
+            }
+            displayFileName = shortFileName;
+        }
+        if (displayFileName.endsWith('.py')) {
+            displayFileName = displayFileName.slice(0, -3);
+        }
+        return displayFileName;
+    }
+
     updateSequenceNameDisplay() {
         const root = this.paramsTarget || this.container;
         const nameElement = root.querySelector('#seq-current-name');
@@ -2460,63 +2542,28 @@ json.dumps(_result)
         }
         
         const { fileName, functionName, source } = this.selectedSequence;
-        
-        // Use source name from JSON configuration
-        const origin = source?.name || 'unknown';
-        
-        // Determine path to display
-        let pathToDisplay = fileName;
-        if (source?.isUserEdited && source?.displayName) {
-            // For user-edited files, use displayName
-            pathToDisplay = source.displayName;
-        } else if (source?.type === 'pyodide_module') {
-            // For modules, use the module path
-            pathToDisplay = source.module || source.fullModulePath || source.path || fileName;
-        } else {
-            // For files, use the file path (remove user/ prefix if present)
-            pathToDisplay = fileName.replace(/^user\//, '');
-        }
-        
-        if (pathToDisplay.endsWith('.py')) {
-            pathToDisplay = pathToDisplay.slice(0, -3);
-        }
-        // If full module path (e.g. pypulseq_examples.scripts.foo), show only last segment
-        if (pathToDisplay.includes('.') && !pathToDisplay.includes('/') && !pathToDisplay.includes('\\')) {
-            pathToDisplay = pathToDisplay.split('.').pop();
-        }
         const isProtocol = source?.itemKind === 'protocol' || (source?.path && source.path.startsWith('user/prot/'));
-        if (isProtocol) {
-            pathToDisplay = source?.displayName || this.getProtocolDisplayNameFromSeqFuncFile(this.getPathForDisplayName(fileName, source));
-            if (!pathToDisplay) {
-                // Fallback: handle both path-style (user/prot/file.py) and module-style (user.prot.file) keys
-                const pathOrModule = source?.path || fileName;
-                if (pathOrModule.includes('.') && !pathOrModule.includes('/') && !pathOrModule.includes('\\')) {
-                    // Module path: strip .py then extract last segment (avoid "py" from extension)
-                    const withoutPy = pathOrModule.replace(/\.py$/i, '');
-                    pathToDisplay = withoutPy.split('.').pop();
-                } else {
-                    // Path-style: extract filename
-                    pathToDisplay = pathOrModule.split('/').pop().replace(/\.py$/, '');
-                }
-            }
-        }
-        const displayName = isProtocol ? `${origin} / ${pathToDisplay}` : `${origin} / ${pathToDisplay}:${functionName}`;
-        nameElement.textContent = displayName;
-        
-        // Get docstring for tooltip
+        const pathLine = this._getSeqFilePathLabel(fileName, source);
+        const stem = this._getSeqDisplayFileStem(fileName, source, isProtocol);
+        const funcLine = isProtocol ? stem : `${stem}:${functionName}`;
+
         let docstring = this.selectedSequence?.doc || '';
         if (!docstring) {
             const fileData = this.sequences[fileName];
             if (fileData) {
                 const func = fileData.functions.find(f => f.name === functionName);
-                if (func && func.doc) {
-                    docstring = func.doc;
-                }
+                if (func?.doc) docstring = func.doc;
             }
         }
-        
-        // Set tooltip with docstring (or empty if none)
         nameElement.title = docstring || 'No docstring available';
+        nameElement.replaceChildren();
+        const pathEl = document.createElement('div');
+        pathEl.className = 'seq-current-path';
+        pathEl.textContent = pathLine;
+        const funcEl = document.createElement('span');
+        funcEl.className = 'seq-file-function-name';
+        funcEl.textContent = funcLine;
+        nameElement.append(pathEl, funcEl);
     }
     
     extractParameterDocs(docstring) {

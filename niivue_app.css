@@ -610,23 +610,6 @@
   display: block;
 }
 
-.niivue-app .status {
-  position: absolute;
-  top: 8px;
-  left: 8px;
-  padding: 0;
-  background: transparent;
-  border: none;
-  border-radius: 0;
-  color: #888;
-  font-size: 11px;
-  pointer-events: none;
-  max-width: 80%;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-}
-
 .niivue-app .crosshair-intensity {
   position: absolute;
   bottom: 8px;

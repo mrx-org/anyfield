@@ -34,21 +34,21 @@ html.pro-user .scan-module #btn-start-sim-fast {
     display: flex !important;
 }
 
+/* Protocol panel mobile duplicates (pro-gated like RUN tab) */
+#seq-mobile-scan-fast,
+#seq-mobile-crop {
+    display: none !important;
+}
+html.pro-user #seq-mobile-scan-fast,
+html.pro-user #seq-mobile-crop {
+    display: flex !important;
+}
+
 /* Multiple RUN buttons in one row (CROP / SCAN▶ / SCAN▶▶); avoid global .scan-btn width:100% here */
 .scan-header .scan-btn {
     width: auto;
     flex: 1 1 0;
     min-width: 4.5rem;
-}
-
-.active-info {
-    font-size: var(--font-size-sm, 11px);
-    color: var(--muted, #94a3b8);
-    margin-top: var(--spacing-md, 8px);
-    flex: 1 1 100%;
-    white-space: nowrap;
-    overflow: hidden;
-    text-overflow: ellipsis;
 }
 
 .scan-btn {
@@ -160,20 +160,32 @@ html.pro-user .scan-module #btn-start-sim-fast {
 /* Button styles are unified in no_field.css (loads last) */
 /* No duplicate definitions needed here */
 
-.scan-spinner {
-    width: 14px;
-    height: 14px;
-    border: 2px solid rgba(255, 255, 255, 0.2);
-    border-top-color: var(--warning, #eab308);
+/* Pipeline ring: ⅛ on scan; +¼ when each of conseq/trajex/sim/recon finishes */
+.scan-pipeline-progress {
+    flex-shrink: 0;
+    width: 18px;
+    height: 18px;
     border-radius: 50%;
-    animation: scan-spin 1s linear infinite;
+    --stage: 0;
+    background: conic-gradient(
+        var(--success, #22c55e) 0deg min(calc(45deg + var(--stage) * 90deg), 360deg),
+        rgba(255, 255, 255, 0.1) 0
+    );
+    -webkit-mask: radial-gradient(circle, transparent 52%, #000 53%);
+    mask: radial-gradient(circle, transparent 52%, #000 53%);
+    box-shadow: inset 0 0 0 0.75px rgba(255, 255, 255, 0.14);
+    transition: background 0.25s ease;
+}
+
+.scan-pipeline-progress.is-crop {
+    animation: pipeline-spin 1.4s linear infinite;
+}
+
+@keyframes pipeline-spin {
+    to { transform: rotate(360deg); }
 }
 
 .error-icon {
     color: var(--error, #ef4444);
     font-weight: var(--font-weight-bold, 700);
-}
-
-@keyframes scan-spin { 
-    to { transform: rotate(360deg); } 
 }

@@ -59,9 +59,7 @@ export class NiivueModule {
     this.containerViewer = null;
     this.containerControls = null;
     this.canvas = null;
-    this.statusOverlay = null;
     this.crosshairIntensityEl = null;
-    this.statusText = null;
     this.dirInput = null;
     this.btnDemo = null;
     this.showFov = null;
@@ -222,7 +220,6 @@ export class NiivueModule {
       <div class="viewer-stack-body" style="flex:1;min-height:0;display:flex;flex-direction:column;">
       <div class="viewer standalone-viewer" style="flex:1;min-height:0;position:relative;">
         <canvas id="${this.canvasId}"></canvas>
-        <div class="status" id="statusOverlay-${this.instanceId}">idle</div>
         <div class="crosshair-intensity" id="crosshairIntensity-${this.instanceId}">—</div>
         <div class="viewer-hint" style="position: absolute; bottom: 8px; right: 8px; font-size: 11px; color: rgba(255,255,255,0.7); pointer-events: none; text-shadow: 0 1px 2px rgba(0,0,0,0.8);">
           CTRL + mouse to change FoV
@@ -232,7 +229,6 @@ export class NiivueModule {
     `;
 
     this.canvas = this.containerViewer.querySelector(`#${this.canvasId}`);
-    this.statusOverlay = this.containerViewer.querySelector(`#statusOverlay-${this.instanceId}`);
     this.crosshairIntensityEl = this.containerViewer.querySelector(`#crosshairIntensity-${this.instanceId}`);
     
     // Attach Niivue after small delay to ensure canvas is ready
@@ -789,7 +785,6 @@ export class NiivueModule {
       return;
     }
     this.setJsonTabStatus('Executing...');
-    this.setStatus(`Executing phantom: ${name}`);
     try {
       const baseName = name.replace(/\.json$/i, '');
       // Remove any previous executed/averaged group for this json
@@ -827,11 +822,9 @@ export class NiivueModule {
         jsonFileName: name
       });
       this.updateVolumeList();
-      this.setStatus(`Averaged: ${name} (${groupVolumes.length} maps)`);
       this.setJsonTabStatus(`Done — ${groupVolumes.length} maps loaded.`);
     } catch (e) {
       console.error(e);
-      this.setStatus(`Execute error: ${e.message}`);
       this.setJsonTabStatus(`Error: ${e.message}`);
     }
   }
@@ -993,7 +986,6 @@ export class NiivueModule {
   bindControlElements() {
     const root = this.containerControls || document;
     const qs = (id) => root.querySelector(`#${id}-${this.instanceId}`);
-    this.statusText = qs("statusText");
     this.btnDemo = qs("load-demo");
     this.showFov = qs("showFov");
     this.sliceMM = qs("sliceMM");
@@ -1113,7 +1105,6 @@ export class NiivueModule {
     if (this.showRender) this.showRender.checked = true;
     this.nv.scene.pan2Dxyzmm[3] = 0.9;
     
-    this.setStatus("initializing…");
     await this.nv.attachTo(this.canvasId);
     installFrameAwareContrastDrag(this.nv);
     
@@ -1223,7 +1214,6 @@ export class NiivueModule {
             
             this.isRotatingFov = true;
             this.isTwoFingerRotating = true;
-            this.setStatus("Rotating FOV...");
         }
     }, { passive: false, capture: true });
     
@@ -1308,7 +1298,6 @@ export class NiivueModule {
             this.fovRotateAxCorSag = null;
             this.nv.opts.dragMode = this.savedDragMode;
             this.twoFingerReleaseTime = Date.now();
-            this.setStatus("FOV Rotate finished");
             this.syncFovLabels();
         }
     });
@@ -1335,7 +1324,6 @@ export class NiivueModule {
     });
 
     setInterval(() => this.updateAngles(), 200);
-    this.setStatus("ready");
     this.isInitialized = true;
     this._initWaiters.forEach(resolve => resolve());
     this._initWaiters = [];
@@ -1467,14 +1455,11 @@ os.makedirs('/phantom/averaged', exist_ok=True)
           return dir === rootDir && !f.webkitRelativePath.slice(rootDir.length + 1).includes("/");
         });
         if (jsonFiles.length === 0) {
-          this.setStatus("Folder must contain a .json file (multi-phantom definition).");
           return;
         }
         if (niftiFiles.length === 0) {
-          this.setStatus("No .nii or .nii.gz files found in the folder.");
           return;
         }
-        this.setStatus("Uploading files to Pyodide VFS...");
         await this.populatePyodideVFS(niftiFiles, jsonFiles);
         let chosenName = jsonFiles[0].name;
         if (jsonFiles.length > 1) {
@@ -1486,7 +1471,6 @@ os.makedirs('/phantom/averaged', exist_ok=True)
         this.updateJsonTab();
         const chosenJsonFile = jsonFiles.find(f => f.name === chosenName) || jsonFiles[0];
         await this.loadMultiPhantomFromFiles(chosenJsonFile, niftiFiles);
-        this.setStatus(`NIfTIs loaded. PHANTOMS → Execute to build averaged maps.`);
       };
     }
 
@@ -1633,11 +1617,6 @@ os.makedirs('/phantom/averaged', exist_ok=True)
       return niftiBytes;
   }
 
-  setStatus(s) {
-    if (this.statusText) this.statusText.textContent = s;
-    if (this.statusOverlay) this.statusOverlay.textContent = s;
-  }
-
   /** Get voxel intensity at voxel indices [i, j, k]. Returns null if no volume or out of bounds. */
   getIntensityAtVox(vol, vox, dim3) {
     if (!vol || !dim3 || dim3.length < 3) return null;
@@ -1718,7 +1697,6 @@ os.makedirs('/phantom/averaged', exist_ok=True)
             this.zoomStartMouseY = e.clientY;
             this.zoomStartValue = Number(this.zoom2D.value);
             this.zoomStartPan = [...this.nv.scene.pan2Dxyzmm];
-            this.setStatus("Zooming 2D...");
             return;
          }
 
@@ -1738,7 +1716,6 @@ os.makedirs('/phantom/averaged', exist_ok=True)
                 else startVal = Number(this.fovRotX.value);
                 this.dragStartRotation = startVal;
                 this.dragStartAngle = this.getMouseAngle(e);
-                this.setStatus("Rotating FOV...");
             } else if (e.button === 0) {
                 this.dragStartTileIndex = this.updateViewFromMouse(e);
                 this.isDraggingFov = true;
@@ -1754,7 +1731,6 @@ os.makedirs('/phantom/averaged', exist_ok=True)
                     this.rebuildFovLive();
                 }
                 this.dragStartOffsets = [Number(this.fovOffX.value), Number(this.fovOffY.value), Number(this.fovOffZ.value)];
-                this.setStatus("Dragging FOV...");
             }
          }
   }
@@ -1829,15 +1805,13 @@ os.makedirs('/phantom/averaged', exist_ok=True)
             this.isZooming2D = false; 
             this.zoomStartPan = null;
             this.nv.opts.dragMode = this.savedDragMode;
-            this.setStatus("Zoom 2D finished"); 
             this.syncFovLabels(); 
          }
-         if (this.isDraggingFov) { this.isDraggingFov = false; this.nv.opts.dragMode = this.savedDragMode; this.setStatus("FOV Drag finished"); this.syncFovLabels(); }
+         if (this.isDraggingFov) { this.isDraggingFov = false; this.nv.opts.dragMode = this.savedDragMode;this.syncFovLabels(); }
          if (this.isRotatingFov) {
             this.isRotatingFov = false;
             this.fovRotateAxCorSag = null;
             this.nv.opts.dragMode = this.savedDragMode;
-            this.setStatus("FOV Rotate finished");
             this.syncFovLabels();
          }
   }
@@ -1862,7 +1836,6 @@ os.makedirs('/phantom/averaged', exist_ok=True)
                   newVal = Math.max(Number(targetInput.min), Math.min(Number(targetInput.max), newVal));
                   targetInput.value = String(newVal);
                   this.rebuildFovLive();
-                  this.setStatus(`Resized FOV: ${newVal} mm`);
               }
           }
   }
@@ -2651,8 +2624,7 @@ os.makedirs('/phantom/averaged', exist_ok=True)
       const url = URL.createObjectURL(new Blob([bytes], { type: "application/octet-stream" }));
       const a = document.createElement("a"); a.href = url; a.download = downloadName;
       document.body.appendChild(a); a.click(); a.remove(); setTimeout(() => URL.revokeObjectURL(url), 10000);
-      this.setStatus(`Downloaded: ${downloadName}`);
-    } catch (e) { console.error(e); this.setStatus(`Download error: ${e.message}`); }
+    } catch (e) { console.error(e);}
   }
 
   async downloadGroupAsZip(group) {
@@ -2678,10 +2650,8 @@ os.makedirs('/phantom/averaged', exist_ok=True)
       const a = document.createElement("a"); a.href = url; a.download = `${folderName}.zip`;
       document.body.appendChild(a); a.click(); a.remove();
       setTimeout(() => URL.revokeObjectURL(url), 10000);
-      this.setStatus(`Downloaded: ${folderName}.zip`);
     } catch (e) {
       console.error(e);
-      this.setStatus(`Zip failed, downloading individually...`);
       if (group.jsonContent && group.jsonFileName) {
         const a = document.createElement("a");
         a.href = URL.createObjectURL(new Blob([group.jsonContent]));
@@ -2694,7 +2664,7 @@ os.makedirs('/phantom/averaged', exist_ok=True)
 
   handleDownloadFovMesh() {
     try {
-      if (!this.fovMeshData) { this.setStatus("No FOV data yet"); return; }
+      if (!this.fovMeshData) {return; }
       const geometry = this.fovMeshData;
       const downloadTextFile = (name, text) => { const a = document.createElement("a"); a.href = URL.createObjectURL(new Blob([text])); a.download = name; a.click(); };
       const toStl = (v, t) => {
@@ -2710,8 +2680,7 @@ os.makedirs('/phantom/averaged', exist_ok=True)
       const maskUrl = URL.createObjectURL(new Blob([maskBytes]));
       const maskLink = document.createElement("a"); maskLink.href = maskUrl; maskLink.download = "fov-mask.nii"; maskLink.click();
       if (this.nv.volumes?.length) setTimeout(() => this.downloadVolume(this.nv.volumes[0]), 300);
-      this.setStatus("Downloading STL + mask + volume...");
-    } catch (e) { console.error(e); this.setStatus(`Error: ${e.message}`); }
+    } catch (e) { console.error(e);}
   }
 
   /** NIfTI-1 magic at byte offset 344 should be `n+1` + NUL (0x6E 0x2B 0x31 0x00). */
@@ -2754,7 +2723,6 @@ os.makedirs('/phantom/averaged', exist_ok=True)
       }
 
       if (this.volumeGroups?.length > 0) {
-        this.setStatus("Resampling multi-phantom...");
         const newGroups = [];
         for (const group of this.volumeGroups) {
           const newVolumes = [];
@@ -2831,9 +2799,7 @@ os.makedirs('/phantom/averaged', exist_ok=True)
           });
         }
         this.volumeGroups.push(...newGroups);
-        this.setStatus(`✓ Resampled multi-phantom: ${newGroups.length} group(s)`);
       } else {
-        this.setStatus("Resampling...");
         const vol = this.nv.volumes[0];
         const volName = vol.name || "vol";
         const hdr = vol.hdr ?? vol.header;
@@ -2886,12 +2852,10 @@ os.makedirs('/phantom/averaged', exist_ok=True)
           await this.nv.addVolumesFromUrl([{ url, name, colormap: "gray", opacity }]);
           setTimeout(() => URL.revokeObjectURL(url), 30000);
           try { this.pyodide.FS.unlink(outPath); } catch (_) {}
-        if (useSerial3DTo4D) this.setStatus(`✓ Resampled: ${volName} (${nFrames} frames merged to 4D)`);
-        else this.setStatus(`✓ Resampled: ${volName}`);
       }
       this.updateVolumeList();
       this.triggerHighlight();
-    } catch (e) { console.error(e); this.setStatus(`Error: ${e.message}`); } finally { this.resampleToFovBtn.disabled = false; }
+    } catch (e) { console.error(e);} finally { this.resampleToFovBtn.disabled = false; }
   }
 
   updateVolumeList() {
@@ -3146,8 +3110,15 @@ os.makedirs('/phantom/averaged', exist_ok=True)
       phantoms.forEach(p => phantomEl.appendChild(createRow(p.vol, p.index)));
     }
 
-    if (scanEl && scans.length > 0) {
-      [...scans].reverse().forEach(s => scanEl.appendChild(createRow(s.vol, s.index)));
+    if (scanEl) {
+      if (scans.length > 0) {
+        [...scans].reverse().forEach(s => scanEl.appendChild(createRow(s.vol, s.index)));
+      } else {
+        const empty = document.createElement("div");
+        empty.className = "scan-volume-list-empty";
+        empty.textContent = 'Scan list is empty.\nChoose a sequence,\nAdjust the protocol,\nPosition and rotate the FOV\nwith CTRL+ mouse L+R,\nPress scan';
+        scanEl.appendChild(empty);
+      }
     }
 
     this.updateJsonTab();
@@ -3300,12 +3271,10 @@ os.makedirs('/phantom/averaged', exist_ok=True)
         ? fileList.map(n => nameMap.get(n)).filter(Boolean)
         : [...niftiFiles].sort((a, b) => a.name.localeCompare(b.name));
       if (ordered.length === 0) {
-        this.setStatus("No matching NIfTI files found for JSON phantom.");
         return;
       }
       const groupId = "g-" + Math.random().toString(36).substr(2, 9);
       const jsonName = jsonFile.name.replace(/\.json$/i, "");
-      this.setStatus(`loading multi-phantom: ${jsonName} (${ordered.length} volumes)`);
       // Ensure PD volume is first (volume 0) if present
       const pdIdx = ordered.findIndex(f => /_PD\.nii(\.gz)?$/i.test(f.name));
       if (pdIdx > 0) {
@@ -3336,9 +3305,8 @@ os.makedirs('/phantom/averaged', exist_ok=True)
       this.updateVolumeList();
       this.updatePreviewFromSelection();
       this.triggerHighlight();
-      this.setStatus(`loaded: ${jsonName} (${groupVolumes.length} volumes)`);
     } catch (e) {
-      this.setStatus(`Error: ${e.message}`);
+      console.error(e);
     }
   }
 
@@ -3354,7 +3322,6 @@ os.makedirs('/phantom/averaged', exist_ok=True)
   async loadUrl(url, name, isAdding = false, syncFovOnScan = true) {
     await this.waitForInit();
     try {
-      this.setStatus(`loading: ${name??url}`);
       
       const isScan = name && name.startsWith('scan_');
       const isMask = name?.toLowerCase().includes("mask");
@@ -3397,13 +3364,16 @@ os.makedirs('/phantom/averaged', exist_ok=True)
       
       this.updatePreviewFromSelection();
       this.triggerHighlight();
-      this.setStatus(`loaded: ${name??url}`);
       if (typeof window !== "undefined") window.mainHist?.scheduleRefresh?.();
-    } catch (e) { this.setStatus(`Error: ${e.message}`); }
+    } catch (e) {
+      console.error(e);
+    }
   }
 }
 
 /** Sync options for scan preview (B) ↔ compare (C) panes */
+const PREVIEW_CROSSHAIR_WIDTH = 0.35;
+
 const PREVIEW_PANE_SYNC_OPTS = {
   '2d': true,
   '3d': false,
@@ -3482,6 +3452,9 @@ export function pushPreviewStateFrom(sourceNv) {
       peer.setMultiplanarLayout(MULTIPLANAR_TYPE.GRID);
     }
     if (typeof sourceNv.sync === 'function') sourceNv.sync();
+    const w = sourceNv.opts.crosshairWidth ?? PREVIEW_CROSSHAIR_WIDTH;
+    peer.opts.crosshairWidth = w;
+    peer.setCrosshairWidth(w);
     peer.drawScene();
     if (typeof window !== "undefined") window.jointHist?.syncFromVolumes?.();
   } finally {
@@ -3592,9 +3565,7 @@ export class ScanPreviewModule {
   constructor(options = {}) {
     this.role = options.role || 'preview';
     this.labelDefault = options.labelDefault || (this.role === 'compare' ? 'Compare' : 'Scan Preview');
-    this.hintText = options.hint ?? (this.role === 'compare'
-      ? 'Synced · V views · ←/→ 4D · Ctrl+dbl-click close'
-      : 'Press V to change views · ←/→ 4D frame');
+    this.hintText = options.hint ?? (this.role === 'compare' ? '' : '←/→ 4D frame');
     this.viewerClass = this.role === 'compare'
       ? 'viewer scan-preview-viewer compare-preview-viewer'
       : 'viewer scan-preview-viewer';
@@ -3633,7 +3604,7 @@ export class ScanPreviewModule {
       <div class="${this.viewerClass}" style="flex:1;min-height:0;position:relative;background:black;">
         <canvas id="${this.canvasId}"></canvas>
         <div class="preview-label" style="position: absolute; bottom: 8px; left: 8px; font-size: 11px; color: #888; pointer-events: none;">${this.labelDefault}</div>
-        <div class="preview-hint" style="position: absolute; bottom: 8px; right: 8px; font-size: 11px; color: #666; pointer-events: none;">${this.hintText}</div>
+        ${this.hintText ? `<div class="preview-hint" style="position: absolute; bottom: 8px; right: 8px; font-size: 11px; color: #666; pointer-events: none;">${this.hintText}</div>` : ''}
       </div>
       </div>
     `;
@@ -3648,8 +3619,21 @@ export class ScanPreviewModule {
     if (opts.sliceMM !== undefined) this.nv.setSliceMM(opts.sliceMM);
     if (opts.radiological !== undefined) this.nv.setRadiologicalConvention(opts.radiological);
     // Preview stays slice-only; do not mirror main viewer 3D render toggle.
-    if (opts.showCrosshair !== undefined) this.nv.setCrosshairWidth(opts.showCrosshair ? 1 : 0);
+    if (opts.showCrosshair !== undefined) {
+      const w = opts.showCrosshair ? PREVIEW_CROSSHAIR_WIDTH : 0;
+      this.nv.opts.crosshairWidth = w;
+      this.nv.setCrosshairWidth(w);
+    }
     this.nv.drawScene();
+  }
+
+  _applyPreviewCrosshairStyle() {
+    if (!this.nv) return;
+    this.nv.opts.crosshairColor = [0.2, 0.8, 0.2, 0.5];
+    const show = window.nvModule?.showCrosshair?.checked !== false;
+    const w = show ? PREVIEW_CROSSHAIR_WIDTH : 0;
+    this.nv.opts.crosshairWidth = w;
+    this.nv.setCrosshairWidth(w);
   }
 
   async initNiivue() {
@@ -3658,9 +3642,7 @@ export class ScanPreviewModule {
       this.nv.opts.multiplanarShowRender = SHOW_RENDER.NEVER;
       this.nv.setSliceType(SLICE_TYPE.AXIAL);
 
-      // Set crosshair to be thinner and 50% transparent
-      this.nv.opts.crosshairColor = [0.2, 0.8, 0.2, 0.5]; // 50% transparent green
-      this.nv.opts.crosshairWidth = 0.5; // Thinner crosshair
+      this._applyPreviewCrosshairStyle();
       
       eventHub.on('viewOptionsChange', (opts) => this.applyViewOptions(opts));
       installPreviewSyncHooks(this.nv);
@@ -3777,9 +3759,8 @@ export class ScanPreviewModule {
       
       this.currentScanName = name;
       this.nv.drawScene();
-      
-      // Update label: full filename without extension (e.g. scan_1_gre_seq)
-      const labelName = (name || "scan").replace(/\.nii(\.gz)?$/i, '');
+
+      const labelName = this._shortScanLabel(name);
       this.updateLabel(labelName);
       
       // Trigger highlight effect when scan is loaded
@@ -3801,6 +3782,14 @@ export class ScanPreviewModule {
   updateLabel(text) {
     const label = this.container?.querySelector('.preview-label');
     if (label) label.textContent = text || this.labelDefault;
+  }
+
+  /** e.g. `scan_3_mr0_rare_2d_seq_sim_mr0.nii` → `scan_3` */
+  _shortScanLabel(name) {
+    if (!name) return '';
+    const base = String(name).replace(/\.nii(\.gz)?$/i, '');
+    const m = base.match(/^(scan_\d+)/i);
+    return m ? m[1] : base;
   }
 }
 
@@ -3838,7 +3827,7 @@ export class ComparePane {
       this.module = new ScanPreviewModule({
         role: 'compare',
         labelDefault: 'Compare',
-        hint: 'Synced · V views · Ctrl+dbl-click close',
+        hint: 'Ctrl+dbl-click close',
       });
       this.module.render('nv-compare-container');
       await this.module.waitForInit();
@@ -3956,6 +3945,5 @@ export async function initNiivueApp(containerId, options = {}) {
     nv: module.nv,
     loadUrl: module.loadUrl.bind(module),
     loadBundledDefaultPhantom: module.loadBundledDefaultPhantom.bind(module),
-    setStatus: module.setStatus.bind(module),
   };
 }

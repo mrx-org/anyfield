@@ -3,7 +3,7 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Any-Field Scanner v0.8.0 </title>
+    <title>Any-Field Scanner</title>
     
     <!-- Dependencies for Niivue App -->
     <script src="https://cdn.jsdelivr.net/pyodide/v0.29.0/full/pyodide.js"></script>
@@ -262,7 +262,7 @@
     <div class="lab-shell">
         <header>
             <div class="header-content">
-                <div class="header-title">Any-Field <span class="header-subtitle">Scanner</span><span class="app-version" aria-label="Version v0.8.0">v0.8.0</span></div>
+                <div class="header-title">Any-Field <span class="header-subtitle">Scanner</span><span class="app-version" aria-label="Version v0.8.1">v0.8.1</span></div>
                 <button type="button" id="credits-btn" class="credits-btn" title="Credits &amp; dependencies"><i class="bi bi-award" aria-hidden="true"></i></button>
             </div>
         </header>
@@ -307,7 +307,7 @@
                     <span class="footer-card-dot-sep" aria-hidden="true">•</span>
                     <span class="footer-card-tab" data-card="1">prot</span>
                     <span class="footer-card-dot-sep" aria-hidden="true">•</span>
-                    <span class="footer-card-tab" data-card="2">scan</span>
+                    <span class="footer-card-tab" data-card="2">scans</span>
                 </div>
                 <div id="slot-footer">
                     <div id="col-tree" class="footer-col"></div>
@@ -338,7 +338,7 @@
     <script type="module">
         import { NiivueModule, ScanPreviewModule, ComparePane } from './niivue_app.js';
         import { MainHistogramController, PreviewJointHistogramController } from './hist_panel/histogram-clim-panel.js';
-        import { SequenceExplorer } from './pypulseq/seq_explorer.js';
+        import { SequenceExplorer, patchSequencePlotFromCode } from './pypulseq/seq_explorer.js';
         import { ScanModule } from './scan_zero/scan_module.js?v=5';
         import { eventHub } from './event_hub.js';
 
@@ -612,18 +612,26 @@
 
         async function bootstrap() {
             try {
+                // Prefetch plot utils while Pyodide downloads (patch runs inside pyodidePromise, under loader).
+                const plotUtilsFetch = fetch(`pypulseq/seq_plot_utils.py?${Date.now()}`).then(async (r) => {
+                    if (!r.ok) throw new Error(`seq_plot_utils.py: ${r.status}`);
+                    return r.text();
+                });
+
                 // A. START PYODIDE & PACKAGES IN BACKGROUND (do not await)
                 const pyodidePromise = (async () => {
                     const py = await loadPyodide({
                         indexURL: "https://cdn.jsdelivr.net/pyodide/v0.29.0/full/",
                     });
                     await py.loadPackage(['numpy', 'micropip', 'matplotlib', 'scipy']);
+                    const plotUtilsCode = await plotUtilsFetch;
                     // Pin pypulseq: conseq rejects Pulseq file format 1.5.x; 1.4.2.post2 writes an older version line.
                     // deps=False: numpy already loaded; matplotlib/scipy loaded on demand — skips ~3s of transitive dep downloads.
                     await py.runPythonAsync(`
 import micropip
 await micropip.install('pypulseq==1.4.2.post2', deps=False)
 `);
+                    await patchSequencePlotFromCode(py, plotUtilsCode);
                     return py;
                 })();
 
@@ -643,6 +651,7 @@ await micropip.install('pypulseq==1.4.2.post2', deps=False)
                         }
                     }
                 });
+                explorer._plotStackReady = pyodidePromise;
                 explorer.renderTree('seq-tree-container');
                 explorer.renderParams('seq-params-container');
                 await explorer.renderPlot('seq-plot-container');
@@ -694,6 +703,12 @@ await micropip.install('pypulseq==1.4.2.post2', deps=False)
                         return window.matchMedia('(max-width: 768px)').matches ||
                             document.querySelector('.lab-shell')?.classList.contains('compact-mode');
                     }
+                    window.goToFooterCard = (cardIndex) => {
+                        if (!isCompactLayout()) return;
+                        const i = Math.max(0, Math.min(2, cardIndex));
+                        const cardWidth = footer.scrollWidth / 3;
+                        footer.scrollTo({ left: i * cardWidth, behavior: 'smooth' });
+                    };
                     const updateActive = () => {
                         const cardWidth = footer.scrollWidth / 3;
                         const idx = Math.round(footer.scrollLeft / cardWidth);
@@ -798,7 +813,7 @@ await micropip.install('pypulseq==1.4.2.post2', deps=False)
                     const configCode = await configPromise;
                     await Promise.all([
                         nvModule.initPyodide(),
-                        explorer.loadSourcesFromConfig(configCode)
+                        explorer.loadSourcesFromConfig(configCode),
                     ]);
                     if (nvModule._pendingPhantomVfs) {
                         const { jsonFile, niftiFiles } = nvModule._pendingPhantomVfs;
@@ -811,14 +826,8 @@ await micropip.install('pypulseq==1.4.2.post2', deps=False)
                     }
                     nvModule.updateJsonTab();
                     hideLoaderAndShowFooter();
-                    // Phantom and plot stack finish in background (viewer shows waiting state via CSS until phantom ready)
+                    // Default phantom fetch/render may still finish in background
                     phantomReady.catch(() => {});
-                    // Plot stack (matplotlib + optimized plot) non-blocking; await in explorer when user runs first plot
-                    explorer._plotStackReady = pyodide.loadPackage('matplotlib')
-                        .then(() => explorer.installOptimizedPlotFunction())
-                        .catch((e) => {
-                            console.warn('Plot stack load failed:', e);
-                        });
                 }).catch(async (e) => {
                     console.error("Pyodide/background setup failed:", e);
                     hideLoaderAndShowFooter();

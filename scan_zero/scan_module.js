@@ -11,6 +11,15 @@ const TOOL_FLY_HOSTS = [TOOL_CONSEQ, TOOL_TRAJEX, TOOL_RAPISIM, TOOL_MR0SIM].map
     (url) => new URL(url).hostname,
 );
 
+const PIPELINE_STAGES = ['prep', 'conseq', 'trajex', 'sim', 'recon'];
+
+/** Footer swipe layout (viewport ≤768px or OPTIONS → Compact). */
+export function isCompactFooterLayout() {
+    if (typeof window === 'undefined') return false;
+    return window.matchMedia('(max-width: 768px)').matches ||
+        !!document.querySelector('.lab-shell')?.classList.contains('compact-mode');
+}
+
 /** True when URL has ?pro=1 (or true/yes); matches index.html `window.pro`. */
 export function isProUser() {
     if (typeof window !== 'undefined' && window.pro) return true;
@@ -55,7 +64,6 @@ export class ScanModule {
         eventHub.on('sequenceSelected', (data) => {
             this.currentSequence = data;
             console.log("ScanModule: Received Sequence", data.name);
-            this.updateHeader();
         });
         
         // Listen for FOV changes from NiivueModule
@@ -87,9 +95,6 @@ export class ScanModule {
                          SCAN<span class="icon">▶▶</span>
                     </button>
                     ` : ''}
-                    <div class="active-info">
-                        Ready: <span id="ready-seq-name">${this.currentSequence ? (this.currentSequence.displayName || this.currentSequence.name) : 'None'}</span>
-                    </div>
                 </div>
                 <div class="scan-queue" id="scan-queue-list">
                     <div class="queue-empty">Queue is empty</div>
@@ -105,12 +110,58 @@ export class ScanModule {
         
         // Make this instance available globally for UI callbacks if needed
         window.scanModule = this;
+        this._syncMobileScanControls();
     }
 
-    updateHeader() {
-        if (!this.container) return;
-        const el = this.container.querySelector('#ready-seq-name');
-        if (el) el.textContent = this.currentSequence ? (this.currentSequence.displayName || this.currentSequence.name) : 'None';
+    _getActiveScanJob() {
+        return this.queue.find((j) => j.status === 'scanning') || null;
+    }
+
+    _syncMobileScanControls() {
+        const wrap = document.getElementById('seq-mobile-run-btns');
+        if (!wrap) return;
+        const statusSlot = wrap.querySelector('#seq-mobile-pipeline-status');
+        if (!isCompactFooterLayout()) {
+            wrap.classList.remove('is-busy');
+            wrap.querySelectorAll('.scan-btn-compact').forEach((btn) => {
+                btn.disabled = false;
+            });
+            if (statusSlot) {
+                statusSlot.innerHTML = '';
+                statusSlot.hidden = true;
+                statusSlot.setAttribute('aria-hidden', 'true');
+            }
+            return;
+        }
+        const active = this._getActiveScanJob();
+        const busy = !!active;
+        wrap.classList.toggle('is-busy', busy);
+        wrap.querySelectorAll('.scan-btn-compact').forEach((btn) => {
+            btn.disabled = busy;
+        });
+        if (!statusSlot) return;
+        if (!busy) {
+            statusSlot.innerHTML = '';
+            statusSlot.hidden = true;
+            statusSlot.setAttribute('aria-hidden', 'true');
+            return;
+        }
+        statusSlot.hidden = false;
+        statusSlot.setAttribute('aria-hidden', 'false');
+        const s = active.pipelineStage ?? 0;
+        const crop = !!active.cropOnly;
+        let ring = statusSlot.querySelector('.scan-pipeline-progress');
+        if (!ring) {
+            statusSlot.innerHTML = this._pipelineProgressHtml(s, crop);
+            return;
+        }
+        ring.style.setProperty('--stage', s);
+        ring.dataset.stage = String(s);
+        ring.classList.toggle('is-crop', crop);
+        const label = crop ? 'crop' : PIPELINE_STAGES[s];
+        ring.title = label;
+        ring.setAttribute('aria-valuenow', String(s));
+        ring.setAttribute('aria-label', label);
     }
 
     async startCrop() {
@@ -250,6 +301,7 @@ export class ScanModule {
         }
 
         job.status = 'scanning';
+        job.pipelineStage = 0;
         this.updateQueueUI();
 
         try {
@@ -878,6 +930,7 @@ if os.path.exists(_p):
         const simToolUrl = job.simToolUrl || TOOL_RAPISIM;
         this._simPipelineJob = job;
         job.status = 'scanning';
+        job.pipelineStage = 0;
         this.updateQueueUI();
         const _tPipeline = performance.now();
         try {
@@ -969,6 +1022,7 @@ if os.path.exists(_p):
             );
             console.log(`[SIM] TOOL_CONSEQ: ${(performance.now()-_t4).toFixed(0)}ms`);
             if (seq?.Error || seq?.err) throw new Error(seq.Error || seq.err || 'conseq failed');
+            this._setPipelineStage(job, 1);
             const ev = seq?.TypedList?.InstantSeqEvent;
             const events = ev
                 ? { TypedList: { InstantSeqEvent: ev } }
@@ -982,6 +1036,7 @@ if os.path.exists(_p):
                 'trajex',
             );
             console.log(`[SIM] TOOL_TRAJEX: ${(performance.now()-_t5).toFixed(0)}ms`);
+            this._setPipelineStage(job, 2);
             const _t5b = performance.now();
             const signalResult = await this._callTool(
                 simToolUrl,
@@ -992,6 +1047,7 @@ if os.path.exists(_p):
             const traj = this._trajectoryFromResult(trajResult);
             const signal = this._signalFromResult(signalResult);
             if (!signal?.length) throw new Error(`${job.noSignalName || 'Simulation'} returned no signal.`);
+            this._setPipelineStage(job, 3);
 
             // 5) PyNUFFT recon: reconRef was built up-front from the same frozen fovSnapshot as
             // the phantom ref (step 2); no late re-read of the live FOV sliders here.
@@ -1055,6 +1111,7 @@ _recon.run_sim_recon(
             if (recoPathRes?.destroy) recoPathRes.destroy();
             const recoBytes = nvMod.pyodide.FS.readFile(String(recoPath));
             try { nvMod.pyodide.FS.unlink(String(recoPath)); } catch (_) {}
+            this._setPipelineStage(job, 4);
 
             // 7) show in Niivue (scan-like naming/path)
             job.niftiUrl = URL.createObjectURL(new Blob([recoBytes], { type: "application/octet-stream" }));
@@ -1074,6 +1131,31 @@ _recon.run_sim_recon(
         this.updateQueueUI();
     }
 
+    /** 0=⅛ queued; stages 1–4 advance when conseq/trajex/sim/recon each finish */
+    _setPipelineStage(job, stage) {
+        if (!job) return;
+        const s = Math.max(0, Math.min(4, Number(stage) || 0));
+        job.pipelineStage = s;
+        const el = this.container?.querySelector(`.queue-item[data-id="${job.id}"] .scan-pipeline-progress`);
+        if (el) {
+            el.style.setProperty('--stage', s);
+            el.dataset.stage = String(s);
+            const label = PIPELINE_STAGES[s];
+            el.title = label;
+            el.setAttribute('aria-valuenow', String(s));
+            el.setAttribute('aria-label', label);
+        } else {
+            this.updateQueueUI();
+        }
+        if (job.status === 'scanning') this._syncMobileScanControls();
+    }
+
+    _pipelineProgressHtml(stage = 0, crop = false) {
+        const s = Math.max(0, Math.min(4, Number(stage) || 0));
+        const label = crop ? 'crop' : PIPELINE_STAGES[s];
+        return `<div class="scan-pipeline-progress${crop ? ' is-crop' : ''}" style="--stage:${s}" data-stage="${s}" title="${label}" role="progressbar" aria-valuemin="0" aria-valuemax="4" aria-valuenow="${s}" aria-label="${label}"></div>`;
+    }
+
     updateQueueUI() {
         if (!this.container) return;
         const list = this.container.querySelector('#scan-queue-list');
@@ -1081,6 +1163,7 @@ _recon.run_sim_recon(
         
         if (this.queue.length === 0) {
             list.innerHTML = '<div class="queue-empty">Queue is empty</div>';
+            this._syncMobileScanControls();
             return;
         }
 
@@ -1091,7 +1174,9 @@ _recon.run_sim_recon(
                     <div class="item-meta">${job.timestamp}</div>
                 </div>
                 <div class="item-actions">
-                    ${job.status === 'scanning' ? '<div class="scan-spinner"></div>' : ''}
+                    ${job.status === 'scanning'
+                        ? this._pipelineProgressHtml(job.pipelineStage ?? 0, !!job.cropOnly)
+                        : ''}
                     ${job.status === 'done' ? `
                         <div class="action-row">
                             <button class="view-btn" title="View on main + preview (B). Ctrl+click: compare pane (C).">VIEW SCAN</button>
@@ -1149,6 +1234,8 @@ _recon.run_sim_recon(
                 this.removeJob(jobId);
             };
         });
+
+        this._syncMobileScanControls();
     }
 
     removeJob(jobId) {

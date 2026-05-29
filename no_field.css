@@ -101,6 +101,15 @@
 /* === SHARED COMPONENT CLASSES === */
 
 /* Volume Row (used in niivue_app.js) */
+.scan-volume-list-empty {
+    padding: 20px;
+    text-align: center;
+    color: var(--muted);
+    font-size: var(--font-size-md, 12px);
+    font-style: italic;
+    white-space: pre-line;
+}
+
 .volume-row {
     background: rgba(255, 255, 255, 0.02);
     border: 1px solid var(--border);
@@ -748,6 +757,12 @@
 .lab-shell.compact-mode #slot-footer #col-tree { order: 1; }
 .lab-shell.compact-mode #slot-footer #col-params { order: 2; }
 .lab-shell.compact-mode #slot-footer #col-scan { order: 3; }
+.lab-shell.compact-mode #seq-params-section .seq-mobile-run-btns {
+    display: flex;
+}
+.lab-shell.compact-mode .scan-module .scan-header {
+    display: none !important;
+}
 .lab-shell.compact-mode #slot-footer .footer-col,
 .lab-shell.compact-mode #slot-footer #col-tree,
 .lab-shell.compact-mode #slot-footer #col-scan,
