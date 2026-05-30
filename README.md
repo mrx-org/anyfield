@@ -1,6 +1,6 @@
 # Niivue minimal app (zero-install)
 
-**Version:** `v0.9.0`
+**Version:** `v0.9.1`
 
 This is a **minimal Niivue viewer** implemented as a single `viewer.html` file.
 
@@ -85,6 +85,10 @@ For more insights see insights SPEC_no_field.md.
 
 ## Release notes
 
+
+**v0.9.1**
+- **Paper Plot**: Self-contained Niivue/clim helpers (`paper_plot_niivue.js`); no longer imports `hist_panel/histogram-clim-panel.js`.
+- **Histogram**: Restored `installFrameAwareContrastDrag` export for 4D contrast drag in the main viewer.
 
 **v0.9.0**
 - **Paper Plot (experimental)**: New full-screen figure builder — multi-panel Niivue viewers, scan/diff expressions, row/global linking, SVG export, auto captions, curated colormaps. Header grid button.

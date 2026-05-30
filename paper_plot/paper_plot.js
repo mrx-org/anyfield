@@ -1,7 +1,7 @@
 /**
  * Paper Plot — figure builder overlay.
  */
-import { promptClimEdit } from "../hist_panel/histogram-clim-panel.js";
+import { promptClimEdit } from "./paper_plot_niivue.js";
 import { PaperPanel } from "./paper_plot_panel.js";
 import { PaperPlotSync, capturePanelAtNativeResolution } from "./paper_plot_sync.js";
 import {

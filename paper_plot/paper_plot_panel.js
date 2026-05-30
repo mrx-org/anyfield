@@ -11,7 +11,7 @@ import {
   installFrameAwareContrastDrag,
   volumeIs4D,
   syncVolumeClimsToCurrent4DFrame,
-} from "../hist_panel/histogram-clim-panel.js";
+} from "./paper_plot_niivue.js";
 import { resolvePanelLoad, revokeBlobUrl } from "./paper_plot_expr.js";
 import { getPanelCaptionDetail, getAxialAspectRatio } from "./paper_plot_expr.js";
 import { registerPaperPlotColormaps, updatePanelState } from "./paper_plot_figure.js";
