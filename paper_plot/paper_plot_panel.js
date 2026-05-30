@@ -14,6 +14,12 @@ import {
   updatePanelState,
   volumeIs4D,
 } from "./paper_plot_figure.js";
+import {
+  getAxialAspectRatio,
+  getPanelCaptionDetail,
+  resolvePanelLoad,
+  revokeBlobUrl,
+} from "./paper_plot_expr.js";
 
 const PAPER_NV_OPTS = {
   logging: false,
