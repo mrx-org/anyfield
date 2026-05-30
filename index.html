@@ -262,8 +262,11 @@
     <div class="lab-shell">
         <header>
             <div class="header-content">
-                <div class="header-title">Any-Field <span class="header-subtitle">Scanner</span><span class="app-version" aria-label="Version v0.8.1">v0.8.1</span></div>
-                <button type="button" id="credits-btn" class="credits-btn" title="Credits &amp; dependencies"><i class="bi bi-award" aria-hidden="true"></i></button>
+                <div class="header-title">Any-Field <span class="header-subtitle">Scanner</span><span class="app-version" aria-label="Version v0.9.0">v0.9.0</span></div>
+                <div class="header-actions">
+                    <button type="button" id="paper-plot-btn" class="credits-btn paper-plot-launch-btn" title="Paper plot figure builder"><i class="bi bi-grid-3x3-gap" aria-hidden="true"></i></button>
+                    <button type="button" id="credits-btn" class="credits-btn" title="Credits &amp; dependencies"><i class="bi bi-award" aria-hidden="true"></i></button>
+                </div>
             </div>
         </header>
         <div id="credits-overlay" class="credits-overlay" hidden>
@@ -335,6 +338,7 @@
         <div id="scan-module-container" class="scan-module"></div>
     </div>
 
+    <script type="module" src="paper_plot/launch.js?v=5"></script>
     <script type="module">
         import { NiivueModule, ScanPreviewModule, ComparePane } from './niivue_app.js';
         import { MainHistogramController, PreviewJointHistogramController } from './hist_panel/histogram-clim-panel.js';

@@ -8,6 +8,8 @@
 
 -- add phantom and fov and maybe prot setting to url
 
+-- crop for large slices is wrong, it takes the center slice and does not interpolate.
+
 -- save and load fov + phantom from/to seq file
    mini-plan:
    1) write metadata into `seq.definitions` on scan prep with `anyfield_` prefix (e.g. `anyfield_fov_affine_ras_4x4`, `anyfield_phantom_json_name`, optional `anyfield_phantom_hash`).

@@ -1,6 +1,6 @@
 # Niivue minimal app (zero-install)
 
-**Version:** `v0.8.1`
+**Version:** `v0.9.0`
 
 This is a **minimal Niivue viewer** implemented as a single `viewer.html` file.
 
@@ -81,10 +81,13 @@ Combine with an explicit protocol deep link:
 http://localhost:8000/?s_category=builtin&s_file=seq_pulseq_interpreter&s_func=seq_pulseq_interpreter&seq_url=<encoded-url>
 ```
 
-For more insights see insights SPEC_no_field.md
+For more insights see insights SPEC_no_field.md. 
 
 ## Release notes
 
+
+**v0.9.0**
+- **Paper Plot (experimental)**: New full-screen figure builder — multi-panel Niivue viewers, scan/diff expressions, row/global linking, SVG export, auto captions, curated colormaps. Header grid button.
 
 **v0.8.1**
 - **Mobile / Compact footer**: Compact **CROP** / **SCAN▶** / **SCAN▶▶** under Protocol; pipeline ring + greyed buttons while a scan runs (desktop RUN unchanged). Footer tab **scans**; picking a sequence jumps to **prot**.
