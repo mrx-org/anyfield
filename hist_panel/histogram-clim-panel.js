@@ -172,6 +172,37 @@ export function syncVolumeClimsToCurrent4DFrame(vol, nv, frameIdxOverride = null
   return { calMin: vol.cal_min, calMax: vol.cal_max };
 }
 
+/**
+ * Niivue right-drag contrast (`calculateNewRange`) indexes img as 3D without a 4D
+ * frame offset, so it always samples frame 0. Temporarily point vol.img at the
+ * active frame slab during the calculation, then restore the full buffer.
+ */
+export function installFrameAwareContrastDrag(nv) {
+  if (!nv || nv._frameAwareRangeHook || typeof nv.calculateNewRange !== "function") return;
+  nv._frameAwareRangeHook = true;
+  const origCalcRange = nv.calculateNewRange.bind(nv);
+  nv.calculateNewRange = (opts = {}) => {
+    const volIdx = opts.volIdx ?? 0;
+    const vol = nv.volumes?.[volIdx];
+    if (vol?.img && volumeIs4D(vol)) {
+      const nVox = getNVox3D(vol);
+      const nFr = vol.nFrame4D ?? (nVox > 0 ? Math.max(1, Math.floor(vol.img.length / nVox)) : 1);
+      const fi = Math.min(Math.max(0, vol.frame4D ?? 0), Math.max(0, nFr - 1));
+      const start = fi * nVox;
+      if (nVox > 0 && fi > 0 && start + nVox <= vol.img.length) {
+        const savedImg = vol.img;
+        vol.img = savedImg.subarray(start, start + nVox);
+        try {
+          return origCalcRange(opts);
+        } finally {
+          vol.img = savedImg;
+        }
+      }
+    }
+    return origCalcRange(opts);
+  };
+}
+
 export function computeLogHistogramBins(vol, voxelView, S, BINS, gMin, gMax, barHOut) {
   const gRange = gMax - gMin || 1;
   const invBin = BINS / gRange;
