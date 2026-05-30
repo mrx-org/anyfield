@@ -87,7 +87,7 @@ For more insights see insights SPEC_no_field.md.
 
 
 **v0.9.1**
-- **Paper Plot**: Self-contained Niivue/clim helpers (`paper_plot_niivue.js`); no longer imports `hist_panel/histogram-clim-panel.js`.
+- **Paper Plot**: Niivue/clim helpers merged into `paper_plot_figure.js`; no longer imports `hist_panel/histogram-clim-panel.js`.
 - **Histogram**: Restored `installFrameAwareContrastDrag` export for 4D contrast drag in the main viewer.
 
 **v0.9.0**

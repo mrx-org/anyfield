@@ -17,9 +17,8 @@ Lazy-loaded via `launch.js` so a load failure does not break the main scanner.
 |------|------|
 | `launch.js` | Header button bootstrap; dynamic import |
 | `paper_plot.js` | Main overlay, export, debug checks |
-| `paper_plot_figure.js` | Grid layout, SVG chrome, figure state, colormaps |
+| `paper_plot_figure.js` | Grid layout, SVG chrome, figure state, colormaps, Niivue/clim helpers |
 | `paper_plot_expr.js` | Scan/diff expressions, captions |
 | `paper_plot_panel.js` | Per-panel Niivue viewer |
-| `paper_plot_niivue.js` | Volume/clim helpers (self-contained) |
 | `paper_plot_sync.js` | Link position/clims; native-res capture |
 | `paper_plot.css` | Overlay styles |

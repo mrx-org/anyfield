@@ -706,3 +706,182 @@ export function appendImage(parent, rect, href) {
   parent.appendChild(img);
   return img;
 }
+
+// ── Niivue volume helpers (no hist_panel dependency) ─────────────────────────
+
+/** @returns {Promise<{ calMin: number, calMax: number } | null>} */
+export function promptClimEdit({
+  calMin,
+  calMax,
+  decimals = 2,
+  title = "Intensity window",
+  container = document.body,
+  zIndex,
+}) {
+  return new Promise((resolve) => {
+    const overlay = document.createElement("div");
+    overlay.className = "clim-edit-dialog-overlay";
+    if (Number.isFinite(zIndex)) overlay.style.zIndex = String(zIndex);
+    overlay.innerHTML = `
+      <div class="clim-edit-dialog" role="dialog" aria-label="${title}">
+        <div class="clim-edit-dialog-title"></div>
+        <div class="clim-edit-dialog-fields">
+          <label class="clim-edit-field clim-edit-min"><span>Min</span><input type="number" step="any" class="clim-edit-in-min" /></label>
+          <label class="clim-edit-field clim-edit-max"><span>Max</span><input type="number" step="any" class="clim-edit-in-max" /></label>
+        </div>
+        <div class="clim-edit-dialog-actions">
+          <button type="button" class="btn clim-edit-cancel">Cancel</button>
+          <button type="button" class="btn primary clim-edit-ok">Apply</button>
+        </div>
+      </div>`;
+    overlay.querySelector(".clim-edit-dialog-title").textContent = title;
+
+    const inMin = overlay.querySelector(".clim-edit-in-min");
+    const inMax = overlay.querySelector(".clim-edit-in-max");
+    inMin.value = Number(calMin).toFixed(decimals);
+    inMax.value = Number(calMax).toFixed(decimals);
+
+    const finish = (ok) => {
+      overlay.remove();
+      document.removeEventListener("keydown", onKey);
+      if (!ok) {
+        resolve(null);
+        return;
+      }
+      const mn = parseFloat(inMin.value);
+      const mx = parseFloat(inMax.value);
+      resolve(Number.isFinite(mn) && Number.isFinite(mx) ? { calMin: mn, calMax: mx } : null);
+    };
+    const onKey = (e) => {
+      if (e.key === "Escape") finish(false);
+      if (e.key === "Enter") finish(true);
+    };
+
+    overlay.querySelector(".clim-edit-cancel").onclick = () => finish(false);
+    overlay.querySelector(".clim-edit-ok").onclick = () => finish(true);
+    overlay.addEventListener("click", (e) => {
+      if (e.target === overlay) finish(false);
+    });
+    document.addEventListener("keydown", onKey);
+    container.appendChild(overlay);
+    inMin.focus();
+    inMin.select();
+  });
+}
+
+export function volumeIs4D(volume) {
+  if (volume.nFrame4D != null && volume.nFrame4D > 1) return true;
+  const d = volume.hdr?.dims;
+  return !!(d && d[4] != null && d[4] > 1);
+}
+
+export function getNVox3D(volume) {
+  if (volume.nVox3D) return volume.nVox3D;
+  const d = volume.hdr?.dims;
+  return !d || d.length < 4 ? 0 : d[1] * d[2] * d[3];
+}
+
+export function voxelBufferForDisplayedLayer(volume) {
+  const img = volume.img;
+  if (!img) throw new Error("volume has no img buffer");
+  const nVox = getNVox3D(volume);
+  if (!nVox) return img;
+  const nFr =
+    volume.nFrame4D ??
+    (img.length >= nVox ? Math.max(1, Math.floor(img.length / nVox)) : 1);
+  if (nFr <= 1) return img;
+  const fi = Math.min(Math.max(0, volume.frame4D ?? 0), nFr - 1);
+  const start = fi * nVox;
+  return img.subarray(start, Math.min(start + nVox, img.length));
+}
+
+function computeSlabDataRange(vol, useRobustFallback = true) {
+  if (!vol?.img) return { lo: 0, hi: 1 };
+  const view = voxelBufferForDisplayedLayer(vol);
+  let lo = Infinity;
+  let hi = -Infinity;
+  const stride = Math.max(1, Math.floor(view.length / 400_000));
+  for (let i = 0; i < view.length; i += stride) {
+    const v = vol.intensityRaw2Scaled(view[i]);
+    if (Number.isFinite(v)) {
+      if (v < lo) lo = v;
+      if (v > hi) hi = v;
+    }
+  }
+  if (Number.isFinite(lo) && Number.isFinite(hi) && lo < hi) return { lo, hi };
+  if (useRobustFallback) {
+    return {
+      lo: Number.isFinite(vol.robust_min) ? vol.robust_min : vol.global_min,
+      hi: Number.isFinite(vol.robust_max) ? vol.robust_max : vol.global_max,
+    };
+  }
+  return { lo: vol.global_min, hi: vol.global_max };
+}
+
+function computeSlabRobustClims(vol, lowPct = 0.02, highPct = 0.98) {
+  const view = voxelBufferForDisplayedLayer(vol);
+  const samples = [];
+  const stride = Math.max(1, Math.floor(view.length / 400_000));
+  for (let i = 0; i < view.length; i += stride) {
+    const v = vol.intensityRaw2Scaled(view[i]);
+    if (Number.isFinite(v)) samples.push(v);
+  }
+  if (!samples.length) return { calMin: vol.cal_min, calMax: vol.cal_max };
+  samples.sort((a, b) => a - b);
+  const lo = samples[Math.floor(samples.length * lowPct)] ?? samples[0];
+  const hi =
+    samples[Math.min(samples.length - 1, Math.floor(samples.length * highPct))] ??
+    samples[samples.length - 1];
+  if (!Number.isFinite(lo) || !Number.isFinite(hi) || lo >= hi) {
+    return { calMin: vol.cal_min, calMax: vol.cal_max };
+  }
+  return { calMin: lo, calMax: hi };
+}
+
+export function syncVolumeClimsToCurrent4DFrame(vol, nv, frameIdxOverride = null) {
+  if (!vol?.img) return { calMin: vol?.cal_min ?? 0, calMax: vol?.cal_max ?? 1 };
+  const hasOverride = Number.isFinite(frameIdxOverride);
+  const targetFrame = hasOverride ? Math.max(0, Math.floor(frameIdxOverride)) : (vol.frame4D ?? 0);
+  if (volumeIs4D(vol)) {
+    vol.frame4D = targetFrame;
+    const frameRange = computeSlabDataRange(vol, false);
+    if (Number.isFinite(frameRange.lo) && Number.isFinite(frameRange.hi) && frameRange.lo < frameRange.hi) {
+      vol.cal_min = frameRange.lo;
+      vol.cal_max = frameRange.hi;
+    } else {
+      const r = computeSlabRobustClims(vol);
+      vol.cal_min = r.calMin;
+      vol.cal_max = r.calMax;
+    }
+  }
+  nv?.updateGLVolume?.();
+  nv?.drawScene?.();
+  return { calMin: vol.cal_min, calMax: vol.cal_max };
+}
+
+/** Patch Niivue contrast drag so 4D volumes use the active frame, not frame 0. */
+export function installFrameAwareContrastDrag(nv) {
+  if (!nv || nv._frameAwareRangeHook || typeof nv.calculateNewRange !== "function") return;
+  nv._frameAwareRangeHook = true;
+  const origCalcRange = nv.calculateNewRange.bind(nv);
+  nv.calculateNewRange = (opts = {}) => {
+    const volIdx = opts.volIdx ?? 0;
+    const vol = nv.volumes?.[volIdx];
+    if (vol?.img && volumeIs4D(vol)) {
+      const nVox = getNVox3D(vol);
+      const nFr = vol.nFrame4D ?? (nVox > 0 ? Math.max(1, Math.floor(vol.img.length / nVox)) : 1);
+      const fi = Math.min(Math.max(0, vol.frame4D ?? 0), Math.max(0, nFr - 1));
+      const start = fi * nVox;
+      if (nVox > 0 && fi > 0 && start + nVox <= vol.img.length) {
+        const savedImg = vol.img;
+        vol.img = savedImg.subarray(start, start + nVox);
+        try {
+          return origCalcRange(opts);
+        } finally {
+          vol.img = savedImg;
+        }
+      }
+    }
+    return origCalcRange(opts);
+  };
+}

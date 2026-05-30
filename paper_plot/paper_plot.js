@@ -1,15 +1,6 @@
 /**
  * Paper Plot — figure builder overlay.
  */
-import { promptClimEdit } from "./paper_plot_niivue.js";
-import { PaperPanel } from "./paper_plot_panel.js";
-import { PaperPlotSync, capturePanelAtNativeResolution } from "./paper_plot_sync.js";
-import {
-  buildScanLabelRefs,
-  getPanelCaptionDetail,
-  getProtocolTooltipForScanNumber,
-  parsePanelExpr,
-} from "./paper_plot_expr.js";
 import {
   GRID_PRESETS,
   MAX_COLS,
@@ -28,6 +19,7 @@ import {
   DEFAULT_SCAN_COLORMAP,
   PAPER_COLORMAP_ORDER,
   resolvePaperColormapOptions,
+  promptClimEdit,
   SVG_NS,
   appendCaption,
   appendImage,
@@ -41,6 +33,14 @@ import {
   setSvgRootSize,
   updatePanelChrome,
 } from "./paper_plot_figure.js";
+import { PaperPanel } from "./paper_plot_panel.js";
+import { PaperPlotSync, capturePanelAtNativeResolution } from "./paper_plot_sync.js";
+import {
+  buildScanLabelRefs,
+  getPanelCaptionDetail,
+  getProtocolTooltipForScanNumber,
+  parsePanelExpr,
+} from "./paper_plot_expr.js";
 
 export class PaperPlotModule {
   constructor() {

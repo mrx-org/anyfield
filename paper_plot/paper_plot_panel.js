@@ -9,12 +9,11 @@ import {
 } from "https://unpkg.com/@niivue/niivue@0.65.0/dist/index.js";
 import {
   installFrameAwareContrastDrag,
-  volumeIs4D,
+  registerPaperPlotColormaps,
   syncVolumeClimsToCurrent4DFrame,
-} from "./paper_plot_niivue.js";
-import { resolvePanelLoad, revokeBlobUrl } from "./paper_plot_expr.js";
-import { getPanelCaptionDetail, getAxialAspectRatio } from "./paper_plot_expr.js";
-import { registerPaperPlotColormaps, updatePanelState } from "./paper_plot_figure.js";
+  updatePanelState,
+  volumeIs4D,
+} from "./paper_plot_figure.js";
 
 const PAPER_NV_OPTS = {
   logging: false,

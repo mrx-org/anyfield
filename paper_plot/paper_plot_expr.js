@@ -2,7 +2,7 @@
  * Scan / diff expression parsing and volume resolution for paper plot panels.
  */
 import { NVImage } from "https://unpkg.com/@niivue/niivue@0.65.0/dist/index.js";
-import { getNVox3D, voxelBufferForDisplayedLayer } from "./paper_plot_niivue.js";
+import { getNVox3D, voxelBufferForDisplayedLayer } from "./paper_plot_figure.js";
 
 /** @typedef {{ type: 'scan', scanNum: number, phase: boolean }} ScanParsed */
 /** @typedef {{ type: 'diff', left: number, right: number, abs: boolean, reverse: boolean }} DiffParsed */

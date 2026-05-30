@@ -3,7 +3,7 @@
  * cannot break the scanner or leave a dead header button.
  */
 
-const MODULE_URL = "./paper_plot.js?v=43";
+const MODULE_URL = "./paper_plot.js?v=44";
 
 function isProUser() {
   if (typeof window !== "undefined" && window.pro) return true;
