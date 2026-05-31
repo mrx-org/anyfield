@@ -13,6 +13,41 @@ const TOOL_FLY_HOSTS = [TOOL_CONSEQ, TOOL_TRAJEX, TOOL_RAPISIM, TOOL_MR0SIM].map
 
 const PIPELINE_STAGES = ['prep', 'conseq', 'trajex', 'sim', 'recon'];
 
+/** Stable recon method tag stored in protocol TOML `[recon]`. */
+export const RECON_METHOD = 'anyfield-pynufft';
+
+/**
+ * Human scan title: `1. gre_seq` from queue job or `scan_<n>_<name>.nii.gz`.
+ */
+export function formatScanDisplayTitle(volName, job = null) {
+    if (job?.scanNumber != null && job?.name != null && String(job.name).trim()) {
+        return `${job.scanNumber}. ${job.name}`;
+    }
+    const m = String(volName || '').match(/^scan_(\d+)_(.*)\.nii(\.gz)?$/i);
+    if (m) {
+        return `${m[1]}. ${m[2].replace(/\.nii.*/, '')}`;
+    }
+    return String(volName || '').replace(/\.nii(\.gz)?$/i, '');
+}
+
+/** Sim backend registry — stable ids for TOML `[simulation].backend`. */
+export const SIM_BACKENDS = {
+    mr0sim: {
+        id: 'mr0sim',
+        label: 'MR0',
+        toolUrl: TOOL_MR0SIM,
+        reconBackend: 'mr0',
+        proOnly: false,
+    },
+    rapisim: {
+        id: 'rapisim',
+        label: 'Rapisim',
+        toolUrl: TOOL_RAPISIM,
+        reconBackend: 'rapisim',
+        proOnly: true,
+    },
+};
+
 /** Footer swipe layout (viewport ≤768px or OPTIONS → Compact). */
 export function isCompactFooterLayout() {
     if (typeof window === 'undefined') return false;
@@ -38,6 +73,8 @@ export class ScanModule {
         this.currentSequence = null;
         this.currentFov = null;
         this.scanCounter = 0;
+        /** Live protocol being edited in col-params; shown as top queue row until SCAN. */
+        this.draftJob = null;
         this._toolApiCall = null;
         /** Set during runSimPipeline for per-tool WebSocket log tagging */
         this._simPipelineJob = null;
@@ -60,15 +97,160 @@ export class ScanModule {
     }
 
     setupEventListeners() {
-        // Listen for sequence selection from SeqExplorer
         eventHub.on('sequenceSelected', (data) => {
-            this.currentSequence = data;
-            console.log("ScanModule: Received Sequence", data.name);
+            this._onSequenceSelected(data);
         });
-        
-        // Listen for FOV changes from NiivueModule
+
         eventHub.on('fov_changed', (data) => {
             this.currentFov = data;
+        });
+    }
+
+    _defaultDraftName(seq) {
+        return (seq?.displayName || seq?.name || 'Untitled').trim() || 'Untitled';
+    }
+
+    _draftProtocolLabel(seq) {
+        if (!seq) return '';
+        const explorer = window.seqExplorer;
+        const { fileName, functionName, source } = seq;
+        if (explorer && typeof explorer._getSeqDisplayFileStem === 'function') {
+            const isProtocol = source?.itemKind === 'protocol'
+                || (source?.path && source.path.startsWith('user/prot/'));
+            const stem = explorer._getSeqDisplayFileStem(fileName, source, isProtocol)
+                || this._defaultDraftName(seq);
+            return isProtocol ? stem : `${stem}:${functionName}`;
+        }
+        return `${this._defaultDraftName(seq)}:${functionName || ''}`;
+    }
+
+    /** Filesystem-safe segment for scan_<n>_<part>_*.nii.gz / .seq (scan number stays unique). */
+    _sanitizeScanBaseNamePart(name) {
+        let s = String(name || 'scan')
+            .replace(/[<>:"/\\|?*]/g, '_')
+            .replace(/\s+/g, '_')
+            .replace(/^\.+|\.+$/g, '')
+            .replace(/_{2,}/g, '_')
+            .replace(/^[\d]+_/, 'scan_');
+        if (!s) s = 'scan';
+        return s.slice(0, 48);
+    }
+
+    _hasReservedScanPrefix(name) {
+        return /^\d+_/.test(String(name || '').trim());
+    }
+
+    _escapeHtml(text) {
+        return String(text)
+            .replace(/&/g, '&amp;')
+            .replace(/</g, '&lt;')
+            .replace(/"/g, '&quot;');
+    }
+
+    _onSequenceSelected(data) {
+        this.currentSequence = data;
+        if (!data) {
+            this.draftJob = null;
+        } else {
+            this.draftJob = {
+                id: 'draft',
+                status: 'draft',
+                fileName: data.fileName,
+                functionName: data.functionName,
+                userName: this._defaultDraftName(data),
+                protocolLabel: this._draftProtocolLabel(data),
+            };
+        }
+        if (this.container) this.updateQueueUI();
+    }
+
+    /** Validate draft name before SCAN; returns trimmed label or null if invalid. */
+    _getValidatedDraftName() {
+        if (!this.draftJob) return null;
+        const raw = String(this.draftJob.userName || '').trim();
+        const label = raw || this._defaultDraftName(this.currentSequence);
+        if (this._hasReservedScanPrefix(label)) {
+            window.seqExplorer?.showReservedPrefixDialog?.();
+            return null;
+        }
+        this.draftJob.userName = label;
+        return label;
+    }
+
+    _draftRowHtml() {
+        const d = this.draftJob;
+        if (!d) return '';
+        const nextNum = this.scanCounter + 1;
+        const name = d.userName || this._defaultDraftName(this.currentSequence);
+        const meta = this._escapeHtml(d.protocolLabel || '');
+        return `
+            <div class="queue-item status-draft" data-id="draft">
+                <div class="item-main">
+                    <div class="item-title draft-item-title">
+                        <span class="draft-scan-num">${nextNum}.</span>
+                        <input type="text" class="draft-name-input" value="${this._escapeHtml(name)}" spellcheck="false" aria-label="Scan name" title="Name for the next scan (used in NIfTI and .seq filenames)" />
+                    </div>
+                    <div class="item-meta draft-protocol-meta">${meta}</div>
+                </div>
+                <div class="item-actions">
+                    <span class="draft-badge">preparing</span>
+                </div>
+            </div>`;
+    }
+
+    _bindDraftNameInput(list) {
+        const input = list.querySelector('.draft-name-input');
+        if (!input || !this.draftJob) return;
+        input.oninput = () => {
+            this.draftJob.userName = input.value;
+        };
+        input.onblur = () => {
+            let val = input.value.trim();
+            if (!val) val = this._defaultDraftName(this.currentSequence);
+            if (this._hasReservedScanPrefix(val)) {
+                window.seqExplorer?.showReservedPrefixDialog?.();
+                val = this._defaultDraftName(this.currentSequence);
+            }
+            this.draftJob.userName = val;
+            input.value = val;
+        };
+    }
+
+    _bindQueueItemActions(list) {
+        list.querySelectorAll('.view-btn').forEach(btn => {
+            btn.onclick = (e) => {
+                e.stopPropagation();
+                const jobId = btn.closest('.queue-item').dataset.id;
+                if (e.ctrlKey || e.metaKey) {
+                    this.loadJobToCompare(jobId);
+                } else {
+                    this.loadJob(jobId);
+                }
+            };
+        });
+
+        list.querySelectorAll('.view-seq-btn').forEach(btn => {
+            btn.onclick = (e) => {
+                e.stopPropagation();
+                const jobId = btn.closest('.queue-item').dataset.id;
+                this.viewSeq(jobId);
+            };
+        });
+
+        list.querySelectorAll('.dl-seq-btn').forEach(btn => {
+            btn.onclick = (e) => {
+                e.stopPropagation();
+                const jobId = btn.closest('.queue-item').dataset.id;
+                this.downloadSeq(jobId);
+            };
+        });
+
+        list.querySelectorAll('.remove-job-btn').forEach(btn => {
+            btn.onclick = (e) => {
+                e.stopPropagation();
+                const jobId = btn.closest('.queue-item').dataset.id;
+                this.removeJob(jobId);
+            };
         });
     }
 
@@ -198,21 +380,28 @@ export class ScanModule {
         await this.runCropScan(job);
     }
 
-    _enqueueSimJob({ baseSuffix, queueName, protocol, simToolUrl, simLogLabel, noSignalName }) {
+    _enqueueSimJob({ backendId, userName }) {
+        const backend = SIM_BACKENDS[backendId];
+        if (!backend) throw new Error(`Unknown sim backend: ${backendId}`);
         this.scanCounter++;
         const now = new Date();
         const pad = (n) => String(n).padStart(2, '0');
-        const seqSafeName = ((this.currentSequence.displayName || this.currentSequence.name) || "Sim").replace(/\s+/g, '_');
-        const baseName = `scan_${this.scanCounter}_${seqSafeName}_${baseSuffix}`;
+        const displayLabel = userName
+            || this.draftJob?.userName
+            || this._defaultDraftName(this.currentSequence);
+        const nameSafe = this._sanitizeScanBaseNamePart(displayLabel);
+        const baseName = `scan_${this.scanCounter}_${nameSafe}`;
         const job = {
             id: 'job_' + now.getTime(),
             scanNumber: this.scanCounter,
             baseName,
-            name: `${(this.currentSequence.displayName || this.currentSequence.name) || "Untitled"} (${queueName})`,
-            protocol,
-            simToolUrl,
-            simLogLabel,
-            noSignalName,
+            name: displayLabel,
+            simulation: {
+                backendId: backend.id,
+                backendLabel: backend.label,
+                toolUrl: backend.toolUrl,
+                reconBackend: backend.reconBackend,
+            },
             status: 'pending',
             timestamp: `${pad(now.getHours())}:${pad(now.getMinutes())}:${pad(now.getSeconds())}`,
             niftiUrl: null,
@@ -239,14 +428,9 @@ export class ScanModule {
             alert("Python (Pyodide) is not ready.");
             return;
         }
-        const job = this._enqueueSimJob({
-            baseSuffix: 'simfast',
-            queueName: '▶▶',
-            protocol: '(▶▶)',
-            simToolUrl: TOOL_RAPISIM,
-            simLogLabel: '(▶▶)',
-            noSignalName: 'Rapisim',
-        });
+        const userName = this._getValidatedDraftName();
+        if (!userName) return;
+        const job = this._enqueueSimJob({ backendId: 'rapisim', userName });
         await this.runSimPipeline(job);
     }
 
@@ -264,14 +448,9 @@ export class ScanModule {
             alert("Python (Pyodide) is not ready.");
             return;
         }
-        const job = this._enqueueSimJob({
-            baseSuffix: 'sim_mr0',
-            queueName: '▶',
-            protocol: '(▶)',
-            simToolUrl: TOOL_MR0SIM,
-            simLogLabel: '(▶)',
-            noSignalName: 'MR0 sim',
-        });
+        const userName = this._getValidatedDraftName();
+        if (!userName) return;
+        const job = this._enqueueSimJob({ backendId: 'mr0sim', userName });
         await this.runSimPipeline(job);
     }
 
@@ -383,7 +562,7 @@ export class ScanModule {
 
     /** Progress callback for one tool WebSocket session (separate channel per call). */
     _toolOnMessageFor(channel) {
-        const tag = this._simPipelineJob?.simLogLabel || 'SIM';
+        const tag = this._simPipelineJob ? this._jobSimLogTag(this._simPipelineJob) : 'SIM';
         const ch = channel || 'tool';
         return (msg) => {
             console.log(`${tag} [${ch}]`, msg);
@@ -398,11 +577,11 @@ export class ScanModule {
     async _callTool(url, input, channel) {
         const call = await this._ensureToolApi();
         const label = channel || this._toolChannelFromUrl(url);
-        console.log(`${this._simPipelineJob?.simLogLabel || 'SIM'} [${label}] ws open → ${url}`);
+        console.log(`${this._simPipelineJob ? this._jobSimLogTag(this._simPipelineJob) : 'SIM'} [${label}] ws open → ${url}`);
         try {
             return await call(url, input, this._toolOnMessageFor(label));
         } finally {
-            console.log(`${this._simPipelineJob?.simLogLabel || 'SIM'} [${label}] ws closed`);
+            console.log(`${this._simPipelineJob ? this._jobSimLogTag(this._simPipelineJob) : 'SIM'} [${label}] ws closed`);
         }
     }
 
@@ -571,6 +750,50 @@ export class ScanModule {
         };
     }
 
+    _jobSimLogTag(job) {
+        return job?.simulation?.backendLabel || job?.simulation?.backendId || 'SIM';
+    }
+
+    _jobMetaLine(job) {
+        const parts = [job.timestamp];
+        if (job.simulation?.backendLabel) parts.push(job.simulation.backendLabel);
+        return parts.join(' · ');
+    }
+
+    async _affineFromNiftiBytes(nvMod, bytes) {
+        await nvMod._ensureNibabelReady();
+        const u8 = bytes instanceof Uint8Array ? bytes : new Uint8Array(bytes);
+        nvMod.pyodide.globals.set('_nifti_bytes_for_affine', u8);
+        const result = await nvMod.pyodide.runPythonAsync(`
+import io, json
+import nibabel as nib
+_b = _nifti_bytes_for_affine.to_py()
+_buf = io.BytesIO(bytes(_b))
+_fh = nib.FileHolder(fileobj=_buf)
+img = nib.Nifti1Image.from_file_map({"header": _fh, "image": _fh})
+aff = img.affine.reshape(-1).tolist()
+json.dumps([float(x) for x in aff])
+        `);
+        return JSON.parse(result);
+    }
+
+    async _patchProtocolSimulationToml(job, { phantomRef, phantomMatrix, reconMatrix, phantomName }) {
+        if (!job?.protocolPath || !window.seqExplorer) return;
+        const sim = job.simulation || {};
+        await window.seqExplorer.patchProtocolTomlSections(job.protocolPath, {
+            simulation: {
+                backend: sim.backendId || 'mr0sim',
+                phantom: phantomName || 'unknown',
+                phantom_fov_affine: await this._affineFromNiftiBytes(window.nvModule, phantomRef),
+                phantom_matrix: phantomMatrix,
+            },
+            recon: {
+                matrix: reconMatrix,
+                method: RECON_METHOD,
+            },
+        });
+    }
+
     _encodeSegmentedPhantomForToolapi(plain) {
         if (!plain || typeof plain !== 'object') throw new Error('encodeSegmentedPhantomForToolapi: invalid phantom');
         const tissuesIn = plain.tissues || {};
@@ -595,10 +818,15 @@ export class ScanModule {
         const _t = (label) => console.log(`[SEQ-PREP] ${label}: ${performance.now().toFixed(1)}ms`);
         _t('start');
         if (window.seqExplorer) {
-            await window.seqExplorer.executeFunction(true, this.scanCounter);
+            window.seqExplorer._pendingProtocolMeta = {
+                scanNumber: job.scanNumber,
+                name: job.name,
+            };
+            await window.seqExplorer.executeFunction(true, job.scanNumber);
             if (window.seqExplorer._lastProtocolSnapshotPath) {
                 job.protocolPath = window.seqExplorer._lastProtocolSnapshotPath;
             }
+            window.seqExplorer._pendingProtocolMeta = null;
         }
         _t('after executeFunction');
         const nvMod = window.nvModule;
@@ -919,11 +1147,12 @@ if os.path.exists(_p):
 
     /**
      * Shared pipeline: resample phantom → conseq / trajex → rapisim or tool-mr0sim → PyNUFFT → queue result.
-     * @param {object} job — must include simToolUrl, simLogLabel, noSignalName (from _enqueueSimJob).
+     * @param {object} job — must include simulation.toolUrl (from _enqueueSimJob).
      */
     async runSimPipeline(job) {
         const nvMod = window.nvModule;
-        const simToolUrl = job.simToolUrl || TOOL_RAPISIM;
+        const simToolUrl = job.simulation?.toolUrl || TOOL_RAPISIM;
+        const simLogTag = this._jobSimLogTag(job);
         this._simPipelineJob = job;
         job.status = 'scanning';
         job.pipelineStage = 0;
@@ -951,19 +1180,31 @@ if os.path.exists(_p):
             // user-authoritative offsets/rotations too. Any later slider mutation (user input,
             // `syncFovFromScanVolume` after a prior scan, etc.) must not affect this in-flight pipeline.
             job.fovSnapshot = nvMod.captureFovSnapshot();
-            console.log(`${job.simLogLabel || 'SIM'} fovSnapshot:`, job.fovSnapshot);
+            console.log(`[${simLogTag}] fovSnapshot:`, job.fovSnapshot);
 
             // 2) Build phantom and recon FOV mask refs up-front from the same frozen snapshot.
-            // Different matrix grids (phantom vs recon) share identical mm box + placement.
             const _t2 = performance.now();
             const phantomOversample = nvMod.getPhantomOversampleFactors();
             job.phantomOversample = phantomOversample;
             const phantomFovSnapshot = nvMod.applyPhantomOversampleToSnapshot(job.fovSnapshot, phantomOversample);
+            const phantomMatrix = nvMod.getSimPhantomMatrixDims(phantomOversample);
+            const reconMatrix = nvMod.getReconMatrixDims();
             const phantomRef = nvMod.generateFovMaskNiftiFromSnapshot(
                 phantomFovSnapshot,
-                nvMod.getSimPhantomMatrixDims(phantomOversample),
+                phantomMatrix,
             );
-            const reconRef = nvMod.generateFovMaskNiftiFromSnapshot(job.fovSnapshot, nvMod.getReconMatrixDims());
+            const reconRef = nvMod.generateFovMaskNiftiFromSnapshot(job.fovSnapshot, reconMatrix);
+
+            try {
+                await this._patchProtocolSimulationToml(job, {
+                    phantomRef,
+                    phantomMatrix,
+                    reconMatrix,
+                    phantomName: activeGroup.jsonName || activeGroup.jsonFileName || 'unknown',
+                });
+            } catch (tomlErr) {
+                console.warn(`[${simLogTag}] protocol TOML simulation/recon patch failed:`, tomlErr);
+            }
             nvMod._setResamplePyodideOptions();
             const resampledEntries = [];
             nvMod.pyodide.globals.set("reference_bytes", phantomRef);
@@ -1036,7 +1277,7 @@ if os.path.exists(_p):
             console.log(`[SIM] ${simChannel}: ${(performance.now()-_t5b).toFixed(0)}ms`);
             const traj = this._trajectoryFromResult(trajResult);
             const signal = this._signalFromResult(signalResult);
-            if (!signal?.length) throw new Error(`${job.noSignalName || 'Simulation'} returned no signal.`);
+            if (!signal?.length) throw new Error(`${simLogTag} returned no signal.`);
             this._setPipelineStage(job, 3);
 
             // 5) PyNUFFT recon: reconRef was built up-front from the same frozen fovSnapshot as
@@ -1061,7 +1302,8 @@ except Exception:
             nvMod.pyodide.globals.set("sim_ref_bytes", reconRef);
             nvMod.pyodide.globals.set("sim_output_mode", useRecon ? "image" : "kspace_log");
             nvMod.pyodide.globals.set("sim_seq_path", job.vfsSeqPath || "");
-            const simBackend = String(simToolUrl || '').includes('rapisim') ? 'rapisim' : 'mr0';
+            const simBackend = job.simulation?.reconBackend
+                || (String(simToolUrl || '').includes('rapisim') ? 'rapisim' : 'mr0');
             nvMod.pyodide.globals.set("sim_backend", simBackend);
             const recoPathRes = await nvMod.pyodide.runPythonAsync(`
 import types
@@ -1112,7 +1354,7 @@ _recon.run_sim_recon(
             // for the next scan. Explicit VIEW SCAN clicks still sync (default `syncFov=true`).
             this.loadJob(job.id, false);
         } catch (e) {
-            console.error(`${job.simLogLabel || 'SIM'} failed:`, e);
+            console.error(`[${simLogTag}] failed:`, e);
             job.status = 'error';
             job.error = e.message;
         } finally {
@@ -1150,18 +1392,24 @@ _recon.run_sim_recon(
         if (!this.container) return;
         const list = this.container.querySelector('#scan-queue-list');
         if (!list) return;
-        
-        if (this.queue.length === 0) {
+
+        const focusedDraft = list.querySelector('.draft-name-input:focus');
+        const draftSelStart = focusedDraft?.selectionStart;
+        const draftSelEnd = focusedDraft?.selectionEnd;
+        const draftInputValue = focusedDraft?.value;
+
+        if (this.queue.length === 0 && !this.draftJob) {
             list.innerHTML = '<div class="queue-empty">Queue is empty</div>';
             this._syncMobileScanControls();
             return;
         }
 
-        list.innerHTML = this.queue.map(job => `
+        let html = this.draftJob ? this._draftRowHtml() : '';
+        html += this.queue.map(job => `
             <div class="queue-item status-${job.status}" data-id="${job.id}">
                 <div class="item-main">
                     <div class="item-title">${job.scanNumber}. ${job.name}</div>
-                    <div class="item-meta">${job.timestamp}</div>
+                    <div class="item-meta">${this._escapeHtml(this._jobMetaLine(job))}</div>
                 </div>
                 <div class="item-actions">
                     ${job.status === 'scanning'
@@ -1186,45 +1434,22 @@ _recon.run_sim_recon(
                 </div>
             </div>
         `).join('');
+        list.innerHTML = html;
 
-        // Bind clicks for VIEW buttons
-        list.querySelectorAll('.view-btn').forEach(btn => {
-            btn.onclick = (e) => {
-                e.stopPropagation();
-                const jobId = btn.closest('.queue-item').dataset.id;
-                if (e.ctrlKey || e.metaKey) {
-                    this.loadJobToCompare(jobId);
-                } else {
-                    this.loadJob(jobId);
-                }
-            };
-        });
+        this._bindDraftNameInput(list);
+        if (focusedDraft && draftInputValue !== undefined) {
+            const newInput = list.querySelector('.draft-name-input');
+            if (newInput) {
+                newInput.value = draftInputValue;
+                if (this.draftJob) this.draftJob.userName = draftInputValue;
+                newInput.focus();
+                try {
+                    newInput.setSelectionRange(draftSelStart, draftSelEnd);
+                } catch (_) {}
+            }
+        }
 
-        list.querySelectorAll('.view-seq-btn').forEach(btn => {
-            btn.onclick = (e) => {
-                e.stopPropagation();
-                const jobId = btn.closest('.queue-item').dataset.id;
-                this.viewSeq(jobId);
-            };
-        });
-
-        // Bind clicks for Download/Remove buttons
-        list.querySelectorAll('.dl-seq-btn').forEach(btn => {
-            btn.onclick = (e) => {
-                e.stopPropagation();
-                const jobId = btn.closest('.queue-item').dataset.id;
-                this.downloadSeq(jobId);
-            };
-        });
-
-        list.querySelectorAll('.remove-job-btn').forEach(btn => {
-            btn.onclick = (e) => {
-                e.stopPropagation();
-                const jobId = btn.closest('.queue-item').dataset.id;
-                this.removeJob(jobId);
-            };
-        });
-
+        this._bindQueueItemActions(list);
         this._syncMobileScanControls();
     }
 
@@ -1299,6 +1524,12 @@ data
         if (!vol?.name?.startsWith('scan_')) return null;
         const base = vol.name.replace(/\.nii(\.gz)?$/i, '');
         return this.queue.find((j) => j.baseName === base) || null;
+    }
+
+    /** Volume list / preview overlay title, e.g. `1. gre_seq`. */
+    getScanDisplayTitle(vol) {
+        if (!vol?.name) return '';
+        return formatScanDisplayTitle(vol.name, this.getJobForVolume(vol));
     }
 
     /** Native tooltip: full protocol parameters for a scan volume row. */

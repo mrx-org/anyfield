@@ -118,6 +118,62 @@ html.pro-user #seq-mobile-crop {
     border-left: 3px solid var(--error, #ef4444); 
 }
 
+.queue-item.status-draft {
+    border-left: 3px solid var(--accent, #3b82f6);
+    cursor: default;
+}
+
+.queue-item.status-draft:hover {
+    background: rgba(59, 130, 246, 0.06);
+}
+
+.draft-item-title {
+    display: flex;
+    align-items: center;
+    gap: 0.25rem;
+    min-width: 0;
+}
+
+.draft-scan-num {
+    flex-shrink: 0;
+    color: var(--muted, #94a3b8);
+    font-weight: var(--font-weight-medium, 500);
+}
+
+.draft-name-input {
+    flex: 1;
+    min-width: 0;
+    padding: 0.1rem 0.25rem;
+    font-size: inherit;
+    font-weight: inherit;
+    font-family: inherit;
+    color: inherit;
+    background: rgba(255, 255, 255, 0.06);
+    border: 1px solid rgba(255, 255, 255, 0.14);
+    border-radius: 3px;
+}
+
+.draft-name-input:focus {
+    outline: none;
+    border-color: var(--accent, #3b82f6);
+    background: rgba(255, 255, 255, 0.1);
+}
+
+.draft-protocol-meta {
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+}
+
+.draft-badge {
+    font-size: var(--font-size-xs, 10px);
+    color: var(--accent, #3b82f6);
+    text-transform: uppercase;
+    letter-spacing: 0.04em;
+    font-weight: var(--font-weight-medium, 500);
+    opacity: 0.9;
+}
+
 .item-main {
     flex: 1;
     min-width: 0;

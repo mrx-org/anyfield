@@ -326,7 +326,23 @@ export class SequenceExplorer {
             }
             // Trigger input event to ensure any internal state is updated
             input.dispatchEvent(new Event('input'));
+            this._emitProtocolParamsChanged();
         }
+    }
+
+    _emitProtocolParamsChanged() {
+        if (!this.selectedSequence) return;
+        eventHub.emit('protocolParamsChanged', {
+            fileName: this.selectedSequence.fileName,
+            functionName: this.selectedSequence.functionName,
+        });
+    }
+
+    _bindProtocolParamInput(input) {
+        if (!input) return;
+        const handler = () => this._emitProtocolParamsChanged();
+        input.addEventListener('input', handler);
+        input.addEventListener('change', handler);
     }
     
     resolvePath(path) {
@@ -936,6 +952,56 @@ plt.rcParams['font.size'] = 8`;
         return (name && name.trim()) ? name : '';
     }
 
+    /** Scan index from protocol path prefix, e.g. `user/prot/2_prot_gre.py` → 2. */
+    parseProtocolScanNumber(protocolPath) {
+        const m = String(protocolPath || '').replace(/\\/g, '/').match(/^user\/prot\/(\d+)_/);
+        return m ? Number(m[1]) : null;
+    }
+
+    /** Sequence stem after scan prefix, e.g. `user/prot/2_prot_gre.py` → `prot_gre`. */
+    protocolSeqStemFromPath(protocolPath) {
+        const base = String(protocolPath || '').replace(/\\/g, '/').split('/').pop().replace(/\.py$/i, '');
+        const m = base.match(/^\d+_(.+)$/);
+        return m ? m[1] : base;
+    }
+
+    /** User label from queue job or matching `scan_<n>_*.nii.gz` volume. */
+    _resolveScanUserLabel(scanNumber) {
+        if (scanNumber == null) return null;
+        const job = typeof window !== 'undefined'
+            ? window.scanModule?.queue?.find((j) => j.scanNumber === scanNumber)
+            : null;
+        if (job?.name) return job.name;
+        const vol = typeof window !== 'undefined'
+            ? window.nvModule?.nv?.volumes?.find((v) => {
+                const m = v.name?.match(/^scan_(\d+)_/i);
+                return m && Number(m[1]) === scanNumber;
+            })
+            : null;
+        if (vol?.name) {
+            const m = vol.name.match(/^scan_(\d+)_(.*?)\.nii/i);
+            if (m?.[2]) return m[2];
+        }
+        return null;
+    }
+
+    /**
+     * User-facing protocol label from path + scan output filename: `2. tüdel`.
+     * Scan number comes from `user/prot/<n>_*.py`; user name from queue or `scan_<n>_*.nii.gz`.
+     * @param {string} protocolPath
+     * @param {string} [nameOverride] - use when scan volume does not exist yet (e.g. at save time)
+     */
+    protocolDisplayNameFromPath(protocolPath, nameOverride = null) {
+        const n = this.parseProtocolScanNumber(protocolPath);
+        if (n == null) {
+            return this.protocolSeqStemFromPath(protocolPath) || '';
+        }
+        const userLabel = nameOverride || this._resolveScanUserLabel(n);
+        if (userLabel) return `${n}. ${userLabel}`;
+        const stem = this.protocolSeqStemFromPath(protocolPath);
+        return stem ? `${n}. ${stem}` : String(n);
+    }
+
     /** Normalize a sequences key to a VFS-style path (user/prot/1_prot_gre.py). */
     _sequenceKeyToPath(key) {
         if (!key) return '';
@@ -986,6 +1052,17 @@ plt.rcParams['font.size'] = 8`;
         }
         lines.push(`Protocol: ${norm}`);
 
+        const tomlInner = this.extractTomlBlockFromCode(code);
+        let simReconLines = [];
+        if (tomlInner) {
+            const { simulation, recon } = this.parseSimulationReconFromTomlSync(tomlInner);
+            simReconLines = this.formatSimulationReconTooltipLines(simulation, recon);
+        }
+        const pathLabel = this.protocolDisplayNameFromPath(norm);
+        if (pathLabel) {
+            lines.push(`Name: ${pathLabel}`);
+        }
+
         const defMatch = code.match(/def\s+(prot_\w+)\s*\(\s*([\s\S]*?)\)\s*:/);
         if (defMatch) {
             lines.push('');
@@ -1002,6 +1079,11 @@ plt.rcParams['font.size'] = 8`;
         } else {
             lines.push('');
             lines.push(code.trim());
+        }
+
+        if (simReconLines.length) {
+            lines.push('');
+            lines.push(...simReconLines);
         }
 
         const TOOLTIP_MAX = 14000;
@@ -1268,9 +1350,7 @@ result
             if (item) item.classList.add('selected');
         }
         const src = fileData.source;
-        const displayName = src?.displayName
-            || this.getProtocolDisplayNameFromSeqFuncFile(this.getPathForDisplayName(fileName, src))
-            || (src?.path || fileName).split('/').pop().replace(/\.py$/, '');
+        const displayName = src?.displayName || '';
         this.selectedSequence = { fileName, functionName, displayName, ...func, source: fileData.source };
         this.updateSequenceNameDisplay();
         if (this.config.onSequenceSelect) {
@@ -2040,6 +2120,11 @@ json.dumps(functions)
                     if (meta.kind === 'protocol' && (meta.seq_func_file || meta.seq_func)) {
                         sourceToStore = { ...source, seq_func_file: meta.seq_func_file || source?.seq_func_file, seq_func: meta.seq_func || source?.seq_func };
                     }
+                    const displayName = source?.displayName
+                        || this.protocolDisplayNameFromPath(fileName);
+                    if (displayName) {
+                        sourceToStore = { ...sourceToStore, displayName };
+                    }
                 } catch (e) {
                     // ignore TOML parse errors
                 }
@@ -2187,19 +2272,7 @@ json.dumps(functions)
                             const isProtocol = source?.itemKind === 'protocol' || (source?.path && source.path.startsWith('user/prot/'));
                             let displayFileName = fileName;
                             if (isProtocol) {
-                                displayFileName = source?.displayName || this.getProtocolDisplayNameFromSeqFuncFile(this.getPathForDisplayName(fileName, source));
-                                if (!displayFileName) {
-                                    // Fallback: handle both path-style (user/prot/file.py) and module-style (user.prot.file) keys
-                                    const pathOrModule = source?.path || fileName;
-                                    if (pathOrModule.includes('.') && !pathOrModule.includes('/') && !pathOrModule.includes('\\')) {
-                                        // Module path: strip .py then extract last segment (avoid "py" from extension)
-                                        const withoutPy = pathOrModule.replace(/\.py$/i, '');
-                                        displayFileName = withoutPy.split('.').pop();
-                                    } else {
-                                        // Path-style: extract filename
-                                        displayFileName = pathOrModule.split('/').pop().replace(/\.py$/, '');
-                                    }
-                                }
+                                displayFileName = source?.displayName || '';
                             } else if (source?.isUserEdited && source?.displayName) {
                                 displayFileName = source.displayName;
                             } else if (fileName.startsWith('user/')) {
@@ -2497,15 +2570,7 @@ json.dumps(_result)
     _getSeqDisplayFileStem(fileName, source, isProtocol) {
         let displayFileName = fileName;
         if (isProtocol) {
-            displayFileName = source?.displayName || this.getProtocolDisplayNameFromSeqFuncFile(this.getPathForDisplayName(fileName, source));
-            if (!displayFileName) {
-                const pathOrModule = source?.path || fileName;
-                if (pathOrModule.includes('.') && !pathOrModule.includes('/') && !pathOrModule.includes('\\')) {
-                    displayFileName = pathOrModule.replace(/\.py$/i, '').split('.').pop();
-                } else {
-                    displayFileName = pathOrModule.split('/').pop().replace(/\.py$/, '');
-                }
-            }
+            displayFileName = source?.displayName || '';
         } else if (source?.isUserEdited && source?.displayName) {
             displayFileName = source.displayName;
         } else if (fileName.startsWith('user/')) {
@@ -2809,6 +2874,7 @@ json.dumps(_result)
                                 const vfsPath = await this.writeUploadedSeqToVfs(file);
                                 if (vfsPath) {
                                     input.value = vfsPath;
+                                    this._emitProtocolParamsChanged();
                                 }
                             } catch (writeErr) {
                                 console.error('Failed to write uploaded file to VFS:', writeErr);
@@ -2916,6 +2982,8 @@ json.dumps(_result)
             } else {
                 input.title = 'No description available';
             }
+
+            this._bindProtocolParamInput(input);
             
             row.appendChild(inputCell);
             
@@ -3981,8 +4049,217 @@ sources = [
     }
 
     /**
-     * TOML preamble: only seq_func_file and seq_func (call target). No protocol file/name in TOML.
-     * @param {object} [options] - Optional: { kind: 'sequence'|'protocol', seq_func_file: string, seq_func: string } for protocol call target
+     * Format a value for embedding in protocol TOML.
+     * @param {unknown} value
+     * @returns {string}
+     */
+    _formatTomlValue(value) {
+        if (value == null) return '""';
+        if (typeof value === 'boolean') return value ? 'true' : 'false';
+        if (typeof value === 'number') {
+            if (!Number.isFinite(value)) return '0';
+            return Number.isInteger(value) ? String(value) : String(value);
+        }
+        if (typeof value === 'string') {
+            return `"${value.replace(/\\/g, '\\\\').replace(/"/g, '\\"')}"`;
+        }
+        if (Array.isArray(value)) {
+            const inner = value.map((v) => this._formatTomlValue(v)).join(', ');
+            return `[${inner}]`;
+        }
+        return `"${String(value)}"`;
+    }
+
+    /**
+     * Build inner TOML for _source_config_toml (dependencies, metadata, optional simulation/recon).
+     * @param {object} sections
+     * @returns {string}
+     */
+    buildSourceConfigToml(sections = {}) {
+        const lines = [];
+        const deps = sections.dependencies || {};
+        const depKeys = Object.keys(deps);
+        if (depKeys.length) {
+            lines.push('[dependencies]');
+            for (const key of depKeys) {
+                const val = deps[key];
+                lines.push(`${key} = ${this._formatTomlValue(val)}`);
+            }
+            lines.push('');
+        }
+        const meta = sections.metadata || {};
+        if (Object.keys(meta).length) {
+            lines.push('[metadata]');
+            for (const [key, val] of Object.entries(meta)) {
+                if (val == null || val === '') continue;
+                lines.push(`${key} = ${this._formatTomlValue(val)}`);
+            }
+            lines.push('');
+        }
+        const simulation = sections.simulation || null;
+        if (simulation && Object.keys(simulation).length) {
+            lines.push('[simulation]');
+            for (const [key, val] of Object.entries(simulation)) {
+                if (val == null) continue;
+                lines.push(`${key} = ${this._formatTomlValue(val)}`);
+            }
+            lines.push('');
+        }
+        const recon = sections.recon || null;
+        if (recon && Object.keys(recon).length) {
+            lines.push('[recon]');
+            for (const [key, val] of Object.entries(recon)) {
+                if (val == null) continue;
+                lines.push(`${key} = ${this._formatTomlValue(val)}`);
+            }
+            lines.push('');
+        }
+        return lines.join('\n').trimEnd();
+    }
+
+    wrapTomlPreamble(tomlInner) {
+        return `# Source configuration (TOML format)
+_source_config_toml = """
+${tomlInner}
+"""
+
+# Parse and use when needed:
+# import tomli
+# config = tomli.loads(_source_config_toml)
+# deps = list(config['dependencies'].keys())
+
+`;
+    }
+
+    extractTomlBlockFromCode(code) {
+        if (!code || typeof code !== 'string') return null;
+        const match = code.match(/_source_config_toml = """([\s\S]*?)"""/);
+        return match ? match[1] : null;
+    }
+
+    /**
+     * Sync parse of [simulation] and [recon] from TOML text (tooltip use).
+     * @param {string} tomlString
+     * @returns {{ simulation: object, recon: object }}
+     */
+    parseSimulationReconFromTomlSync(tomlString) {
+        const out = { metadata: {}, simulation: {}, recon: {} };
+        if (!tomlString) return out;
+        const sectionRe = /^\[([^\]]+)\]\s*$/gm;
+        const sections = [];
+        let m;
+        while ((m = sectionRe.exec(tomlString)) !== null) {
+            sections.push({ name: m[1].trim(), start: m.index + m[0].length });
+        }
+        for (let i = 0; i < sections.length; i++) {
+            const sec = sections[i];
+            const end = i + 1 < sections.length ? sections[i + 1].index : tomlString.length;
+            const body = tomlString.slice(sec.start, end);
+            const target = sec.name === 'metadata' ? out.metadata
+                : sec.name === 'simulation' ? out.simulation
+                    : sec.name === 'recon' ? out.recon
+                        : null;
+            if (!target) continue;
+            for (const line of body.split('\n')) {
+                const trimmed = line.trim();
+                if (!trimmed || trimmed.startsWith('#') || trimmed.startsWith('[')) continue;
+                const kv = trimmed.match(/^([A-Za-z0-9_]+)\s*=\s*(.+)$/);
+                if (!kv) continue;
+                const key = kv[1];
+                let raw = kv[2].trim();
+                if (raw.startsWith('"') && raw.endsWith('"')) {
+                    target[key] = raw.slice(1, -1).replace(/\\"/g, '"').replace(/\\\\/g, '\\');
+                } else if (raw.startsWith('[') && raw.endsWith(']')) {
+                    const arrMatch = raw.match(/^\[(.*)\]$/);
+                    if (arrMatch) {
+                        target[key] = arrMatch[1].split(',').map((s) => {
+                            const t = s.trim().replace(/^"|"$/g, '');
+                            const n = Number(t);
+                            return Number.isFinite(n) ? n : t;
+                        });
+                    }
+                } else if (raw === 'true' || raw === 'false') {
+                    target[key] = raw === 'true';
+                } else {
+                    const n = Number(raw);
+                    target[key] = Number.isFinite(n) ? n : raw;
+                }
+            }
+        }
+        return out;
+    }
+
+    formatSimulationReconTooltipLines(simulation, recon) {
+        const lines = [];
+        if (simulation && Object.keys(simulation).length) {
+            lines.push('Simulation:');
+            if (simulation.backend != null) lines.push(`  backend: ${simulation.backend}`);
+            if (simulation.phantom != null) lines.push(`  phantom: ${simulation.phantom}`);
+            if (Array.isArray(simulation.phantom_matrix)) {
+                lines.push(`  phantom_matrix: [${simulation.phantom_matrix.join(', ')}]`);
+            }
+            if (Array.isArray(simulation.phantom_fov_affine)) {
+                const aff = simulation.phantom_fov_affine.map((v) => Number(v).toFixed(4)).join(', ');
+                lines.push(`  phantom_fov_affine: [${aff}]`);
+            }
+        }
+        if (recon && Object.keys(recon).length) {
+            lines.push('Recon:');
+            if (Array.isArray(recon.matrix)) lines.push(`  matrix: [${recon.matrix.join(', ')}]`);
+            if (recon.method != null) lines.push(`  method: ${recon.method}`);
+        }
+        return lines;
+    }
+
+    async patchProtocolTomlSections(protocolPath, { simulation, recon } = {}) {
+        if (!protocolPath) return false;
+        const norm = String(protocolPath).replace(/\\/g, '/');
+        let key = this.sequences[norm] ? norm : null;
+        if (!key) {
+            key = Object.keys(this.sequences).find((k) => this._sequenceKeyToPath(k) === norm) || null;
+        }
+        const fileData = key ? this.sequences[key] : null;
+        let code = fileData?.code;
+        if (!code && this.config.pyodide) {
+            try {
+                const vfs = this.vfsPath(norm);
+                code = this.config.pyodide.FS.readFile(vfs, { encoding: 'utf8' });
+            } catch (_) { /* ignore */ }
+        }
+        if (!code) {
+            console.warn('patchProtocolTomlSections: no code for', norm);
+            return false;
+        }
+        const tomlInner = this.extractTomlBlockFromCode(code);
+        if (!tomlInner) {
+            console.warn('patchProtocolTomlSections: no TOML block in', norm);
+            return false;
+        }
+        let parsed;
+        try {
+            parsed = await this.parseTOMLConfig(tomlInner);
+        } catch (e) {
+            console.warn('patchProtocolTomlSections: parse failed', e);
+            return false;
+        }
+        if (simulation) parsed.simulation = { ...(parsed.simulation || {}), ...simulation };
+        if (recon) parsed.recon = { ...(parsed.recon || {}), ...recon };
+        const newInner = this.buildSourceConfigToml(parsed);
+        const newPreamble = this.wrapTomlPreamble(newInner);
+        const newCode = code.replace(
+            /# Source configuration \(TOML format\)\n_source_config_toml = """[\s\S]*?"""\n\n(?:#.*\n)*\n*/,
+            newPreamble,
+        );
+        await this.storeUserFile(norm, newCode);
+        if (fileData) fileData.code = newCode;
+        await this.mirrorLocalPythonModuleToPyodide(norm, newCode);
+        this.persistUserArtifacts();
+        return true;
+    }
+
+    /**
+     * TOML preamble for sequence/protocol files.
+     * @param {object} [options] - kind, seq_func_file, seq_func, simulation, recon
      */
     generateTOMLPreamble(fileName, source, functionName, options = {}) {
         const deps = source?.dependencies || [];
@@ -3992,40 +4269,36 @@ sources = [
         const seqFuncFile = (kind === 'protocol' && options.seq_func_file != null) ? options.seq_func_file : meta.seq_func_file;
         const seqFunc = (kind === 'protocol' && options.seq_func != null) ? options.seq_func : meta.seq_func;
 
-        const depsLines = deps.map(dep => {
+        const dependencies = {};
+        for (const dep of deps) {
             if (typeof dep === 'string') {
                 if (dep.includes('>=') || dep.includes('==') || dep.includes('!=') || dep.includes('~=')) {
                     const parts = dep.match(/^([^>=!~]+)(.*)$/);
                     if (parts) {
-                        return `    ${parts[1].trim()} = "${parts[2].trim()}"`;
+                        dependencies[parts[1].trim()] = parts[2].trim();
+                        continue;
                     }
                 }
-                return `    ${dep} = "*"`;
+                dependencies[dep.split(/[>=<!=]/)[0].trim()] = '*';
             } else if (typeof dep === 'object' && dep.name) {
-                const version = dep.version || '*';
-                return `    ${dep.name} = "${version}"`;
+                dependencies[dep.name] = dep.version || '*';
             }
-            return `    ${dep} = "*"`;
-        }).join('\n');
+        }
 
-        return `# Source configuration (TOML format)
-_source_config_toml = """
-[dependencies]
-${depsLines}
+        const metadata = {
+            kind,
+            seq_func_file: seqFuncFile,
+            seq_func: seqFunc,
+            type: meta.type,
+        };
 
-[metadata]
-kind = "${kind}"
-seq_func_file = "${seqFuncFile}"
-seq_func = "${seqFunc}"
-type = "${meta.type}"
-"""
-
-# Parse and use when needed:
-# import tomli
-# config = tomli.loads(_source_config_toml)
-# deps = list(config['dependencies'].keys())
-
-`;
+        const tomlInner = this.buildSourceConfigToml({
+            dependencies,
+            metadata,
+            simulation: options.simulation || null,
+            recon: options.recon || null,
+        });
+        return this.wrapTomlPreamble(tomlInner);
     }
     
     async getOriginalCode(fileName, source) {
@@ -4192,10 +4465,11 @@ sys.modules['__main__']._user_edited_files[${JSON.stringify(normPath)}] = ${JSON
         const finalFileName = `user/prot/${filePrefix}${shortName}.py`;
         const safeFunctionName = shortName;
 
+        const pendingMeta = this._pendingProtocolMeta || {};
         const preamble = this.generateTOMLPreamble(fileName, source, functionFromExplorer, {
             kind: 'protocol',
             seq_func_file: callTargetFile,
-            seq_func: callTargetFunc
+            seq_func: callTargetFunc,
         });
         const code = preamble + `
 import numpy as np
@@ -4214,7 +4488,7 @@ def ${safeFunctionName}(
         try {
             await this.storeUserFile(finalFileName, code);
 
-            const protocolLabel = this.getProtocolDisplayNameFromSeqFuncFile(callTargetFile) || finalFileName.split('/').pop().replace(/\.py$/, '');
+            const displayName = this.protocolDisplayNameFromPath(finalFileName, pendingMeta.name);
             const fullModulePath = finalFileName.replace(/\.py$/i, '').replace(/\//g, '.');
             const newSource = {
                 name: 'User Protocols',
@@ -4226,7 +4500,7 @@ def ${safeFunctionName}(
                 fullModulePath: fullModulePath,
                 description: 'Protocol Snapshot',
                 isUserEdited: true,
-                displayName: filePrefix ? filePrefix + protocolLabel : protocolLabel
+                displayName,
             };
             
             // Update config
@@ -4397,7 +4671,7 @@ def ${safeFunctionName}(
                 return false;
             }
             
-            // Extract TOML config from code (allow old minimal format)
+            // Extract TOML config from code
             const tomlMatch = code.match(/_source_config_toml = """([\s\S]*?)"""/);
             if (!tomlMatch) {
                 this.showStatus('TOML configuration not found in code', 'error');
@@ -4414,7 +4688,9 @@ def ${safeFunctionName}(
                 return `${key}${val}`;
             });
 
-            const displayName = targetName || seqFuncFileFromMeta || metadata.name || `${fileName}_edited`;
+            const displayName = savingProtocol
+                ? (this.protocolDisplayNameFromPath(finalFileName) || targetName || seqFuncFileFromMeta || `${fileName}_edited`)
+                : (targetName || seqFuncFileFromMeta || `${fileName}_edited`);
             const sanitizedName = sanitizeFileName(displayName);
             if (/^\d+_/.test(sanitizedName)) {
                 this.showReservedPrefixDialog();
@@ -4471,7 +4747,9 @@ def ${safeFunctionName}(
                     const fileData = this.sequences[finalFileName];
                     if (fileData && fileData.functions.length > 0) {
                         const func = fileData.functions.find(f => f.name === functionName) || fileData.functions[0];
-                        const displayName = newSource?.displayName || this.getProtocolDisplayNameFromSeqFuncFile(this.getPathForDisplayName(finalFileName, newSource)) || (newSource?.path || finalFileName).split('/').pop().replace(/\.py$/, '');
+                        const displayName = savingProtocol
+                            ? newSource.displayName
+                            : (newSource?.displayName || this.getProtocolDisplayNameFromSeqFuncFile(this.getPathForDisplayName(finalFileName, newSource)) || (newSource?.path || finalFileName).split('/').pop().replace(/\.py$/, ''));
                         this.selectedSequence = { 
                             fileName: finalFileName, 
                             functionName: func.name, 
@@ -4504,12 +4782,15 @@ def ${safeFunctionName}(
         // Save As handler (opens file browser dialog)
         saveAsBtn.onclick = async () => {
             let defaultName = fileName;
+            const savingProtocolForDialog = source?.itemKind === 'protocol' || (source?.path && source.path.startsWith('user/prot/'));
             try {
                 const code = editor.getValue();
                 const tomlMatch = code.match(/_source_config_toml = """([\s\S]*?)"""/);
                 if (tomlMatch) {
                     const tomlConfig = await this.parseTOMLConfig(tomlMatch[1]);
-                    if (tomlConfig.metadata.seq_func_file) {
+                    if (savingProtocolForDialog) {
+                        defaultName = this.protocolSeqStemFromPath(fileName) || defaultName;
+                    } else if (tomlConfig.metadata.seq_func_file) {
                         defaultName = tomlConfig.metadata.seq_func_file;
                     }
                 }
@@ -4523,9 +4804,10 @@ def ${safeFunctionName}(
             if (defaultName.startsWith('user/')) {
                 defaultName = defaultName.slice(5);
             }
-            defaultName = this.getProtocolDisplayNameFromSeqFuncFile(defaultName) || defaultName;
+            if (!savingProtocolForDialog) {
+                defaultName = this.getProtocolDisplayNameFromSeqFuncFile(defaultName) || defaultName;
+            }
 
-            const savingProtocolForDialog = source?.itemKind === 'protocol' || (source?.path && source.path.startsWith('user/prot/'));
             const userDirPrefix = savingProtocolForDialog ? 'user/prot/' : 'user/seq/';
             const allUserFiles = await this.getUserFiles();
             const existingFiles = allUserFiles.filter(f => f.path.startsWith(userDirPrefix));

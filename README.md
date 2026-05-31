@@ -1,6 +1,6 @@
 # Niivue minimal app (zero-install)
 
-**Version:** `v1.0.0`
+**Version:** `v1.1.0`
 
 This is a **minimal Niivue viewer** implemented as a single `viewer.html` file.
 
@@ -85,6 +85,11 @@ For more insights see insights SPEC_no_field.md.
 
 ## Release notes
 
+**v1.1.0**
+- **Scan queue draft row**: A preparing row at the top of the scan queue mirrors the protocol being edited — editable name, then **SCAN** — without starting the pipeline until you click run.
+- **Clean scan naming**: Display titles use `N. name` (e.g. `1. gre_seq`) everywhere — SCANS list, preview **B**, and compare **C**. Output files are `scan_<n>_<name>.nii.gz` / `.seq` (no timestamp suffixes or backend tags like `_sim_mr0`).
+- **Protocol TOML**: Saved protocols embed `[simulation]` (backend, phantom, FOV affine/matrix) and `[recon]` (matrix, method) in the `.py` preamble; pulse params stay in the Python body. Scan number and user label are **not** duplicated in TOML — they come from `user/prot/<n>_*.py` and `scan_<n>_*.nii.gz`.
+- **Sim backend metadata**: MR0 vs Rapisim tracked via `[simulation].backend` in TOML instead of filename suffixes.
 
 **v1.0.0**
 - **Slab-correct FOV resampling (CROP / Resample-to-FOV / SCAN)**: Previously each output voxel was a single trilinear sample at the voxel center, so thick FOV slabs (especially matrix **Z = 1**, or small Z like 2) produced a sharp center slice and ignored the voxels inside the slab — changing **FOV Z** looked identical instead of averaging. Resampling now defaults to **`footprint_mean`**: each output voxel averages trilinear sub-samples over its full physical footprint. This is "conservative regridding" (volume-weighted), which nibabel/nilearn/ITK do **not** provide out of the box.

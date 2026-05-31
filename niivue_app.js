@@ -1,5 +1,6 @@
 import { Niivue, NVMesh, NVImage, SLICE_TYPE, MULTIPLANAR_TYPE, DRAG_MODE, SHOW_RENDER } from "https://unpkg.com/@niivue/niivue@0.65.0/dist/index.js";
 import { eventHub } from "./event_hub.js";
+import { formatScanDisplayTitle } from "./scan_zero/scan_module.js";
 import { volumeIs4D, syncVolumeClimsToCurrent4DFrame, installFrameAwareContrastDrag } from "./hist_panel/histogram-clim-panel.js";
 
 /**
@@ -2965,13 +2966,9 @@ os.makedirs('/phantom/averaged', exist_ok=True)
       info.className = "volume-row-info";
       let titleText = vol.name || `Vol ${originalIndex + 1}`;
       let metaText = "Imported Phantom";
-      const scanMatchOld = titleText.match(/^scan_(\d+)_(\d{4}-\d{2}-\d{2})_(\d{2}-\d{2}-\d{2})_(.*)\.nii/);
-      const scanMatchNew = titleText.match(/^scan_(\d+)_(.*)\.nii(\.gz)?$/i);
-      if (scanMatchOld) {
-        titleText = `${scanMatchOld[1]}. ${scanMatchOld[4].replace(/\.nii.*/, '')}`;
-        metaText = scanMatchOld[3].replace(/-/g, ':');
-      } else if (scanMatchNew) {
-        titleText = `${scanMatchNew[1]}. ${scanMatchNew[2].replace(/\.nii.*/, '')}`;
+      if (isScan) {
+        titleText = window.scanModule?.getScanDisplayTitle(vol)
+          ?? formatScanDisplayTitle(vol.name);
         metaText = "";
       } else if (shortTitle && vol.name) {
         const m = vol.name.match(/_([^_.]+)\.nii(\.gz)?$/i);
@@ -3792,12 +3789,12 @@ export class ScanPreviewModule {
     if (label) label.textContent = text || this.labelDefault;
   }
 
-  /** e.g. `scan_3_mr0_rare_2d_seq_sim_mr0.nii` → `scan_3` */
+  /** e.g. `scan_1_gre_seq.nii.gz` → `1. gre_seq` (matches SCANS volume list) */
   _shortScanLabel(name) {
-    if (!name) return '';
-    const base = String(name).replace(/\.nii(\.gz)?$/i, '');
-    const m = base.match(/^(scan_\d+)/i);
-    return m ? m[1] : base;
+    const job = typeof window !== 'undefined' && window.scanModule?.getJobForVolume
+      ? window.scanModule.getJobForVolume({ name })
+      : null;
+    return formatScanDisplayTitle(name, job);
   }
 }
 

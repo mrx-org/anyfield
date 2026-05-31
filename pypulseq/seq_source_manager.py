@@ -28,7 +28,14 @@ def parse_toml_config(toml_string):
     data = tomllib.loads(toml_string)
     dependencies = data.get("dependencies", {})
     metadata = data.get("metadata", {})
-    return json.dumps({"dependencies": dependencies, "metadata": metadata})
+    simulation = data.get("simulation", {})
+    recon = data.get("recon", {})
+    return json.dumps({
+        "dependencies": dependencies,
+        "metadata": metadata,
+        "simulation": simulation,
+        "recon": recon,
+    })
 
 
 class SourceManager:
