@@ -309,8 +309,11 @@ export class ScanModule {
             await new Promise(r => setTimeout(r, 2000));
 
             // Borrowing logic from niivue_app.js handleResampleToFov()
-            // 1. Get current volume as NIfTI bytes
-            const srcBytes = nvMod.getVolumeNifti(nvMod.nv.volumes[0]);
+            const srcVol = typeof nvMod.getPhantomVolumeForResample === "function"
+                ? nvMod.getPhantomVolumeForResample()
+                : nvMod.nv.volumes[0];
+            if (!srcVol) throw new Error("No phantom volume available for CROP.");
+            const srcBytes = nvMod.getVolumeNifti(srcVol);
             
             // 2. Generate target FOV mask as NIfTI bytes
             const refBytes = nvMod.generateFovMaskNifti(nvMod.getPhantomMatrixDims());
@@ -321,16 +324,9 @@ export class ScanModule {
 
             await nvMod.initPyodide();
             await nvMod._ensureNibabelReady();
+            nvMod._setResamplePyodideOptions();
             // 4) run_resampling* returns a VFS path string, not raw bytes — read file (same as SIM / Resample to FOV)
-            const v0 = nvMod.nv.volumes[0];
-            const hdr = v0.hdr ?? v0.header;
-            const dims = hdr?.dims ?? hdr?.dim ?? v0.dims ?? [];
-            const useSerial3DTo4D = (nvMod.options.resampleSerial3D !== false && (dims[0] || 3) >= 4 && Number(dims[4] || 1) > 1);
-            let res = await nvMod.pyodide.runPythonAsync(
-                useSerial3DTo4D
-                    ? `run_resampling_serial3d_to_4d(source_bytes, reference_bytes)`
-                    : `run_resampling(source_bytes, reference_bytes)`
-            );
+            let res = await nvMod.runPyodideResampling(srcVol);
             const outPathRaw = (res && res.toJs) ? res.toJs() : res;
             const outPath = String(outPathRaw);
             if (outPathRaw?.destroy) outPathRaw.destroy();
@@ -968,19 +964,13 @@ if os.path.exists(_p):
                 nvMod.getSimPhantomMatrixDims(phantomOversample),
             );
             const reconRef = nvMod.generateFovMaskNiftiFromSnapshot(job.fovSnapshot, nvMod.getReconMatrixDims());
+            nvMod._setResamplePyodideOptions();
             const resampledEntries = [];
             nvMod.pyodide.globals.set("reference_bytes", phantomRef);
             for (const vol of activeGroup.volumes) {
-                const hdr = vol.hdr ?? vol.header;
-                const dims = hdr?.dims ?? hdr?.dim ?? vol.dims ?? [];
-                const useSerial3DTo4D = (nvMod.options.resampleSerial3D !== false && (dims[0] || 3) >= 4 && Number(dims[4] || 1) > 1);
                 const src = nvMod.getVolumeNifti(vol);
                 nvMod.pyodide.globals.set("source_bytes", src);
-                let res = await nvMod.pyodide.runPythonAsync(
-                    useSerial3DTo4D
-                        ? `run_resampling_serial3d_to_4d(source_bytes, reference_bytes)`
-                        : `run_resampling(source_bytes, reference_bytes)`
-                );
+                let res = await nvMod.runPyodideResampling(vol);
                 const outPathRaw = (res && res.toJs) ? res.toJs() : res;
                 const outPath = String(outPathRaw);
                 if (outPathRaw?.destroy) outPathRaw.destroy();

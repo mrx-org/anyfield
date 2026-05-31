@@ -8,7 +8,35 @@
 
 -- add phantom and fov and maybe prot setting to url
 
--- crop for large slices is wrong, it takes the center slice and does not interpolate.
+-- [DONE v1.0.0] crop for large slices is wrong, it takes the center slice and does not interpolate.
+   summary:
+   - Problem: CROP / Resample-to-FOV / SCAN resampled every output voxel by a single trilinear
+     sample at the voxel center. For thick FOV slabs (esp. matrix Z = 1, or small Z like 2)
+     the result was a sharp center slice — no averaging over the slab — so changing FOV Z mm
+     looked identical instead of blurring/partial-volume averaging the contained voxels.
+   - Background: this is "conservative regridding" (volume/footprint-weighted resampling),
+     standard in climate/geo tools (ESMF/xESMF), but NOT in nibabel/nilearn/ITK, which all do
+     point interpolation by default. So a custom resampler was needed.
+   - Fix: added `footprint_mean` mode in `data/resampling.py` (now the default). Each output
+     voxel averages trilinear sub-samples taken across its full physical footprint, mapped
+     through the FULL affine — so it is general and stays correct for rotated/oblique slices.
+   - General approach with fewer substeps: substeps per axis = clamp(ceil(span), 1, cap),
+     where span = how many source voxels one reference voxel covers along that axis.
+     The box-average converges quickly, so the cap was lowered from 32 to **8 substeps per axis**.
+     This matches the old 32-step output visually while running up to ~4x faster on thick slabs
+     (the common nz=1 / thick-FOV case). Axes that are not downsampled use 1 substep (unchanged).
+   - Wiring: `RESAMPLING_PY_VERSION` bumped (cache-bust + reload of the Python file); options
+     `resampleSamplingMode` ("footprint_mean" | "center") and `resampleMaxSubsteps` (default 8)
+     are threaded from `niivue_app.js` into Pyodide for CROP, Resample-to-FOV, and SCAN.
+   - Possible further speedups (future ideas):
+
+     | Option | Speedup | Exact under rotation? | Effort |
+     |---|---|---|---|
+     | 1 Fewer substeps (DONE v1.0.0: cap 32→8) | ~5× | Yes | Trivial |
+     | 2 Separable coords (per-axis coordinate construction) | small | Yes | Low |
+     | 3 Batched interp (all substeps in one interpolation call) | modest | Yes | Low |
+     | 4 Prefilter (integral image box filter + single sample) | large, thickness-independent | Approx | Medium |
+     | 5 SciPy `map_coordinates` (compiled, if payload acceptable) | large constant | Yes | Low code / heavy payload |
 
 -- save and load fov + phantom from/to seq file
    mini-plan:

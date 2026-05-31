@@ -10,6 +10,9 @@ import { volumeIs4D, syncVolumeClimsToCurrent4DFrame, installFrameAwareContrastD
 export const DEFAULT_PHANTOM_REMOTE_BASE =
   "https://raw.githubusercontent.com/mrx-org/anyfield/main/data/brain_default_1mm_gz";
 
+/** Must match `RESAMPLING_PY_VERSION` in data/resampling.py (cache-bust + reload). */
+export const RESAMPLING_PY_VERSION = 3;
+
 export class NiivueModule {
   constructor(options = {}) {
     this.instanceId = Math.random().toString(36).substr(2, 5);
@@ -1386,16 +1389,20 @@ export class NiivueModule {
    * Subsequent calls return the cached promise immediately.
    */
   _ensureNibabelReady() {
-    if (this._nibabelReady) return this._nibabelReady;
+    if (this._nibabelReady && this._resamplingLoadedVersion === RESAMPLING_PY_VERSION) {
+      return this._nibabelReady;
+    }
+    this._nibabelReady = null;
     this._nibabelReady = (async () => {
       if (!this.pyodide) throw new Error('Pyodide not initialised');
       if (this.pyodideStatus) this.pyodideStatus.textContent = "Python: loading nibabel...";
-      const resamplingUrl = (this.options.resamplingScriptUrl || "data/resampling.py");
-      const executeJsonUrl = (this.options.executeJsonScriptUrl || "data/execute_json.py");
+      const resamplingBase = this.options.resamplingScriptUrl || "data/resampling.py";
+      const resamplingUrl = `${resamplingBase}${resamplingBase.includes("?") ? "&" : "?"}v=${RESAMPLING_PY_VERSION}`;
+      const executeJsonUrl = this.options.executeJsonScriptUrl || "data/execute_json.py";
       // Fetch scripts and install nibabel wheel in parallel
       const [resamplingResp, execResp] = await Promise.all([
-        fetch(resamplingUrl),
-        fetch(executeJsonUrl),
+        fetch(resamplingUrl, { cache: "no-store" }),
+        fetch(executeJsonUrl, { cache: "no-store" }),
         this.pyodide.runPythonAsync(`import micropip\nawait micropip.install('nibabel')`),
       ]);
       if (!resamplingResp.ok) throw new Error(`Could not load ${resamplingUrl}: ${resamplingResp.status}`);
@@ -1406,6 +1413,7 @@ export class NiivueModule {
       ]);
       await this.pyodide.runPythonAsync(resamplingCode);
       await this.pyodide.runPythonAsync(executeJsonCode);
+      this._resamplingLoadedVersion = RESAMPLING_PY_VERSION;
       if (this.pyodideStatus) this.pyodideStatus.textContent = "Python (Pyodide): ready";
     })();
     this._nibabelReady = this._nibabelReady.catch((e) => {
@@ -2149,6 +2157,38 @@ os.makedirs('/phantom/averaged', exist_ok=True)
     return { vol, hdr, dim3, affine };
   }
 
+  /** First non-scan volume for CROP / resample source (not volumes[0] if a scan is loaded). */
+  getPhantomVolumeForResample() {
+    const list = this.nv?.volumes;
+    if (!list?.length) return null;
+    return list.find((v) => !(v.name && v.name.startsWith("scan_"))) ?? list[0];
+  }
+
+  _resampleSamplingOptions() {
+    const mode = this.options.resampleSamplingMode ?? "footprint_mean";
+    const maxSub = Math.max(1, Math.round(Number(this.options.resampleMaxSubsteps ?? 8)));
+    return { mode, maxSub };
+  }
+
+  _volumeUsesSerial3DTo4D(vol) {
+    const hdr = vol?.hdr ?? vol?.header;
+    const dims = hdr?.dims ?? hdr?.dim ?? vol?.dims ?? [];
+    return (
+      this.options.resampleSerial3D !== false
+      && (dims[0] || 3) >= 4
+      && Number(dims[4] || 1) > 1
+    );
+  }
+
+  /** Run Pyodide resampling; expects source_bytes + reference_bytes globals set. */
+  async runPyodideResampling(vol) {
+    const { mode, maxSub } = this._resampleSamplingOptions();
+    const useSerial3DTo4D = this._volumeUsesSerial3DTo4D(vol);
+    const fn = useSerial3DTo4D ? "run_resampling_serial3d_to_4d" : "run_resampling";
+    const py = `${fn}(source_bytes, reference_bytes, ${JSON.stringify(mode)}, ${maxSub})`;
+    return this.pyodide.runPythonAsync(py);
+  }
+
   /**
    * Set FOV sliders + mesh from a queue scan volume's qform/sform (same as clicking the scan row).
    * Call when selecting a scan from the queue so VIEW SCAN matches volume-list behavior.
@@ -2707,12 +2747,21 @@ os.makedirs('/phantom/averaged', exist_ok=True)
     console.log(`[resampleToFov] ${kind} ${label}`, details);
   }
 
+  /** Push resample options into Pyodide globals for data/resampling.py. */
+  _setResamplePyodideOptions() {
+    if (!this.pyodide) return;
+    const { mode, maxSub } = this._resampleSamplingOptions();
+    this.pyodide.globals.set("resample_sampling_mode", mode);
+    this.pyodide.globals.set("resample_max_substeps", maxSub);
+  }
+
   async handleResampleToFov() {
     if (!this.pyodide || !this.nv.volumes?.length) return;
     try {
       const debugResample = this.options.debugResampleToFov === true;
       this.resampleToFovBtn.disabled = true;
       await this._ensureNibabelReady();
+      this._setResamplePyodideOptions();
       const ref = this.generateFovMaskNifti(this.getPhantomMatrixDims());
       this.pyodide.globals.set("reference_bytes", ref);
       if (debugResample) {
@@ -2753,11 +2802,7 @@ os.makedirs('/phantom/averaged', exist_ok=True)
               });
             }
             this.pyodide.globals.set("source_bytes", src);
-            let res = await this.pyodide.runPythonAsync(
-              useSerial3DTo4D
-                ? `run_resampling_serial3d_to_4d(source_bytes, reference_bytes)`
-                : `run_resampling(source_bytes, reference_bytes)`
-            );
+            let res = await this.runPyodideResampling(vol);
               const resType = res?.constructor?.name;
               const outPathRaw = (res && res.toJs) ? res.toJs() : res;
               const outPath = String(outPathRaw);
@@ -2822,11 +2867,7 @@ os.makedirs('/phantom/averaged', exist_ok=True)
           });
         }
         this.pyodide.globals.set("source_bytes", src);
-        let res = await this.pyodide.runPythonAsync(
-          useSerial3DTo4D
-            ? `run_resampling_serial3d_to_4d(source_bytes, reference_bytes)`
-            : `run_resampling(source_bytes, reference_bytes)`
-        );
+        let res = await this.runPyodideResampling(vol);
           const resType = res?.constructor?.name;
           const outPathRaw = (res && res.toJs) ? res.toJs() : res;
           const outPath = String(outPathRaw);

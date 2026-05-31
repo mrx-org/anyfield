@@ -1,6 +1,6 @@
 # Niivue minimal app (zero-install)
 
-**Version:** `v0.9.1`
+**Version:** `v1.0.0`
 
 This is a **minimal Niivue viewer** implemented as a single `viewer.html` file.
 
@@ -85,6 +85,12 @@ For more insights see insights SPEC_no_field.md.
 
 ## Release notes
 
+
+**v1.0.0**
+- **Slab-correct FOV resampling (CROP / Resample-to-FOV / SCAN)**: Previously each output voxel was a single trilinear sample at the voxel center, so thick FOV slabs (especially matrix **Z = 1**, or small Z like 2) produced a sharp center slice and ignored the voxels inside the slab — changing **FOV Z** looked identical instead of averaging. Resampling now defaults to **`footprint_mean`**: each output voxel averages trilinear sub-samples over its full physical footprint. This is "conservative regridding" (volume-weighted), which nibabel/nilearn/ITK do **not** provide out of the box.
+- **General + rotation-safe**: sub-samples are placed in the reference voxel grid and mapped through the **full affine**, so oblique/rotated FOV boxes stay correct.
+- **Fewer substeps (perf)**: substeps per axis = `clamp(ceil(span), 1, cap)`; the cap was lowered from 32 to **12 per axis**. The box-average converges quickly, so output matches the 32-step result visually while running up to ~4x faster on thick slabs. Axes that are not downsampled use 1 substep (unchanged).
+- **Options**: `resampleSamplingMode` (`"footprint_mean"` | `"center"` legacy) and `resampleMaxSubsteps` (default `12`); `RESAMPLING_PY_VERSION` cache-busts and reloads the Pyodide resampling module.
 
 **v0.9.1**
 - **Paper Plot**: Niivue/clim helpers merged into `paper_plot_figure.js`; no longer imports `hist_panel/histogram-clim-panel.js`.
