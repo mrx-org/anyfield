@@ -192,9 +192,6 @@ export class ScanModule {
                     </div>
                     <div class="item-meta draft-protocol-meta">${meta}</div>
                 </div>
-                <div class="item-actions">
-                    <span class="draft-badge">preparing</span>
-                </div>
             </div>`;
     }
 

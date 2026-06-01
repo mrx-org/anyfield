@@ -52,18 +52,7 @@ const SEQ_TEMPLATES = {
                 </div>
                 <div class="seq-explorer-right-pane">
                     <div id="seq-params-section">
-                        <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 0.5rem;">
-                            <div>
-                            <h3 class="section-title" style="margin: 0;">Protocol</h3>
-                                <div id="seq-current-name" class="seq-current-name" title=""></div>
-                            </div>
-                            <div style="display: flex; gap: 0.5rem; align-items: center;">
-                                <button id="seq-get-fov-btn" style="padding: 0.4rem 0.32rem; background: rgba(255, 255, 255, 0.08); color: var(--text, #ddd); border: 1px solid var(--border, #333); border-radius: 4px; cursor: pointer; font-size: 0.75rem; font-weight: 500;">↖ set FOV</button>
-                                <button id="seq-edit-btn" style="padding: 0.4rem 0.32rem; background: rgba(255, 255, 255, 0.1); color: var(--text, #ddd); border: 1px solid var(--border, #333); border-radius: 4px; cursor: pointer; font-size: 0.875rem; font-weight: 500;">edit code</button>
-                                <button id="seq-execute-btn" style="padding: 0.4rem 0.32rem; background: var(--accent); color: white; border: none; border-radius: 4px; cursor: pointer; font-size: 0.875rem; font-weight: 500;">plot seq</button>
-                                <button id="seq-pop-btn" style="padding: 0.4rem 0.32rem; background: rgba(255, 255, 255, 0.1); color: var(--text, #ddd); border: 1px solid var(--border, #333); border-radius: 4px; cursor: pointer; font-size: 0.875rem; font-weight: 500;">pop seq</button>
-                            </div>
-                        </div>
+                        ${SEQ_TEMPLATES.protocolHeader({ popSeq: true })}
                         <div style="display: flex; align-items: center; justify-content: space-between; margin-bottom: 0.75rem; padding-top: 0.5rem; border-top: 1px solid var(--border);">
                             <label style="display: flex; align-items: center; cursor: pointer; font-size: 0.875rem; color: var(--text);">
                                 <input type="checkbox" id="seq-dark-plot-checkbox" checked style="margin-right: 0.5rem; cursor: pointer; width: 1rem; height: 1rem;">
@@ -112,22 +101,32 @@ const SEQ_TEMPLATES = {
                     </div>
                 </div>`;
     },
+    /** Protocol panel header: title + actions on one row; path + name on the line below. */
+    protocolHeader({ btnClass = false, popSeq = false, mobileRun = false } = {}) {
+        const btn = (id, label, primary = false) => btnClass
+            ? `<button id="${id}" class="btn btn-secondary btn-md${primary ? ' seq-btn-primary' : ''}">${label}</button>`
+            : `<button id="${id}" style="padding: 0.4rem 0.32rem; background: ${primary ? 'var(--accent)' : 'rgba(255, 255, 255, 0.08)'}; color: ${primary ? 'white' : 'var(--text, #ddd)'}; border: ${primary ? 'none' : '1px solid var(--border, #333)'}; border-radius: 4px; cursor: pointer; font-size: ${primary ? '0.875rem' : '0.75rem'}; font-weight: 500;">${label}</button>`;
+        const actions = `
+                    <div class="seq-params-header-actions">
+                        <div class="seq-params-header-btns">
+                            ${btn('seq-get-fov-btn', '↖ set FOV')}
+                            ${btn('seq-edit-btn', 'edit code')}
+                            ${btn('seq-execute-btn', 'plot seq', true)}
+                            ${popSeq ? btn('seq-pop-btn', 'pop seq') : ''}
+                        </div>
+                        ${mobileRun ? SEQ_TEMPLATES.mobileRunButtons() : ''}
+                    </div>`;
+        return `<div class="seq-params-header">
+                    <div class="seq-params-header-row">
+                        <h3 class="section-title" style="margin: 0;">Protocol</h3>
+                        ${actions}
+                    </div>
+                    <div id="seq-current-name" class="seq-current-name" title=""></div>
+                </div>`;
+    },
     paramsSection() {
         return `<div id="seq-params-section">
-                <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 0.5rem;">
-                    <div>
-                        <h3 class="section-title" style="margin: 0;">Protocol</h3>
-                        <div id="seq-current-name" class="seq-current-name" title=""></div>
-                    </div>
-                    <div style="display: flex; flex-direction: column; align-items: flex-end; gap: 0.35rem;">
-                    <div style="display: flex; gap: 0.5rem; align-items: center;">
-                    <button id="seq-get-fov-btn" class="btn btn-secondary btn-md">↖ set FOV</button>
-                    <button id="seq-edit-btn" class="btn btn-secondary btn-md">edit code</button>
-                    <button id="seq-execute-btn" class="btn btn-secondary btn-md">plot seq</button>
-                    </div>
-                    ${SEQ_TEMPLATES.mobileRunButtons()}
-                    </div>
-                </div>
+                ${SEQ_TEMPLATES.protocolHeader({ btnClass: true, mobileRun: true })}
                 <div id="seq-error-display" class="seq-error-message" style="display: none;"></div>
                 <div id="seq-params-controls"></div>
             </div>`;

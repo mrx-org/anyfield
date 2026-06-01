@@ -226,19 +226,64 @@ body {
     font-weight: 500;
 }
 
+.seq-params-header {
+    margin-bottom: 0.5rem;
+}
+
+.seq-params-header-row {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    gap: 0.5rem;
+    flex-wrap: wrap;
+}
+
+.seq-params-header-actions {
+    display: flex;
+    flex-direction: column;
+    align-items: flex-end;
+    gap: 0.35rem;
+    flex-shrink: 0;
+}
+
+.seq-params-header-btns {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 0.5rem;
+    align-items: center;
+    justify-content: flex-end;
+}
+
+#seq-params-section .seq-btn-primary {
+    background: var(--accent) !important;
+    color: #fff !important;
+    border: none !important;
+}
+
 .seq-file-function-name {
+    display: block;
     font-weight: 500;
     font-size: 0.875rem;
+    line-height: 1.3;
+    word-break: break-word;
 }
 
 .seq-current-name {
-    margin-top: 0.25rem;
+    margin-top: 0.35rem;
+    width: 100%;
+    min-width: 0;
     cursor: help;
+    display: flex;
+    flex-direction: column;
+    gap: 0.15rem;
 }
 
 .seq-current-name .seq-current-path {
+    display: block;
     font-size: 0.7rem;
     color: var(--muted);
+    line-height: 1.25;
+    word-break: break-all;
 }
 
 .seq-function-doc {

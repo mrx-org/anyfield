@@ -165,13 +165,9 @@ html.pro-user #seq-mobile-crop {
     text-overflow: ellipsis;
 }
 
-.draft-badge {
-    font-size: var(--font-size-xs, 10px);
-    color: var(--accent, #3b82f6);
-    text-transform: uppercase;
-    letter-spacing: 0.04em;
-    font-weight: var(--font-weight-medium, 500);
-    opacity: 0.9;
+.queue-item.status-draft .item-main {
+    flex: 1;
+    width: 100%;
 }
 
 .item-main {

@@ -610,17 +610,42 @@
   display: block;
 }
 
-.niivue-app .crosshair-intensity {
+/* Canvas corner overlays (intensity, hints, scan label) — thin UI type, 11px */
+.niivue-app .viewer .viewer-canvas-overlay {
   position: absolute;
-  bottom: 8px;
-  left: 8px;
+  z-index: 2;
+  margin: 0;
   padding: 0;
   background: transparent;
   border: none;
-  border-radius: 0;
-  color: #888;
+  font-family: system-ui, -apple-system, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
+  font-weight: 300;
   font-size: 11px;
+  line-height: 1.25;
+  color: #888;
+  text-shadow: 0 1px 2px rgba(0, 0, 0, 0.85);
   pointer-events: none;
+}
+
+.niivue-app .viewer-hint,
+.niivue-app .preview-hint {
+  color: #666;
+}
+
+.niivue-app .viewer-canvas-overlay--tl {
+  top: 8px;
+  left: 8px;
+}
+
+.niivue-app .viewer-canvas-overlay--tr {
+  top: 8px;
+  right: 8px;
+  text-align: right;
+}
+
+.niivue-app .viewer-canvas-overlay--bl {
+  bottom: 8px;
+  left: 8px;
 }
 
 .niivue-app .hint {

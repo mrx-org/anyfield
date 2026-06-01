@@ -22,7 +22,9 @@ export class NiivueModule {
     this.nv = new Niivue({ 
       logging: false,
       loadingText: "Load a phantom.",
-      multiplanarLayout: 2 // MULTIPLANAR_TYPE.GRID
+      multiplanarLayout: 2, // MULTIPLANAR_TYPE.GRID
+      fontMinPx: 11,
+      fontSizeScaling: 0.4,
     });
     this.pyodide = options.pyodide || null;
     this._initPyodidePromise = null;
@@ -224,10 +226,8 @@ export class NiivueModule {
       <div class="viewer-stack-body" style="flex:1;min-height:0;display:flex;flex-direction:column;">
       <div class="viewer standalone-viewer" style="flex:1;min-height:0;position:relative;">
         <canvas id="${this.canvasId}"></canvas>
-        <div class="crosshair-intensity" id="crosshairIntensity-${this.instanceId}">—</div>
-        <div class="viewer-hint" style="position: absolute; bottom: 8px; right: 8px; font-size: 11px; color: rgba(255,255,255,0.7); pointer-events: none; text-shadow: 0 1px 2px rgba(0,0,0,0.8);">
-          CTRL + mouse to change FoV
-        </div>
+        <div class="crosshair-intensity viewer-canvas-overlay viewer-canvas-overlay--tl" id="crosshairIntensity-${this.instanceId}">—</div>
+        <div class="viewer-hint viewer-canvas-overlay viewer-canvas-overlay--tr">CTRL + mouse to change FoV</div>
       </div>
       </div>
     `;
@@ -1111,7 +1111,10 @@ export class NiivueModule {
     
     await this.nv.attachTo(this.canvasId);
     installFrameAwareContrastDrag(this.nv);
-    
+    this.nv.opts.fontMinPx = 11;
+    this.nv.opts.fontSizeScaling = 0.4;
+    if (typeof this.nv.textSizePoints === "function") this.nv.textSizePoints();
+
     try {
       this.nv.setSliceType(SLICE_TYPE.MULTIPLANAR);
       this.nv.setMultiplanarLayout(MULTIPLANAR_TYPE.GRID); 
@@ -1162,7 +1165,7 @@ export class NiivueModule {
         }
 
         // Update crosshair intensity (bottom-left overlay)
-        this.updateCrosshairIntensity(vox);
+        this.updateCrosshairIntensity(data);
         this.updateDebugInfo();
       } catch (e) { console.warn("onLocationChange handler failed", e); }
     };
@@ -1644,15 +1647,35 @@ os.makedirs('/phantom/averaged', exist_ok=True)
     return Number(val).toPrecision(4);
   }
 
-  updateCrosshairIntensity(vox) {
+  /** Intensity at crosshair for the volume used by {@link getVolumeForIntensity}. */
+  _intensityFromLocationData(data) {
+    const { vol, dim3 } = this.getVolumeForIntensity();
+    if (!vol) return null;
+
+    const values = data?.values;
+    if (Array.isArray(values) && values.length) {
+      const entry = values.find((e) => e.id != null && e.id === vol.id)
+        ?? values.find((e) => e.name && e.name === vol.name);
+      if (entry != null && Number.isFinite(entry.value)) return entry.value;
+    }
+
+    const mm = data?.mm;
+    if ((Array.isArray(mm) || ArrayBuffer.isView(mm)) && mm.length >= 3 && typeof vol.mm2vox === "function") {
+      const voxVol = vol.mm2vox(mm);
+      return this.getIntensityAtVox(vol, voxVol, dim3);
+    }
+
+    const vox = data?.vox;
+    if ((Array.isArray(vox) || ArrayBuffer.isView(vox)) && vox.length >= 3) {
+      return this.getIntensityAtVox(vol, vox, dim3);
+    }
+    return null;
+  }
+
+  updateCrosshairIntensity(data) {
     if (!this.crosshairIntensityEl) return;
     try {
-      if (!(Array.isArray(vox) || ArrayBuffer.isView(vox)) || vox.length < 3) {
-        this.crosshairIntensityEl.textContent = "—";
-        return;
-      }
-      const { vol, dim3 } = this.getVolumeForIntensity();
-      const val = this.getIntensityAtVox(vol, vox, dim3);
+      const val = this._intensityFromLocationData(data);
       if (val === null || Number.isNaN(val)) {
         this.crosshairIntensityEl.textContent = "—";
         return;
@@ -1661,6 +1684,15 @@ os.makedirs('/phantom/averaged', exist_ok=True)
     } catch (e) {
       this.crosshairIntensityEl.textContent = "—";
     }
+  }
+
+  /** Re-fire location callback after volume list changes (keeps intensity overlay in sync). */
+  refreshCrosshairIntensityOverlay() {
+    if (!this.nv?.createOnLocationChange) return;
+    const ax = typeof this.currentAxCorSag === "number" && Number.isFinite(this.currentAxCorSag)
+      ? this.currentAxCorSag
+      : NaN;
+    this.nv.createOnLocationChange(ax);
   }
 
   readAnglesBestEffort() {
@@ -3161,6 +3193,7 @@ os.makedirs('/phantom/averaged', exist_ok=True)
 
     this.updateJsonTab();
     if (typeof window !== "undefined") window.mainHist?.scheduleRefresh?.();
+    this.refreshCrosshairIntensityOverlay();
   }
 
   /** JSON text still in memory on volume groups when /phantom was never filled (default bundle). */
@@ -3584,6 +3617,8 @@ export class ScanPreviewModule {
       viewModeHotKey: "", // disable Niivue V cycle (includes SLICE_TYPE.RENDER)
       show3Dcrosshair: false,
       isOrientCube: false,
+      fontMinPx: 11,
+      fontSizeScaling: 0.4,
     });
     this._previewViewKeyLast = 0;
     this.container = null;
@@ -3608,8 +3643,8 @@ export class ScanPreviewModule {
       <div class="viewer-stack-body" style="flex:1;min-height:0;display:flex;flex-direction:column;">
       <div class="${this.viewerClass}" style="flex:1;min-height:0;position:relative;background:black;">
         <canvas id="${this.canvasId}"></canvas>
-        <div class="preview-label" style="position: absolute; bottom: 8px; left: 8px; font-size: 11px; color: #888; pointer-events: none;">${this.labelDefault}</div>
-        ${this.hintText ? `<div class="preview-hint" style="position: absolute; bottom: 8px; right: 8px; font-size: 11px; color: #666; pointer-events: none;">${this.hintText}</div>` : ''}
+        <div class="preview-label viewer-canvas-overlay viewer-canvas-overlay--bl">${this.labelDefault}</div>
+        ${this.hintText ? `<div class="preview-hint viewer-canvas-overlay viewer-canvas-overlay--tr">${this.hintText}</div>` : ''}
       </div>
       </div>
     `;
@@ -3645,6 +3680,9 @@ export class ScanPreviewModule {
     try {
       await this.nv.attachToCanvas(this.canvas);
       this.nv.opts.multiplanarShowRender = SHOW_RENDER.NEVER;
+      this.nv.opts.fontMinPx = 11;
+      this.nv.opts.fontSizeScaling = 0.4;
+      if (typeof this.nv.textSizePoints === "function") this.nv.textSizePoints();
       this.nv.setSliceType(SLICE_TYPE.AXIAL);
 
       this._applyPreviewCrosshairStyle();
