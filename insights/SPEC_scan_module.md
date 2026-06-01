@@ -30,15 +30,19 @@ The module bridges the gap between **Planning** (Sequence Explorer/Niivue) and *
 Uses `executeFunction` and prepares `/outputs/<baseName>.seq` for the external sim tools; queue items get VIEW SEQ / download where applicable.
 
 **Order (FOV / grid contract):**
-1. **`_prepareCurrentSeqForTools`** — silent `executeFunction` with `protocolName` (protocol snapshot + sequence build). Sequence Explorer emits **`sequence_fov_dims`** from **`seq.definitions` FOV** (m→mm) so Niivue FOV **size** matches the built Pulseq sequence.
+1. **`_prepareCurrentSeqForTools`** (Pyodide `sim-seq` task) — silent `executeFunction` with `protocolName` (protocol snapshot + sequence build). Sequence Explorer emits **`sequence_fov_dims`** from **`seq.definitions` FOV** (m→mm) so Niivue FOV **size** matches the built Pulseq sequence; produces **`seqText`** for conseq.
 2. **`captureFovSnapshot()`** — freeze FOV geometry for this job into `job.fovSnapshot` (`{ centerWorld, sizeMm, rotationDeg }` in RAS mm). Seq-authoritative size and user-authoritative offsets/rotations are both now on the sliders, so this is the correct capture moment.
-3. **`generateFovMaskNiftiFromSnapshot(job.fovSnapshot, …)`** — build **both** phantom ref (`getPhantomMatrixDims`) and recon ref (`getReconMatrixDims`) up-front from the same frozen snapshot. Phantom and recon grids differ in matrix resolution but share identical mm box + world placement.
-4. Resample phantom volumes to the phantom ref → conseq / trajex → sim tool → PyNUFFT on the recon ref.
+3. **`generateFovMaskNiftiFromSnapshot(job.fovSnapshot, …)`** — build **both** phantom ref (`getPhantomMatrixDims` × oversample) and recon ref (`getReconMatrixDims`) from the frozen snapshot (main thread).
+4. **Prepare (parallel):** **`conseq(seqText)`** ∥ **Pyodide resample all phantom volumes + `_convertResampledGroupToToolPhantom`** (`sim-phantom` task). Either leg failing aborts the job with a combined error message.
+5. **Simulate (parallel):** **`trajex(events)`** ∥ **sim backend** (`sequence` + encoded phantom). Recon requires **both** trajectory and signal.
+6. **PyNUFFT recon** (Pyodide `sim-recon` task) on `reconRef` from step 3.
 
 **Tool API call policy (design contract):**
-- Calls to external tool backends are **sequential** for each SIM job: `conseq` → `trajex` → (`tool-mr0sim` or `tool-rapisim`).
-- The pipeline must **not** use `Promise.all` for these tool stages.
-- Each stage is treated as its own tool channel / WebSocket session (separate progress logs per tool), avoiding mixed progress streams and reducing cross-tool contention.
+- **Prepare:** `conseq` (Fly) runs **in parallel** with Pyodide footprint resample + phantom convert (after seq execute + FOV snapshot).
+- **Simulate:** `trajex` and (`tool-mr0sim` or `tool-rapisim`) run **in parallel** after `conseq` and phantom are both ready; recon still needs trajectory + signal.
+- At most **`MAX_CONCURRENT_TOOL_WS` (2)** open tool WebSockets globally across queued jobs (`_acquireToolSlot` in `scan_module.js`).
+- Parallel legs use `Promise.allSettled`; failures report which leg failed (`conseq`, `phantom resample`, `trajex`, or sim channel).
+- Each stage is still one WebSocket per call (separate progress logs per tool channel).
 
 **Why the snapshot:** the recon reference determines the output NIfTI's affine/zooms (see `run_sim_recon` in `scan_zero/recon.py`). Previously it was re-derived from live sliders *after* the long-running toolapi calls, so any FOV change in between (user input, `syncFovFromScanVolume` after a prior scan completing, `applySequenceFovDimensions` from a subsequent seq prep) desynced the recon grid from the phantom grid — signal encoded old FOV, output stamped with new affine. The per-job snapshot isolates each in-flight pipeline from later slider mutations. Because `centerWorld` is stored in absolute RAS mm, swapping the "selected" volume mid-pipeline does not shift the snapshot.
 

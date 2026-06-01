@@ -13,6 +13,9 @@ const TOOL_FLY_HOSTS = [TOOL_CONSEQ, TOOL_TRAJEX, TOOL_RAPISIM, TOOL_MR0SIM].map
 
 const PIPELINE_STAGES = ['prep', 'conseq', 'trajex', 'sim', 'recon'];
 
+/** Max concurrent toolapi WebSocket calls (global across queued SCAN jobs). */
+const MAX_CONCURRENT_TOOL_WS = 2;
+
 /** Stable recon method tag stored in protocol TOML `[recon]`. */
 export const RECON_METHOD = 'anyfield-pynufft';
 
@@ -78,6 +81,8 @@ export class ScanModule {
         this._toolApiCall = null;
         /** Set during runSimPipeline for per-tool WebSocket log tagging */
         this._simPipelineJob = null;
+        this._toolWsInflight = 0;
+        this._toolWsWaiters = [];
 
         this.setupEventListeners();
     }
@@ -556,11 +561,63 @@ export class ScanModule {
         };
     }
 
+    async _acquireToolSlot() {
+        if (this._toolWsInflight < MAX_CONCURRENT_TOOL_WS) {
+            this._toolWsInflight += 1;
+            return;
+        }
+        await new Promise((resolve) => this._toolWsWaiters.push(resolve));
+        this._toolWsInflight += 1;
+    }
+
+    _releaseToolSlot() {
+        this._toolWsInflight = Math.max(0, this._toolWsInflight - 1);
+        const next = this._toolWsWaiters.shift();
+        if (next) next();
+    }
+
+    /** Extract toolapi error string from a result dict, if any. */
+    _toolErrorMessage(result) {
+        if (!result) return null;
+        const r = result.Ok !== undefined ? result.Ok : result;
+        if (r?.Error) return String(r.Error);
+        if (r?.err) return String(r.err);
+        if (result?.Error) return String(result.Error);
+        if (result?.err) return String(result.err);
+        return null;
+    }
+
+    _assertToolOk(channel, result) {
+        const msg = this._toolErrorMessage(result);
+        if (msg) throw new Error(`${channel} failed: ${msg}`);
+        return result;
+    }
+
     /**
-     * One toolapi-wasm request = one WebSocket to `url`. Sequential pipeline steps must
-     * await each call so channels do not overlap.
+     * Build one error message when Promise.allSettled parallel tool/pyodide legs fail.
+     * @param {string} stageLabel
+     * @param {Array<{ label: string, settled: PromiseSettledResult }>} legs
+     */
+    _parallelStageError(stageLabel, legs) {
+        const parts = [];
+        for (const { label, settled } of legs) {
+            if (settled.status === 'rejected') {
+                const e = settled.reason;
+                parts.push(`${label}: ${e?.message || String(e)}`);
+            } else {
+                const toolMsg = this._toolErrorMessage(settled.value);
+                if (toolMsg) parts.push(`${label}: ${toolMsg}`);
+            }
+        }
+        if (!parts.length) return `${stageLabel} failed`;
+        return `${stageLabel} failed — ${parts.join('; ')}`;
+    }
+
+    /**
+     * One toolapi-wasm request = one WebSocket to `url` (slot-limited globally).
      */
     async _callTool(url, input, channel) {
+        await this._acquireToolSlot();
         const call = await this._ensureToolApi();
         const label = channel || this._toolChannelFromUrl(url);
         console.log(`${this._simPipelineJob ? this._jobSimLogTag(this._simPipelineJob) : 'SIM'} [${label}] ws open → ${url}`);
@@ -568,7 +625,48 @@ export class ScanModule {
             return await call(url, input, this._toolOnMessageFor(label));
         } finally {
             console.log(`${this._simPipelineJob ? this._jobSimLogTag(this._simPipelineJob) : 'SIM'} [${label}] ws closed`);
+            this._releaseToolSlot();
         }
+    }
+
+    /**
+     * Resample phantom volumes to FOV + build toolapi phantom dict (Pyodide queue).
+     */
+    async _simPhantomResampleAndConvert(nvMod, job, activeGroup, phantomRef, simLogTag) {
+        nvMod._setResamplePyodideOptions();
+        const resampledEntries = [];
+        nvMod.pyodide.globals.set("reference_bytes", phantomRef);
+        let volIdx = 0;
+        for (const vol of activeGroup.volumes) {
+            const src = nvMod.getVolumeNifti(vol);
+            nvMod.pyodide.globals.set("source_bytes", src);
+            const res = await nvMod.runPyodideResampling(vol, {
+                jobId: job.id,
+                suffix: `v${volIdx++}`,
+            });
+            const { bytes: outU8 } = nvMod.readResampleOutputPath(res);
+            resampledEntries.push({ name: vol.name, bytes: new Uint8Array(outU8) });
+        }
+        if (!resampledEntries.length) throw new Error("Resampling failed: no volumes produced.");
+
+        const selectedJson = typeof nvMod.getSelectedJsonForSim === 'function'
+            ? nvMod.getSelectedJsonForSim(activeGroup)
+            : null;
+        const phantomJsonFileName = selectedJson?.fileName
+            || activeGroup.jsonFileName
+            || (activeGroup.jsonName ? `${activeGroup.jsonName}.json` : null);
+        const phantomJsonContent = selectedJson?.content != null
+            ? selectedJson.content
+            : (typeof nvMod.getPhantomJsonContent === 'function'
+                ? nvMod.getPhantomJsonContent(activeGroup)
+                : activeGroup.jsonContent);
+        return this._convertResampledGroupToToolPhantom(nvMod, {
+            jsonName: activeGroup.jsonName,
+            jsonFileName: phantomJsonFileName,
+            jsonContent: phantomJsonContent,
+            resampledEntries,
+            jobId: job.id,
+        });
     }
 
 
@@ -1162,110 +1260,112 @@ if os.path.exists(_p):
                 : nvMod.volumeGroups?.find(g => g.volumes?.length && !String(g.jsonName || '').endsWith('_resampled') && !String(g.jsonName || '').endsWith('_averaged'));
             if (!activeGroup) throw new Error("No phantom group with JSON found. Load phantom via Add (json/nii) first.");
 
-            const _tPrep = performance.now();
-            const prep = await nvMod.enqueuePyodideTask(job.id, "sim-prep", async () => {
+            const _tSeq = performance.now();
+            const seqText = await nvMod.enqueuePyodideTask(job.id, "sim-seq", async () => {
                 await nvMod._ensureNibabelReady();
                 const _t0 = performance.now();
-                const seqText = await this._prepareCurrentSeqForTools(job);
-                console.log(`[SIM] _prepareCurrentSeqForTools: ${(performance.now()-_t0).toFixed(0)}ms, seqText ${(seqText.length/1024).toFixed(1)}KB`);
-
-                job.fovSnapshot = nvMod.captureFovSnapshot();
-                console.log(`[${simLogTag}] fovSnapshot:`, job.fovSnapshot);
-
-                const phantomOversample = nvMod.getPhantomOversampleFactors();
-                job.phantomOversample = phantomOversample;
-                const phantomFovSnapshot = nvMod.applyPhantomOversampleToSnapshot(job.fovSnapshot, phantomOversample);
-                const phantomMatrix = nvMod.getSimPhantomMatrixDims(phantomOversample);
-                const reconMatrix = nvMod.getReconMatrixDims();
-                const phantomRef = nvMod.generateFovMaskNiftiFromSnapshot(
-                    phantomFovSnapshot,
-                    phantomMatrix,
-                );
-                const reconRef = nvMod.generateFovMaskNiftiFromSnapshot(job.fovSnapshot, reconMatrix);
-
-                try {
-                    await this._patchProtocolSimulationToml(job, {
-                        phantomRef,
-                        phantomMatrix,
-                        reconMatrix,
-                        phantomName: activeGroup.jsonName || activeGroup.jsonFileName || 'unknown',
-                    });
-                } catch (tomlErr) {
-                    console.warn(`[${simLogTag}] protocol TOML simulation/recon patch failed:`, tomlErr);
-                }
-                nvMod._setResamplePyodideOptions();
-                const resampledEntries = [];
-                nvMod.pyodide.globals.set("reference_bytes", phantomRef);
-                let volIdx = 0;
-                for (const vol of activeGroup.volumes) {
-                    const src = nvMod.getVolumeNifti(vol);
-                    nvMod.pyodide.globals.set("source_bytes", src);
-                    const res = await nvMod.runPyodideResampling(vol, {
-                        jobId: job.id,
-                        suffix: `v${volIdx++}`,
-                    });
-                    const { bytes: outU8 } = nvMod.readResampleOutputPath(res);
-                    resampledEntries.push({ name: vol.name, bytes: new Uint8Array(outU8) });
-                }
-                if (!resampledEntries.length) throw new Error("Resampling failed: no volumes produced.");
-
-                const selectedJson = typeof nvMod.getSelectedJsonForSim === 'function'
-                    ? nvMod.getSelectedJsonForSim(activeGroup)
-                    : null;
-                const phantomJsonFileName = selectedJson?.fileName
-                    || activeGroup.jsonFileName
-                    || (activeGroup.jsonName ? `${activeGroup.jsonName}.json` : null);
-                const phantomJsonContent = selectedJson?.content != null
-                    ? selectedJson.content
-                    : (typeof nvMod.getPhantomJsonContent === 'function'
-                        ? nvMod.getPhantomJsonContent(activeGroup)
-                        : activeGroup.jsonContent);
-                const phantomPayload = await this._convertResampledGroupToToolPhantom(nvMod, {
-                    jsonName: activeGroup.jsonName,
-                    jsonFileName: phantomJsonFileName,
-                    jsonContent: phantomJsonContent,
-                    resampledEntries,
-                    jobId: job.id,
-                });
-                return { seqText, phantomPayload, reconRef };
+                const text = await this._prepareCurrentSeqForTools(job);
+                console.log(`[SIM] _prepareCurrentSeqForTools: ${(performance.now() - _t0).toFixed(0)}ms, seqText ${(text.length / 1024).toFixed(1)}KB`);
+                return text;
             });
-            const { seqText, phantomPayload, reconRef } = prep;
-            console.log(`[SIM] Pyodide prep (resample + phantom): ${(performance.now()-_tPrep).toFixed(0)}ms`);
+            console.log(`[SIM] sim-seq: ${(performance.now() - _tSeq).toFixed(0)}ms`);
 
-            // 4) JS tools: conseq → trajex → sim backend (rapisim or tool-mr0sim), one WebSocket each
-            const _t4 = performance.now();
-            const seq = await this._callTool(
-                TOOL_CONSEQ,
-                { Dict: { seq_file: { Str: seqText }, exact_trajectory: { Bool: false } } },
-                'conseq',
+            job.fovSnapshot = nvMod.captureFovSnapshot();
+            console.log(`[${simLogTag}] fovSnapshot:`, job.fovSnapshot);
+
+            const phantomOversample = nvMod.getPhantomOversampleFactors();
+            job.phantomOversample = phantomOversample;
+            const phantomFovSnapshot = nvMod.applyPhantomOversampleToSnapshot(job.fovSnapshot, phantomOversample);
+            const phantomMatrix = nvMod.getSimPhantomMatrixDims(phantomOversample);
+            const reconMatrix = nvMod.getReconMatrixDims();
+            const phantomRef = nvMod.generateFovMaskNiftiFromSnapshot(
+                phantomFovSnapshot,
+                phantomMatrix,
             );
-            console.log(`[SIM] TOOL_CONSEQ: ${(performance.now()-_t4).toFixed(0)}ms`);
-            if (seq?.Error || seq?.err) throw new Error(seq.Error || seq.err || 'conseq failed');
+            const reconRef = nvMod.generateFovMaskNiftiFromSnapshot(job.fovSnapshot, reconMatrix);
+
+            try {
+                await this._patchProtocolSimulationToml(job, {
+                    phantomRef,
+                    phantomMatrix,
+                    reconMatrix,
+                    phantomName: activeGroup.jsonName || activeGroup.jsonFileName || 'unknown',
+                });
+            } catch (tomlErr) {
+                console.warn(`[${simLogTag}] protocol TOML simulation/recon patch failed:`, tomlErr);
+            }
+
+            // conseq (Fly) ∥ footprint resample + phantom convert (Pyodide queue)
+            const _tParallelPrep = performance.now();
+            const [conseqSettled, phantomSettled] = await Promise.allSettled([
+                this._callTool(
+                    TOOL_CONSEQ,
+                    { Dict: { seq_file: { Str: seqText }, exact_trajectory: { Bool: false } } },
+                    'conseq',
+                ),
+                nvMod.enqueuePyodideTask(job.id, "sim-phantom", () =>
+                    this._simPhantomResampleAndConvert(nvMod, job, activeGroup, phantomRef, simLogTag),
+                ),
+            ]);
+            const prepLegs = [
+                { label: 'conseq', settled: conseqSettled },
+                { label: 'phantom resample', settled: phantomSettled },
+            ];
+            const prepFail = prepLegs.filter((leg) =>
+                leg.settled.status === 'rejected' || this._toolErrorMessage(leg.settled.value),
+            );
+            if (prepFail.length) {
+                throw new Error(this._parallelStageError('Prepare (conseq ∥ resample)', prepLegs));
+            }
+            const seq = this._assertToolOk('conseq', conseqSettled.value);
+            const phantomPayload = phantomSettled.value;
+            console.log(`[SIM] conseq ∥ phantom resample: ${(performance.now() - _tParallelPrep).toFixed(0)}ms`);
             this._setPipelineStage(job, 1);
+
             const ev = seq?.TypedList?.InstantSeqEvent;
             const events = ev
                 ? { TypedList: { InstantSeqEvent: ev } }
                 : seq;
             const phantomForSim = this._encodeSegmentedPhantomForToolapi(phantomPayload);
             const simChannel = String(simToolUrl || '').includes('rapisim') ? 'rapisim' : 'mr0sim';
-            const _t5 = performance.now();
-            const trajResult = await this._callTool(
-                TOOL_TRAJEX,
-                { Dict: { sequence: events, t1: { Float: 1.0 }, t2: { Float: 0.1 }, min_mag: { Float: 0.001 } } },
-                'trajex',
-            );
-            console.log(`[SIM] TOOL_TRAJEX: ${(performance.now()-_t5).toFixed(0)}ms`);
+
+            // trajex ∥ sim (after conseq + phantom; recon needs both)
             this._setPipelineStage(job, 2);
-            const _t5b = performance.now();
-            const signalResult = await this._callTool(
-                simToolUrl,
-                { Dict: { sequence: seq, phantom: phantomForSim } },
-                simChannel,
+            const _tParallelSim = performance.now();
+            const [trajSettled, simSettled] = await Promise.allSettled([
+                this._callTool(
+                    TOOL_TRAJEX,
+                    { Dict: { sequence: events, t1: { Float: 1.0 }, t2: { Float: 0.1 }, min_mag: { Float: 0.001 } } },
+                    'trajex',
+                ),
+                this._callTool(
+                    simToolUrl,
+                    { Dict: { sequence: seq, phantom: phantomForSim } },
+                    simChannel,
+                ),
+            ]);
+            const simLegs = [
+                { label: 'trajex', settled: trajSettled },
+                { label: simChannel, settled: simSettled },
+            ];
+            const simFail = simLegs.filter((leg) =>
+                leg.settled.status === 'rejected' || this._toolErrorMessage(leg.settled.value),
             );
-            console.log(`[SIM] ${simChannel}: ${(performance.now()-_t5b).toFixed(0)}ms`);
+            if (simFail.length) {
+                throw new Error(this._parallelStageError('Simulate (trajex ∥ sim)', simLegs));
+            }
+            const trajResult = trajSettled.value;
+            const signalResult = simSettled.value;
+            console.log(`[SIM] trajex ∥ ${simChannel}: ${(performance.now() - _tParallelSim).toFixed(0)}ms`);
+
             const traj = this._trajectoryFromResult(trajResult);
             const signal = this._signalFromResult(signalResult);
-            if (!signal?.length) throw new Error(`${simLogTag} returned no signal.`);
+            if (!traj?.length) {
+                throw new Error(`${simLogTag}: trajex returned no trajectory (k-space path empty).`);
+            }
+            if (!signal?.length) {
+                throw new Error(`${simLogTag}: ${simChannel} returned no signal.`);
+            }
             this._setPipelineStage(job, 3);
 
             // 5) PyNUFFT recon: reconRef was built up-front from the same frozen fovSnapshot as

@@ -1,6 +1,6 @@
 # Niivue minimal app (zero-install)
 
-**Version:** `v1.2.0`
+**Version:** `v1.2.1`
 
 This is a **minimal Niivue viewer** implemented as a single `viewer.html` file.
 
@@ -84,6 +84,11 @@ http://localhost:8000/?s_category=builtin&s_file=seq_pulseq_interpreter&s_func=s
 For more insights see insights SPEC_no_field.md. 
 
 ## Release notes
+
+**v1.2.1**
+- **SIM pipeline overlap**: After seq prep + FOV snapshot, **`conseq` runs in parallel** with Pyodide footprint resample and phantom conversion; **`trajex` and sim (MR0/Rapisim) run in parallel** once both are ready. Recon still waits for trajectory + signal.
+- **Tool WebSocket cap**: At most **2** concurrent toolapi connections globally (`MAX_CONCURRENT_TOOL_WS`) so many queued SCANs do not overwhelm Fly backends.
+- **Clearer SIM errors**: Parallel stages use `Promise.allSettled`; failures name the leg (`conseq`, `phantom resample`, `trajex`, or sim channel) and empty trajectory/signal are reported separately.
 
 **v1.2.0**
 - **Pyodide resampling queue**: CROP, SCAN prep, Resample-to-FOV, and JSON execute share a FIFO Pyodide task queue so overlapping runs no longer race on `/tmp` or `micropip` (fixes intermittent `Errno 44` / missing temp file on double-click or parallel jobs).
