@@ -12,7 +12,7 @@ export const DEFAULT_PHANTOM_REMOTE_BASE =
   "https://raw.githubusercontent.com/mrx-org/anyfield/main/data/brain_default_1mm_gz";
 
 /** Must match `RESAMPLING_PY_VERSION` in data/resampling.py (cache-bust + reload). */
-export const RESAMPLING_PY_VERSION = 3;
+export const RESAMPLING_PY_VERSION = 4;
 
 export class NiivueModule {
   constructor(options = {}) {
@@ -119,8 +119,14 @@ export class NiivueModule {
     this.phantomVolumeListContainer = null;
     this.btnAddFolder = null;
     this.resampleToFovBtn = null;
-    this._nibabelReady = null;
-    
+    /** @type {Promise<void> | null} */
+    this._nibabelReadyPromise = null;
+    this._nibabelLoadDone = false;
+    this._pyodideQueue = [];
+    this._pyodideDraining = false;
+    this._pyodideDrainDepth = 0;
+    this._resampleBusyCount = 0;
+
     /** Absolute `https://` (remote) or path relative to the page. Default: GitHub raw `DEFAULT_PHANTOM_REMOTE_BASE`. */
     this.defaultPhantomBaseUrl =
       options.defaultPhantomBaseUrl ??
@@ -798,12 +804,17 @@ export class NiivueModule {
       }
       this.volumeGroups = this.volumeGroups.filter(g => !(g.jsonFileName === name && (g.jsonName?.endsWith("_executed") || g.jsonName?.endsWith("_averaged"))));
 
-      // Averaged-only: 3D density-weighted maps to /phantom/averaged (no 4D executed)
-      await this._ensureNibabelReady();
-      const result = await this.pyodide.runPythonAsync(
-        `execute_phantom(${JSON.stringify(name)}, phantom_dir='/phantom', out_dir=None, averaged_dir='/phantom/averaged', write_executed=False, write_averaged=True, density_nan_threshold=0.01)`
+      const outPaths = await this.enqueuePyodideTask(
+        `json-exec-${name}`,
+        "json-execute",
+        async () => {
+          await this._ensureNibabelReady();
+          const result = await this.pyodide.runPythonAsync(
+            `execute_phantom(${JSON.stringify(name)}, phantom_dir='/phantom', out_dir=None, averaged_dir='/phantom/averaged', write_executed=False, write_averaged=True, density_nan_threshold=0.01)`
+          );
+          return result.toJs ? result.toJs() : Array.from(result);
+        },
       );
-      const outPaths = result.toJs ? result.toJs() : Array.from(result);
 
       const groupId = "g-exec-" + Math.random().toString(36).substr(2, 5);
       const groupVolumes = [];
@@ -1387,45 +1398,169 @@ export class NiivueModule {
     return this._initPyodidePromise;
   }
 
+  isResampleBusy() {
+    return this._resampleBusyCount > 0;
+  }
+
+  /** Global wait cursor while footprint resampling runs on the main thread. */
+  _setResampleBusy(active) {
+    const wasBusy = this._resampleBusyCount > 0;
+    this._resampleBusyCount += active ? 1 : -1;
+    if (this._resampleBusyCount < 0) this._resampleBusyCount = 0;
+    const busy = this._resampleBusyCount > 0;
+    if (typeof document !== "undefined" && wasBusy !== busy) {
+      document.documentElement.classList.toggle("resample-busy", busy);
+    }
+  }
+
+  /** Safe token for per-job Pyodide /tmp paths. */
+  sanitizePyodideJobId(jobId) {
+    const s = String(jobId ?? "").trim();
+    if (!s) return "default";
+    const out = [];
+    for (const ch of s) {
+      if (/[a-zA-Z0-9_-]/.test(ch)) out.push(ch);
+      else if (".:/\\".includes(ch)) out.push("_");
+    }
+    const token = out.join("").slice(0, 64);
+    return token || "default";
+  }
+
+  /** Per-job resample output / 4D spill paths (see data/resampling.py). */
+  resampleTempPaths(jobId, suffix = "") {
+    const base = this.sanitizePyodideJobId(jobId);
+    const suf = suffix ? `_${suffix}` : "";
+    return {
+      outPath: `/tmp/__rs_${base}${suf}.nii`,
+      spillPath: `/tmp/__rs_4d_${base}${suf}.nii`,
+      spillPathGz: `/tmp/__rs_4d_${base}${suf}.nii.gz`,
+    };
+  }
+
+  simStagingPath(jobId) {
+    return `/tmp/__sim_staging_${this.sanitizePyodideJobId(jobId)}`;
+  }
+
+  simReconOutPath(jobId) {
+    return `/tmp/__sim_reco_${this.sanitizePyodideJobId(jobId)}.nii`;
+  }
+
   /**
-   * Lazily loads nibabel + resampling functions + execute_phantom on first use.
-   * Called by handleResampleToFov() and handleJsonExecute() — not at startup.
-   * Subsequent calls return the cached promise immediately.
+   * FIFO queue for Pyodide work (resample, nibabel bootstrap, recon, JSON execute).
+   * CROP/SCAN clicks enqueue; no button disable required.
+   */
+  enqueuePyodideTask(taskId, label, fn) {
+    const id = this.sanitizePyodideJobId(taskId || `task_${Date.now()}`);
+    return new Promise((resolve, reject) => {
+      this._pyodideQueue.push({
+        taskId: id,
+        label: label || "pyodide",
+        fn,
+        resolve,
+        reject,
+      });
+      void this._drainPyodideQueue();
+    });
+  }
+
+  async _drainPyodideQueue() {
+    if (this._pyodideDraining) return;
+    this._pyodideDraining = true;
+    while (this._pyodideQueue.length > 0) {
+      const task = this._pyodideQueue.shift();
+      this._pyodideDrainDepth += 1;
+      try {
+        const result = await task.fn();
+        task.resolve(result);
+      } catch (e) {
+        console.warn(`[Pyodide queue] ${task.label} (${task.taskId}) failed:`, e);
+        task.reject(e);
+      } finally {
+        this._pyodideDrainDepth -= 1;
+      }
+    }
+    this._pyodideDraining = false;
+  }
+
+  /** Read NIfTI bytes from a resampling return value and unlink the temp file. */
+  readResampleOutputPath(outPathRes) {
+    const outPathRaw = (outPathRes && outPathRes.toJs) ? outPathRes.toJs() : outPathRes;
+    const outPath = String(outPathRaw);
+    if (outPathRaw?.destroy) outPathRaw.destroy();
+    if (outPathRes?.destroy) outPathRes.destroy();
+    let bytes;
+    try {
+      bytes = this.pyodide.FS.readFile(outPath);
+    } finally {
+      try { this.pyodide.FS.unlink(outPath); } catch (_) {}
+    }
+    return { outPath, bytes };
+  }
+
+  formatPyodideError(e) {
+    if (e?.errno === 44 || e?.name === "ErrnoError") {
+      return "Pyodide temp file missing (FS race). If this persists, retry once; avoid overlapping resample jobs.";
+    }
+    return e?.message || String(e);
+  }
+
+  async _bootstrapNibabelAndScripts() {
+    if (!this.pyodide) throw new Error("Pyodide not initialised");
+    if (this._nibabelLoadDone && this._resamplingLoadedVersion === RESAMPLING_PY_VERSION) {
+      return;
+    }
+    if (this.pyodideStatus) this.pyodideStatus.textContent = "Python: loading nibabel...";
+    const resamplingBase = this.options.resamplingScriptUrl || "data/resampling.py";
+    const resamplingUrl = `${resamplingBase}${resamplingBase.includes("?") ? "&" : "?"}v=${RESAMPLING_PY_VERSION}`;
+    const executeJsonUrl = this.options.executeJsonScriptUrl || "data/execute_json.py";
+    const [resamplingResp, execResp] = await Promise.all([
+      fetch(resamplingUrl, { cache: "no-store" }),
+      fetch(executeJsonUrl, { cache: "no-store" }),
+      this.pyodide.runPythonAsync(`import micropip\nawait micropip.install('nibabel')`),
+    ]);
+    if (!resamplingResp.ok) throw new Error(`Could not load ${resamplingUrl}: ${resamplingResp.status}`);
+    if (!execResp.ok) throw new Error(`Could not load ${executeJsonUrl}: ${execResp.status}`);
+    const [resamplingCode, executeJsonCode] = await Promise.all([
+      resamplingResp.text(),
+      execResp.text(),
+    ]);
+    await this.pyodide.runPythonAsync(resamplingCode);
+    await this.pyodide.runPythonAsync(executeJsonCode);
+    this._resamplingLoadedVersion = RESAMPLING_PY_VERSION;
+    this._nibabelLoadDone = true;
+    if (this.pyodideStatus) this.pyodideStatus.textContent = "Python (Pyodide): ready";
+  }
+
+  /**
+   * Lazily loads nibabel + resampling + execute_json (deduped; safe inside enqueuePyodideTask).
    */
   _ensureNibabelReady() {
-    if (this._nibabelReady && this._resamplingLoadedVersion === RESAMPLING_PY_VERSION) {
-      return this._nibabelReady;
+    if (this._nibabelLoadDone && this._resamplingLoadedVersion === RESAMPLING_PY_VERSION) {
+      return Promise.resolve();
     }
-    this._nibabelReady = null;
-    this._nibabelReady = (async () => {
-      if (!this.pyodide) throw new Error('Pyodide not initialised');
-      if (this.pyodideStatus) this.pyodideStatus.textContent = "Python: loading nibabel...";
-      const resamplingBase = this.options.resamplingScriptUrl || "data/resampling.py";
-      const resamplingUrl = `${resamplingBase}${resamplingBase.includes("?") ? "&" : "?"}v=${RESAMPLING_PY_VERSION}`;
-      const executeJsonUrl = this.options.executeJsonScriptUrl || "data/execute_json.py";
-      // Fetch scripts and install nibabel wheel in parallel
-      const [resamplingResp, execResp] = await Promise.all([
-        fetch(resamplingUrl, { cache: "no-store" }),
-        fetch(executeJsonUrl, { cache: "no-store" }),
-        this.pyodide.runPythonAsync(`import micropip\nawait micropip.install('nibabel')`),
-      ]);
-      if (!resamplingResp.ok) throw new Error(`Could not load ${resamplingUrl}: ${resamplingResp.status}`);
-      if (!execResp.ok) throw new Error(`Could not load ${executeJsonUrl}: ${execResp.status}`);
-      const [resamplingCode, executeJsonCode] = await Promise.all([
-        resamplingResp.text(),
-        execResp.text(),
-      ]);
-      await this.pyodide.runPythonAsync(resamplingCode);
-      await this.pyodide.runPythonAsync(executeJsonCode);
-      this._resamplingLoadedVersion = RESAMPLING_PY_VERSION;
-      if (this.pyodideStatus) this.pyodideStatus.textContent = "Python (Pyodide): ready";
-    })();
-    this._nibabelReady = this._nibabelReady.catch((e) => {
-      this._nibabelReady = null; // allow retry on failure
-      if (this.pyodideStatus) this.pyodideStatus.textContent = "Python (Pyodide): error " + e.message;
+    if (this._nibabelReadyPromise) {
+      return this._nibabelReadyPromise;
+    }
+    const loadFn = async () => {
+      try {
+        await this._bootstrapNibabelAndScripts();
+      } catch (e) {
+        this._nibabelLoadDone = false;
+        this._resamplingLoadedVersion = null;
+        if (this.pyodideStatus) {
+          this.pyodideStatus.textContent = "Python (Pyodide): error " + (e.message || e);
+        }
+        throw e;
+      }
+    };
+    const started = this._pyodideDrainDepth > 0
+      ? loadFn()
+      : this.enqueuePyodideTask("__nibabel__", "nibabel-ready", loadFn);
+    this._nibabelReadyPromise = started.catch((e) => {
+      this._nibabelReadyPromise = null;
       throw e;
     });
-    return this._nibabelReady;
+    return this._nibabelReadyPromise;
   }
 
   async populatePyodideVFS(niftiFiles, jsonFiles) {
@@ -2213,13 +2348,36 @@ os.makedirs('/phantom/averaged', exist_ok=True)
     );
   }
 
-  /** Run Pyodide resampling; expects source_bytes + reference_bytes globals set. */
-  async runPyodideResampling(vol) {
-    const { mode, maxSub } = this._resampleSamplingOptions();
-    const useSerial3DTo4D = this._volumeUsesSerial3DTo4D(vol);
-    const fn = useSerial3DTo4D ? "run_resampling_serial3d_to_4d" : "run_resampling";
-    const py = `${fn}(source_bytes, reference_bytes, ${JSON.stringify(mode)}, ${maxSub})`;
-    return this.pyodide.runPythonAsync(py);
+  /**
+   * Run Pyodide resampling; expects source_bytes + reference_bytes globals set.
+   * When not already inside enqueuePyodideTask, enqueues automatically.
+   * @param {object} [opts]
+   * @param {string} [opts.jobId]
+   * @param {string} [opts.suffix] — disambiguate multiple volumes in one job (e.g. SIM)
+   */
+  async runPyodideResampling(vol, opts = {}) {
+    const run = () => this._runPyodideResamplingCore(vol, opts);
+    if (this._pyodideDrainDepth > 0) return run();
+    const taskId = opts.jobId || `rs_${Date.now()}`;
+    return this.enqueuePyodideTask(taskId, "resample", run);
+  }
+
+  async _runPyodideResamplingCore(vol, { jobId, suffix } = {}) {
+    this._setResampleBusy(true);
+    try {
+      await this._ensureNibabelReady();
+      this._setResamplePyodideOptions();
+      const paths = this.resampleTempPaths(jobId, suffix);
+      const { mode, maxSub } = this._resampleSamplingOptions();
+      const useSerial3DTo4D = this._volumeUsesSerial3DTo4D(vol);
+      const pyFn = useSerial3DTo4D ? "run_resampling_serial3d_to_4d" : "run_resampling";
+      const jid = JSON.stringify(this.sanitizePyodideJobId(jobId));
+      const suf = JSON.stringify(suffix || "");
+      const py = `${pyFn}(source_bytes, reference_bytes, ${JSON.stringify(mode)}, ${maxSub}, out_path=${JSON.stringify(paths.outPath)}, job_id=${jid}, suffix=${suf})`;
+      return await this.pyodide.runPythonAsync(py);
+    } finally {
+      this._setResampleBusy(false);
+    }
   }
 
   /**
@@ -2790,10 +2948,11 @@ os.makedirs('/phantom/averaged', exist_ok=True)
 
   async handleResampleToFov() {
     if (!this.pyodide || !this.nv.volumes?.length) return;
+    const taskId = `resample-fov-${Date.now()}`;
     try {
       const debugResample = this.options.debugResampleToFov === true;
       this.resampleToFovBtn.disabled = true;
-      await this._ensureNibabelReady();
+      await this.enqueuePyodideTask(taskId, "resample-fov", async () => {
       this._setResamplePyodideOptions();
       const ref = this.generateFovMaskNifti(this.getPhantomMatrixDims());
       this.pyodide.globals.set("reference_bytes", ref);
@@ -2806,7 +2965,8 @@ os.makedirs('/phantom/averaged', exist_ok=True)
 
       if (this.volumeGroups?.length > 0) {
         const newGroups = [];
-        for (const group of this.volumeGroups) {
+        for (let gi = 0; gi < this.volumeGroups.length; gi++) {
+          const group = this.volumeGroups[gi];
           const newVolumes = [];
           const pdIdx = group.volumes.findIndex(v => /_PD\.nii(\.gz)?$/i.test(v?.name || ""));
           const defaultVisibleIdx = pdIdx >= 0 ? pdIdx : 0;
@@ -2835,18 +2995,12 @@ os.makedirs('/phantom/averaged', exist_ok=True)
               });
             }
             this.pyodide.globals.set("source_bytes", src);
-            let res = await this.runPyodideResampling(vol);
-              const resType = res?.constructor?.name;
-              const outPathRaw = (res && res.toJs) ? res.toJs() : res;
-              const outPath = String(outPathRaw);
-              if (outPathRaw?.destroy) outPathRaw.destroy();
-              if (res?.destroy) res.destroy();
-              const outU8 = this.pyodide.FS.readFile(outPath);
+            const res = await this.runPyodideResampling(vol, { jobId: taskId, suffix: `g${gi}v${i}` });
+              const { outPath, bytes: outU8 } = this.readResampleOutputPath(res);
               const outMagic = this._niftiMagicAt344(outU8);
               if (debugResample) {
                 this._logResampleToFov("output", `${volName}${useSerial3DTo4D ? " [serial3d->4d]" : ""}`, {
                   group: group.jsonName,
-                  resRawType: resType,
                   outType: outU8?.constructor?.name,
                   outPath,
                   outByteLength: outU8?.byteLength,
@@ -2864,7 +3018,6 @@ os.makedirs('/phantom/averaged', exist_ok=True)
               }]);
               if (added?.length) newVolumes.push(added[0]);
               setTimeout(() => URL.revokeObjectURL(url), 30000);
-              try { this.pyodide.FS.unlink(outPath); } catch (_) {}
           }
           const groupId = "g-" + Math.random().toString(36).substr(2, 9);
           const folderName = group.jsonName + "_resampled";
@@ -2900,17 +3053,11 @@ os.makedirs('/phantom/averaged', exist_ok=True)
           });
         }
         this.pyodide.globals.set("source_bytes", src);
-        let res = await this.runPyodideResampling(vol);
-          const resType = res?.constructor?.name;
-          const outPathRaw = (res && res.toJs) ? res.toJs() : res;
-          const outPath = String(outPathRaw);
-          if (outPathRaw?.destroy) outPathRaw.destroy();
-          if (res?.destroy) res.destroy();
-          const outU8 = this.pyodide.FS.readFile(outPath);
+        const res = await this.runPyodideResampling(vol, { jobId: taskId, suffix: "v0" });
+          const { outPath, bytes: outU8 } = this.readResampleOutputPath(res);
           const outMagic = this._niftiMagicAt344(outU8);
           if (debugResample) {
             this._logResampleToFov("output", `${volName}${useSerial3DTo4D ? " [serial3d->4d]" : ""}`, {
-              resRawType: resType,
               outType: outU8?.constructor?.name,
               outPath,
               outByteLength: outU8?.byteLength,
@@ -2925,8 +3072,8 @@ os.makedirs('/phantom/averaged', exist_ok=True)
           const opacity = 1.0;
           await this.nv.addVolumesFromUrl([{ url, name, colormap: "gray", opacity }]);
           setTimeout(() => URL.revokeObjectURL(url), 30000);
-          try { this.pyodide.FS.unlink(outPath); } catch (_) {}
       }
+      });
       this.updateVolumeList();
       this.triggerHighlight();
     } catch (e) { console.error(e);} finally { this.resampleToFovBtn.disabled = false; }

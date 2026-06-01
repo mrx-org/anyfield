@@ -9,6 +9,12 @@
   --accent: #3b82f6;
 }
 
+/* Footprint resampling blocks the main thread — wait cursor for whole page */
+html.resample-busy,
+html.resample-busy * {
+  cursor: wait !important;
+}
+
 /* Scrollbars - blueish dark theme */
 .niivue-app,
 .niivue-app * {

@@ -10,7 +10,7 @@
     
     <!-- CSS Loading Order: Base styles first, then modules, then master override -->
     <link rel="stylesheet" href="startup.css">
-    <link rel="stylesheet" href="niivue_app.css?v=4">
+    <link rel="stylesheet" href="niivue_app.css?v=5">
     <link rel="stylesheet" href="pypulseq/seq_explorer.css">
     <link rel="stylesheet" href="scan_zero/scan_module.css?v=2">
     <link rel="stylesheet" href="no_field.css"> <!-- Master override LAST -->
@@ -262,7 +262,7 @@
     <div class="lab-shell">
         <header>
             <div class="header-content">
-                <div class="header-title">Any-Field <span class="header-subtitle">Scanner</span><span class="app-version" aria-label="Version v1.1.0">v1.1.0</span></div>
+                <div class="header-title">Any-Field <span class="header-subtitle">Scanner</span><span class="app-version" aria-label="Version v1.2.0">v1.2.0</span></div>
                 <div class="header-actions">
                     <button type="button" id="paper-plot-btn" class="credits-btn paper-plot-launch-btn" title="Paper plot figure builder"><i class="bi bi-grid-3x3-gap" aria-hidden="true"></i></button>
                     <button type="button" id="credits-btn" class="credits-btn" title="Credits &amp; dependencies"><i class="bi bi-award" aria-hidden="true"></i></button>
@@ -343,7 +343,7 @@
         import { NiivueModule, ScanPreviewModule, ComparePane } from './niivue_app.js';
         import { MainHistogramController, PreviewJointHistogramController } from './hist_panel/histogram-clim-panel.js';
         import { SequenceExplorer, patchSequencePlotFromCode } from './pypulseq/seq_explorer.js';
-        import { ScanModule } from './scan_zero/scan_module.js?v=5';
+        import { ScanModule } from './scan_zero/scan_module.js?v=8';
         import { eventHub } from './event_hub.js';
 
         // URL flags: ?pro=1 pro/debug; readable deep link ?s_category=&s_file=&s_func= or legacy ?init_prot=; ?seq_url= remote .seq

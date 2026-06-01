@@ -1,6 +1,6 @@
 # Niivue minimal app (zero-install)
 
-**Version:** `v1.1.0`
+**Version:** `v1.2.0`
 
 This is a **minimal Niivue viewer** implemented as a single `viewer.html` file.
 
@@ -84,6 +84,12 @@ http://localhost:8000/?s_category=builtin&s_file=seq_pulseq_interpreter&s_func=s
 For more insights see insights SPEC_no_field.md. 
 
 ## Release notes
+
+**v1.2.0**
+- **Pyodide resampling queue**: CROP, SCAN prep, Resample-to-FOV, and JSON execute share a FIFO Pyodide task queue so overlapping runs no longer race on `/tmp` or `micropip` (fixes intermittent `Errno 44` / missing temp file on double-click or parallel jobs).
+- **Per-job temp paths**: Resample output and 4D spill files use `job.id` (and per-volume suffix for SIM) instead of a single global `/tmp/__resampled_tmp.nii`.
+- **SIM recon path fix**: Per-job recon output path via `sim_reco_out_path` (fixed `NameError` from a `sim_recon_out_path` typo in the Pyodide recon snippet).
+- **UX**: Removed the cosmetic 2 s delay before CROP resampling; **wait cursor** (`cursor: wait`) on the whole page while footprint resampling runs on the main thread.
 
 **v1.1.0**
 - **Scan queue draft row**: A preparing row at the top of the scan queue mirrors the protocol being edited — editable name, then **SCAN** — without starting the pipeline until you click run.

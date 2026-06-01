@@ -11,7 +11,7 @@ import os
 import gc
 
 # Bump when resampling logic changes (Niivue fetch cache-bust must match).
-RESAMPLING_PY_VERSION = 3
+RESAMPLING_PY_VERSION = 4
 
 # "footprint_mean": average trilinear samples over each output voxel support (downsampling).
 # "center": legacy point sample at voxel index (integer i,j,k).
@@ -19,7 +19,7 @@ DEFAULT_SAMPLING_MODE = "footprint_mean"
 # General (rotation-safe) quadrature: substeps per axis = clamp(ceil(span), 1, cap).
 # The box-average converges quickly, so a small cap (8) matches the old 32-step output
 # visually while running up to ~4x faster on thick slabs (the common nz=1 / thick-FOV case).
-DEFAULT_MAX_SUBSTEPS = 12
+DEFAULT_MAX_SUBSTEPS = 8
 DEFAULT_DOWNSAMPLE_THRESHOLD = 1.0
 
 
@@ -237,7 +237,42 @@ def _resolve_sampling_kwargs():
     return mode, max_sub
 
 
-def run_resampling(source_bytes, reference_bytes, sampling_mode=None, max_substeps=None):
+def _sanitize_job_id(job_id):
+    """Safe token for /tmp filenames (one job may run many resample passes with suffix)."""
+    if job_id is None:
+        return "default"
+    s = str(job_id).strip()
+    if not s:
+        return "default"
+    out = []
+    for ch in s:
+        if ch.isalnum() or ch in "-_":
+            out.append(ch)
+        elif ch in ".:/\\":
+            out.append("_")
+    token = "".join(out)[:64] or "default"
+    return token
+
+
+def _resample_temp_paths(job_id=None, suffix=None):
+    base = _sanitize_job_id(job_id)
+    suf = f"_{suffix}" if suffix else ""
+    return {
+        "out": f"/tmp/__rs_{base}{suf}.nii",
+        "spill": f"/tmp/__rs_4d_{base}{suf}.nii",
+        "spill_gz": f"/tmp/__rs_4d_{base}{suf}.nii.gz",
+    }
+
+
+def run_resampling(
+    source_bytes,
+    reference_bytes,
+    sampling_mode=None,
+    max_substeps=None,
+    out_path=None,
+    job_id=None,
+    suffix=None,
+):
     # Allow callers that already converted JS buffers (e.g. serial 4D helper).
     if hasattr(source_bytes, 'to_py'):
         source_bytes = source_bytes.to_py()
@@ -280,12 +315,21 @@ def run_resampling(source_bytes, reference_bytes, sampling_mode=None, max_subste
     )
     # Robust path in Pyodide: write canonical .nii then read bytes back.
     # This avoids malformed in-memory returns observed with large 4D volumes.
-    out_path = '/tmp/__resampled_tmp.nii'
+    if out_path is None:
+        out_path = _resample_temp_paths(job_id, suffix)["out"]
     nib.save(resampled_img, out_path)
     return out_path
 
 
-def run_resampling_serial3d_to_4d(source_bytes, reference_bytes, sampling_mode=None, max_substeps=None):
+def run_resampling_serial3d_to_4d(
+    source_bytes,
+    reference_bytes,
+    sampling_mode=None,
+    max_substeps=None,
+    out_path=None,
+    job_id=None,
+    suffix=None,
+):
     """4D path with lower peak RAM: no full-volume float32 copy, no list+stack of frames.
     Spills source to /tmp so raw .nii can use mmap; gzip still benefits from pre-allocated output."""
     if hasattr(source_bytes, 'to_py'):
@@ -307,9 +351,12 @@ def run_resampling_serial3d_to_4d(source_bytes, reference_bytes, sampling_mode=N
     sampling_mode = str(sampling_mode)
     max_substeps = int(max_substeps)
 
+    paths = _resample_temp_paths(job_id, suffix)
+    if out_path is None:
+        out_path = paths["out"]
     raw = bytes(source_bytes)
     is_gz = len(raw) > 2 and raw[0] == 0x1F and raw[1] == 0x8B
-    spill = '/tmp/__rs_4d_src.nii.gz' if is_gz else '/tmp/__rs_4d_src.nii'
+    spill = paths["spill_gz"] if is_gz else paths["spill"]
     with open(spill, 'wb') as f:
         f.write(raw)
     del raw
@@ -327,7 +374,15 @@ def run_resampling_serial3d_to_4d(source_bytes, reference_bytes, sampling_mode=N
             gc.collect()
             with open(spill, 'rb') as f:
                 flat = f.read()
-            return run_resampling(flat, reference_bytes, sampling_mode, max_substeps)
+            return run_resampling(
+                flat,
+                reference_bytes,
+                sampling_mode,
+                max_substeps,
+                out_path=out_path,
+                job_id=job_id,
+                suffix=suffix,
+            )
 
         frames = int(sh[3])
         src_zooms = list(source_img.header.get_zooms())
@@ -381,6 +436,5 @@ def run_resampling_serial3d_to_4d(source_bytes, reference_bytes, sampling_mode=N
     ref_zooms = ref_img.header.get_zooms()[:3]
     dt = src_zooms[3] if len(src_zooms) > 3 else 1.0
     out_img.header.set_zooms((ref_zooms[0], ref_zooms[1], ref_zooms[2], dt))
-    out_path = '/tmp/__resampled_tmp.nii'
     nib.save(out_img, out_path)
     return out_path

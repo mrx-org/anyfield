@@ -481,34 +481,21 @@ export class ScanModule {
         this.updateQueueUI();
 
         try {
-            // Short delay to simulate acquisition time
-            await new Promise(r => setTimeout(r, 2000));
-
-            // Borrowing logic from niivue_app.js handleResampleToFov()
             const srcVol = typeof nvMod.getPhantomVolumeForResample === "function"
                 ? nvMod.getPhantomVolumeForResample()
                 : nvMod.nv.volumes[0];
             if (!srcVol) throw new Error("No phantom volume available for CROP.");
-            const srcBytes = nvMod.getVolumeNifti(srcVol);
-            
-            // 2. Generate target FOV mask as NIfTI bytes
             const refBytes = nvMod.generateFovMaskNifti(nvMod.getPhantomMatrixDims());
 
-            // 3. Set bytes in Pyodide globals
-            nvMod.pyodide.globals.set("source_bytes", srcBytes);
-            nvMod.pyodide.globals.set("reference_bytes", refBytes);
-
             await nvMod.initPyodide();
-            await nvMod._ensureNibabelReady();
-            nvMod._setResamplePyodideOptions();
-            // 4) run_resampling* returns a VFS path string, not raw bytes — read file (same as SIM / Resample to FOV)
-            let res = await nvMod.runPyodideResampling(srcVol);
-            const outPathRaw = (res && res.toJs) ? res.toJs() : res;
-            const outPath = String(outPathRaw);
-            if (outPathRaw?.destroy) outPathRaw.destroy();
-            if (res?.destroy) res.destroy();
-            const niftiBytes = nvMod.pyodide.FS.readFile(outPath);
-            try { nvMod.pyodide.FS.unlink(outPath); } catch (_) {}
+            const niftiBytes = await nvMod.enqueuePyodideTask(job.id, "crop", async () => {
+                const srcBytes = nvMod.getVolumeNifti(srcVol);
+                nvMod.pyodide.globals.set("source_bytes", srcBytes);
+                nvMod.pyodide.globals.set("reference_bytes", refBytes);
+                nvMod._setResamplePyodideOptions();
+                const res = await nvMod.runPyodideResampling(srcVol, { jobId: job.id, suffix: "crop" });
+                return nvMod.readResampleOutputPath(res).bytes;
+            });
 
             job.niftiUrl = URL.createObjectURL(new Blob([niftiBytes], {type: "application/octet-stream"}));
 
@@ -520,7 +507,9 @@ export class ScanModule {
         } catch (e) {
             console.error("Scan simulation failed:", e);
             job.status = 'error';
-            job.error = e.message;
+            job.error = typeof nvMod?.formatPyodideError === "function"
+                ? nvMod.formatPyodideError(e)
+                : (e.message || String(e));
         }
 
         this.updateQueueUI();
@@ -758,10 +747,11 @@ export class ScanModule {
     }
 
     async _affineFromNiftiBytes(nvMod, bytes) {
-        await nvMod._ensureNibabelReady();
-        const u8 = bytes instanceof Uint8Array ? bytes : new Uint8Array(bytes);
-        nvMod.pyodide.globals.set('_nifti_bytes_for_affine', u8);
-        const result = await nvMod.pyodide.runPythonAsync(`
+        const run = async () => {
+            await nvMod._ensureNibabelReady();
+            const u8 = bytes instanceof Uint8Array ? bytes : new Uint8Array(bytes);
+            nvMod.pyodide.globals.set('_nifti_bytes_for_affine', u8);
+            const result = await nvMod.pyodide.runPythonAsync(`
 import io, json
 import nibabel as nib
 _b = _nifti_bytes_for_affine.to_py()
@@ -770,8 +760,11 @@ _fh = nib.FileHolder(fileobj=_buf)
 img = nib.Nifti1Image.from_file_map({"header": _fh, "image": _fh})
 aff = img.affine.reshape(-1).tolist()
 json.dumps([float(x) for x in aff])
-        `);
-        return JSON.parse(result);
+            `);
+            return JSON.parse(result);
+        };
+        if (nvMod._pyodideDrainDepth > 0) return run();
+        return nvMod.enqueuePyodideTask("affine", "nifti-affine", run);
     }
 
     async _patchProtocolSimulationToml(job, { phantomRef, phantomMatrix, reconMatrix, phantomName }) {
@@ -919,9 +912,11 @@ _sim_seq_bytes
      * Build rapisim phantom dict from resampled NIfTI bytes in a temp FS folder only (no Niivue, no /phantom).
      * @param {{ jsonName?: string, jsonFileName?: string, jsonContent?: string, resampledEntries: { name: string, bytes: Uint8Array }[] }} spec
      */
-    async _convertResampledGroupToToolPhantom(nvMod, spec) {
+    async _convertResampledGroupToToolPhantom(nvMod, spec, jobId = null) {
         await nvMod.initPyodide();
-        const STAGING = "/tmp/__sim_phantom_staging";
+        const STAGING = typeof nvMod.simStagingPath === "function"
+            ? nvMod.simStagingPath(jobId || spec.jobId || "sim")
+            : "/tmp/__sim_phantom_staging";
         const stagingPy = JSON.stringify(STAGING);
         await nvMod.pyodide.runPythonAsync(`
 import os, shutil
@@ -1162,84 +1157,80 @@ if os.path.exists(_p):
             // Resampling + PyNUFFT ref then match the same geometry the user sees after seq sync.
             // Ensure run_resampling / run_resampling_serial3d_to_4d are defined.
             await nvMod.initPyodide();
-            await nvMod._ensureNibabelReady();
             const activeGroup = typeof nvMod.getActivePhantomGroup === 'function'
                 ? nvMod.getActivePhantomGroup()
                 : nvMod.volumeGroups?.find(g => g.volumes?.length && !String(g.jsonName || '').endsWith('_resampled') && !String(g.jsonName || '').endsWith('_averaged'));
             if (!activeGroup) throw new Error("No phantom group with JSON found. Load phantom via Add (json/nii) first.");
 
-            // 1) Silent seq execute + protocol snapshot + sequence_fov_dims → Niivue FOV mm from seq.definitions
-            const _t0 = performance.now();
-            const seqText = await this._prepareCurrentSeqForTools(job);
-            console.log(`[SIM] _prepareCurrentSeqForTools: ${(performance.now()-_t0).toFixed(0)}ms, seqText ${(seqText.length/1024).toFixed(1)}KB`);
+            const _tPrep = performance.now();
+            const prep = await nvMod.enqueuePyodideTask(job.id, "sim-prep", async () => {
+                await nvMod._ensureNibabelReady();
+                const _t0 = performance.now();
+                const seqText = await this._prepareCurrentSeqForTools(job);
+                console.log(`[SIM] _prepareCurrentSeqForTools: ${(performance.now()-_t0).toFixed(0)}ms, seqText ${(seqText.length/1024).toFixed(1)}KB`);
 
-            // 1b) Freeze FOV geometry for this job. Seq-authoritative mm size is already on sliders;
-            // user-authoritative offsets/rotations too. Any later slider mutation (user input,
-            // `syncFovFromScanVolume` after a prior scan, etc.) must not affect this in-flight pipeline.
-            job.fovSnapshot = nvMod.captureFovSnapshot();
-            console.log(`[${simLogTag}] fovSnapshot:`, job.fovSnapshot);
+                job.fovSnapshot = nvMod.captureFovSnapshot();
+                console.log(`[${simLogTag}] fovSnapshot:`, job.fovSnapshot);
 
-            // 2) Build phantom and recon FOV mask refs up-front from the same frozen snapshot.
-            const _t2 = performance.now();
-            const phantomOversample = nvMod.getPhantomOversampleFactors();
-            job.phantomOversample = phantomOversample;
-            const phantomFovSnapshot = nvMod.applyPhantomOversampleToSnapshot(job.fovSnapshot, phantomOversample);
-            const phantomMatrix = nvMod.getSimPhantomMatrixDims(phantomOversample);
-            const reconMatrix = nvMod.getReconMatrixDims();
-            const phantomRef = nvMod.generateFovMaskNiftiFromSnapshot(
-                phantomFovSnapshot,
-                phantomMatrix,
-            );
-            const reconRef = nvMod.generateFovMaskNiftiFromSnapshot(job.fovSnapshot, reconMatrix);
-
-            try {
-                await this._patchProtocolSimulationToml(job, {
-                    phantomRef,
+                const phantomOversample = nvMod.getPhantomOversampleFactors();
+                job.phantomOversample = phantomOversample;
+                const phantomFovSnapshot = nvMod.applyPhantomOversampleToSnapshot(job.fovSnapshot, phantomOversample);
+                const phantomMatrix = nvMod.getSimPhantomMatrixDims(phantomOversample);
+                const reconMatrix = nvMod.getReconMatrixDims();
+                const phantomRef = nvMod.generateFovMaskNiftiFromSnapshot(
+                    phantomFovSnapshot,
                     phantomMatrix,
-                    reconMatrix,
-                    phantomName: activeGroup.jsonName || activeGroup.jsonFileName || 'unknown',
-                });
-            } catch (tomlErr) {
-                console.warn(`[${simLogTag}] protocol TOML simulation/recon patch failed:`, tomlErr);
-            }
-            nvMod._setResamplePyodideOptions();
-            const resampledEntries = [];
-            nvMod.pyodide.globals.set("reference_bytes", phantomRef);
-            for (const vol of activeGroup.volumes) {
-                const src = nvMod.getVolumeNifti(vol);
-                nvMod.pyodide.globals.set("source_bytes", src);
-                let res = await nvMod.runPyodideResampling(vol);
-                const outPathRaw = (res && res.toJs) ? res.toJs() : res;
-                const outPath = String(outPathRaw);
-                if (outPathRaw?.destroy) outPathRaw.destroy();
-                if (res?.destroy) res.destroy();
-                const outU8 = nvMod.pyodide.FS.readFile(outPath);
-                try { nvMod.pyodide.FS.unlink(outPath); } catch (_) {}
-                resampledEntries.push({ name: vol.name, bytes: new Uint8Array(outU8) });
-            }
-            if (!resampledEntries.length) throw new Error("Resampling failed: no volumes produced.");
-            console.log(`[SIM] FOV mask + resampling: ${(performance.now()-_t2).toFixed(0)}ms`);
+                );
+                const reconRef = nvMod.generateFovMaskNiftiFromSnapshot(job.fovSnapshot, reconMatrix);
 
-            // 3) Phantom dict for toolapi (temp FS dir, deleted after)
-            const _t3 = performance.now();
-            const selectedJson = typeof nvMod.getSelectedJsonForSim === 'function'
-                ? nvMod.getSelectedJsonForSim(activeGroup)
-                : null;
-            const phantomJsonFileName = selectedJson?.fileName
-                || activeGroup.jsonFileName
-                || (activeGroup.jsonName ? `${activeGroup.jsonName}.json` : null);
-            const phantomJsonContent = selectedJson?.content != null
-                ? selectedJson.content
-                : (typeof nvMod.getPhantomJsonContent === 'function'
-                    ? nvMod.getPhantomJsonContent(activeGroup)
-                    : activeGroup.jsonContent);
-            const phantomPayload = await this._convertResampledGroupToToolPhantom(nvMod, {
-                jsonName: activeGroup.jsonName,
-                jsonFileName: phantomJsonFileName,
-                jsonContent: phantomJsonContent,
-                resampledEntries,
+                try {
+                    await this._patchProtocolSimulationToml(job, {
+                        phantomRef,
+                        phantomMatrix,
+                        reconMatrix,
+                        phantomName: activeGroup.jsonName || activeGroup.jsonFileName || 'unknown',
+                    });
+                } catch (tomlErr) {
+                    console.warn(`[${simLogTag}] protocol TOML simulation/recon patch failed:`, tomlErr);
+                }
+                nvMod._setResamplePyodideOptions();
+                const resampledEntries = [];
+                nvMod.pyodide.globals.set("reference_bytes", phantomRef);
+                let volIdx = 0;
+                for (const vol of activeGroup.volumes) {
+                    const src = nvMod.getVolumeNifti(vol);
+                    nvMod.pyodide.globals.set("source_bytes", src);
+                    const res = await nvMod.runPyodideResampling(vol, {
+                        jobId: job.id,
+                        suffix: `v${volIdx++}`,
+                    });
+                    const { bytes: outU8 } = nvMod.readResampleOutputPath(res);
+                    resampledEntries.push({ name: vol.name, bytes: new Uint8Array(outU8) });
+                }
+                if (!resampledEntries.length) throw new Error("Resampling failed: no volumes produced.");
+
+                const selectedJson = typeof nvMod.getSelectedJsonForSim === 'function'
+                    ? nvMod.getSelectedJsonForSim(activeGroup)
+                    : null;
+                const phantomJsonFileName = selectedJson?.fileName
+                    || activeGroup.jsonFileName
+                    || (activeGroup.jsonName ? `${activeGroup.jsonName}.json` : null);
+                const phantomJsonContent = selectedJson?.content != null
+                    ? selectedJson.content
+                    : (typeof nvMod.getPhantomJsonContent === 'function'
+                        ? nvMod.getPhantomJsonContent(activeGroup)
+                        : activeGroup.jsonContent);
+                const phantomPayload = await this._convertResampledGroupToToolPhantom(nvMod, {
+                    jsonName: activeGroup.jsonName,
+                    jsonFileName: phantomJsonFileName,
+                    jsonContent: phantomJsonContent,
+                    resampledEntries,
+                    jobId: job.id,
+                });
+                return { seqText, phantomPayload, reconRef };
             });
-            console.log(`[SIM] _convertResampledGroupToToolPhantom: ${(performance.now()-_t3).toFixed(0)}ms`);
+            const { seqText, phantomPayload, reconRef } = prep;
+            console.log(`[SIM] Pyodide prep (resample + phantom): ${(performance.now()-_tPrep).toFixed(0)}ms`);
 
             // 4) JS tools: conseq → trajex → sim backend (rapisim or tool-mr0sim), one WebSocket each
             const _t4 = performance.now();
@@ -1285,24 +1276,29 @@ if os.path.exists(_p):
                 ? nvMod.isScanReconEnabled()
                 : nvMod.scanRecon?.checked !== false;
             const _t6 = performance.now();
-            await nvMod.pyodide.loadPackage(["micropip"]);
-            await nvMod.pyodide.runPythonAsync(`
+            const simBackend = job.simulation?.reconBackend
+                || (String(simToolUrl || '').includes('rapisim') ? 'rapisim' : 'mr0');
+            const recoOutPath = typeof nvMod.simReconOutPath === "function"
+                ? nvMod.simReconOutPath(job.id)
+                : "/tmp/__sim_pipeline_reco.nii";
+            const recoBytes = await nvMod.enqueuePyodideTask(job.id, "sim-recon", async () => {
+                await nvMod.pyodide.loadPackage(["micropip"]);
+                await nvMod.pyodide.runPythonAsync(`
 import micropip
 try:
     import pynufft  # noqa
 except Exception:
     await micropip.install('pynufft')
-            `);
-            await this._ensureSimReconPy(nvMod);
-            nvMod.pyodide.globals.set("sim_signal_pairs", signal);
-            nvMod.pyodide.globals.set("sim_traj_points", traj || []);
-            nvMod.pyodide.globals.set("sim_ref_bytes", reconRef);
-            nvMod.pyodide.globals.set("sim_output_mode", useRecon ? "image" : "kspace_log");
-            nvMod.pyodide.globals.set("sim_seq_path", job.vfsSeqPath || "");
-            const simBackend = job.simulation?.reconBackend
-                || (String(simToolUrl || '').includes('rapisim') ? 'rapisim' : 'mr0');
-            nvMod.pyodide.globals.set("sim_backend", simBackend);
-            const recoPathRes = await nvMod.pyodide.runPythonAsync(`
+                `);
+                await this._ensureSimReconPy(nvMod);
+                nvMod.pyodide.globals.set("sim_signal_pairs", signal);
+                nvMod.pyodide.globals.set("sim_traj_points", traj || []);
+                nvMod.pyodide.globals.set("sim_ref_bytes", reconRef);
+                nvMod.pyodide.globals.set("sim_output_mode", useRecon ? "image" : "kspace_log");
+                nvMod.pyodide.globals.set("sim_seq_path", job.vfsSeqPath || "");
+                nvMod.pyodide.globals.set("sim_backend", simBackend);
+                nvMod.pyodide.globals.set("sim_reco_out_path", recoOutPath);
+                const recoPathRes = await nvMod.pyodide.runPythonAsync(`
 import types
 _matrix = None
 _seq_path = sim_seq_path.to_py() if hasattr(sim_seq_path, 'to_py') else sim_seq_path
@@ -1326,20 +1322,25 @@ _recon = types.ModuleType("_scan_recon_live")
 _recon.__dict__["__file__"] = "/scan_zero/recon.py"
 exec(compile(_src, "/scan_zero/recon.py", "exec"), _recon.__dict__)
 _backend = sim_backend.to_py() if hasattr(sim_backend, 'to_py') else str(sim_backend)
+_out = sim_reco_out_path.to_py() if hasattr(sim_reco_out_path, 'to_py') else str(sim_reco_out_path)
 _recon.run_sim_recon(
     sim_signal_pairs,
     sim_traj_points,
     sim_ref_bytes,
+    out_path=_out,
     output_mode=sim_output_mode,
     matrix=_matrix,
     sim_backend=_backend,
 )
-            `);
+                `);
+                const recoPath = (recoPathRes && recoPathRes.toJs) ? recoPathRes.toJs() : recoPathRes;
+                if (recoPathRes?.destroy) recoPathRes.destroy();
+                const path = String(recoPath || recoOutPath);
+                const bytes = nvMod.pyodide.FS.readFile(path);
+                try { nvMod.pyodide.FS.unlink(path); } catch (_) {}
+                return bytes;
+            });
             console.log(`[SIM] ${useRecon ? 'PyNUFFT recon' : 'k-space log'}: ${(performance.now()-_t6).toFixed(0)}ms`);
-            const recoPath = (recoPathRes && recoPathRes.toJs) ? recoPathRes.toJs() : recoPathRes;
-            if (recoPathRes?.destroy) recoPathRes.destroy();
-            const recoBytes = nvMod.pyodide.FS.readFile(String(recoPath));
-            try { nvMod.pyodide.FS.unlink(String(recoPath)); } catch (_) {}
             this._setPipelineStage(job, 4);
 
             // 7) show in Niivue (scan-like naming/path)
@@ -1353,7 +1354,9 @@ _recon.run_sim_recon(
         } catch (e) {
             console.error(`[${simLogTag}] failed:`, e);
             job.status = 'error';
-            job.error = e.message;
+            job.error = typeof nvMod?.formatPyodideError === "function"
+                ? nvMod.formatPyodideError(e)
+                : (e.message || String(e));
         } finally {
             this._simPipelineJob = null;
         }
