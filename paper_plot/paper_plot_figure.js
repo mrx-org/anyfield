@@ -14,7 +14,7 @@ export const DEFAULT_FIGURE_SIZE = Object.freeze({
 });
 
 export const DEFAULT_PAPER_OPTIONS = Object.freeze({
-  showColorbar: false,
+  showColorbar: true,
   scanColormap: "gray",
   diffColormap: "bkr",
   linkPosition: false,

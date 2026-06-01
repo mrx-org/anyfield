@@ -112,12 +112,21 @@ export class PaperPanel {
     });
 
     this.slotEl.addEventListener("mousedown", () => this.module.selectPanel(this));
+    this.syncViewerEmptyState();
+  }
+
+  /** UI-only placeholder outline when no volume is loaded (not used in SVG export). */
+  syncViewerEmptyState() {
+    if (!this.viewerEl) return;
+    const empty = !this.nv?.volumes?.length;
+    this.viewerEl.classList.toggle("paper-panel-viewer-empty", empty);
   }
 
   async initNiivue() {
     if (this.nv) return;
     this.nv = new Niivue({ ...PAPER_NV_OPTS });
     await this.nv.attachToCanvas(this.canvas);
+    this.syncViewerEmptyState();
     this.nv.opts.multiplanarShowRender = SHOW_RENDER.NEVER;
     this.nv.setSliceType(SLICE_TYPE.AXIAL);
     this.nv.opts.crosshairWidth = 0;
@@ -316,6 +325,7 @@ export class PaperPanel {
     this.applyColorbarVisibility();
     this.nv.drawScene();
     this._wrapClimApply();
+    this.syncViewerEmptyState();
     this.syncLayout();
     this.slotEl.title = this.state.expr ? this.module.getPanelTooltip(this) : "";
     this.module.updateCaption();
@@ -342,6 +352,7 @@ export class PaperPanel {
       }
       this.nv.drawScene();
     }
+    this.syncViewerEmptyState();
     this.syncLayout();
     this.slotEl.title = "";
     this.module.updateCaption();

@@ -99,7 +99,7 @@ export class PaperPlotModule {
     if (!this._cssLoaded) {
       const link = document.createElement("link");
       link.rel = "stylesheet";
-      link.href = "paper_plot/paper_plot.css";
+      link.href = "paper_plot/paper_plot.css?v=6";
       document.head.appendChild(link);
       this._cssLoaded = true;
     }
@@ -176,6 +176,21 @@ export class PaperPlotModule {
           </aside>
           <div class="paper-plot-stage-column">
             <div class="paper-plot-layout-pane" id="paper-plot-layout-pane">
+              <div class="paper-plot-layout-controls">
+                <span class="paper-plot-toolbar-label">Layout</span>
+                <div class="paper-plot-grid-btns" id="paper-plot-grid-btns"></div>
+              </div>
+              <div class="paper-plot-layout-matrix">
+                <div class="paper-plot-layout-preview" id="paper-plot-layout-preview"></div>
+                <div class="paper-layout-row paper-plot-global-link-row">
+                  <div class="paper-layout-row-spacer" aria-hidden="true"></div>
+                  <div class="paper-plot-global-link-controls paper-layout-row-links">
+                    <span class="paper-row-link-word">Link all:</span>
+                    <label class="paper-plot-check paper-row-link-inline"><input type="checkbox" id="paper-link-all-position" /><span>4D dims</span></label>
+                    <label class="paper-plot-check paper-row-link-inline"><input type="checkbox" id="paper-link-all-clims" /><span>color lims</span></label>
+                  </div>
+                </div>
+              </div>
               <div class="paper-plot-display-controls">
                 <label class="paper-plot-check"><input type="checkbox" id="paper-show-colorbar" /> Colorbar</label>
                 <label class="paper-plot-select-label">
@@ -189,14 +204,6 @@ export class PaperPlotModule {
                 <span class="paper-plot-toolbar-sep" aria-hidden="true"></span>
                 <button type="button" class="paper-plot-export" id="paper-plot-export">Download SVG</button>
               </div>
-              <div class="paper-plot-layout-controls">
-                <span class="paper-plot-toolbar-label">Layout</span>
-                <div class="paper-plot-grid-btns" id="paper-plot-grid-btns"></div>
-                <span class="paper-plot-toolbar-sep" aria-hidden="true"></span>
-                <label class="paper-plot-check"><input type="checkbox" id="paper-link-all-position" /> Link all 4D position</label>
-                <label class="paper-plot-check"><input type="checkbox" id="paper-link-all-clims" /> Link all color lims</label>
-              </div>
-              <div class="paper-plot-layout-preview" id="paper-plot-layout-preview"></div>
             </div>
             <div class="paper-plot-stage-wrap">
               <div class="paper-plot-stage" id="paper-plot-stage">
@@ -634,9 +641,9 @@ export class PaperPlotModule {
       const links = document.createElement("div");
       links.className = "paper-layout-row-links";
       links.innerHTML = `
-        <span class="paper-row-link-word">Link</span>
+        <span class="paper-row-link-word">Link row:</span>
         <label class="paper-plot-check paper-row-link-inline"><input type="checkbox" class="paper-row-link-position" data-row="${row}" /><span>4D dims</span></label>
-        <label class="paper-plot-check paper-row-link-inline"><input type="checkbox" class="paper-row-link-clims" data-row="${row}" /><span>color lims in row</span></label>
+        <label class="paper-plot-check paper-row-link-inline"><input type="checkbox" class="paper-row-link-clims" data-row="${row}" /><span>color lims</span></label>
       `;
       links.querySelector(".paper-row-link-position").checked = this.isRowLinkPosition(row);
       links.querySelector(".paper-row-link-clims").checked = this.isRowLinkClims(row);

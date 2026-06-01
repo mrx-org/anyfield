@@ -240,37 +240,40 @@ body.paper-plot-open {
   gap: 6px;
 }
 
-.paper-plot-display-controls {
-  padding-bottom: 2px;
-  border-bottom: 1px solid var(--border, rgba(255, 255, 255, 0.08));
-}
-
-.paper-plot-layout-controls {
-  padding-top: 2px;
-}
-
-.paper-plot-layout-preview {
-  display: flex;
-  flex-direction: column;
-  gap: 6px;
+.paper-plot-layout-matrix {
+  display: grid;
+  grid-template-columns: minmax(0, max-content) minmax(0, 1fr);
+  column-gap: 10px;
+  row-gap: 6px;
   max-width: 640px;
 }
 
+.paper-plot-layout-preview {
+  display: contents;
+}
+
+.paper-plot-global-link-row {
+  display: contents;
+}
+
 .paper-layout-row {
-  display: flex;
-  align-items: center;
-  gap: 10px;
+  display: contents;
 }
 
 .paper-layout-row-cells {
+  grid-column: 1;
   display: grid;
   gap: 6px;
-  flex: 0 1 auto;
-  max-width: 55%;
+  min-width: 0;
+}
+
+.paper-layout-row-spacer {
+  grid-column: 1;
+  min-width: 0;
 }
 
 .paper-layout-row-links {
-  flex: 1 1 auto;
+  grid-column: 2;
   min-width: 0;
   display: flex;
   flex-direction: row;
@@ -283,6 +286,7 @@ body.paper-plot-open {
 
 .paper-row-link-word {
   flex-shrink: 0;
+  min-width: 4.6em;
   font-size: 11px;
   color: var(--muted, #a9b3da);
 }
@@ -477,6 +481,11 @@ body.paper-plot-open .clim-edit-dialog-overlay {
   position: relative;
   flex: 0 0 auto;
   background: transparent;
+  box-sizing: border-box;
+}
+
+.paper-panel-viewer.paper-panel-viewer-empty {
+  border: 1px dashed rgba(255, 255, 255, 0.22);
 }
 
 .paper-panel-canvas {
