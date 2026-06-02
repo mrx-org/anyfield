@@ -1764,70 +1764,17 @@ os.makedirs('/phantom/averaged', exist_ok=True)
       return niftiBytes;
   }
 
-  /** Get voxel intensity at voxel indices [i, j, k]. Returns null if no volume or out of bounds. */
-  getIntensityAtVox(vol, vox, dim3) {
-    if (!vol || !dim3 || dim3.length < 3) return null;
-    const nx = dim3[0], ny = dim3[1], nz = dim3[2];
-    const ix = Math.round(Number(vox[0]));
-    const iy = Math.round(Number(vox[1]));
-    const iz = Math.round(Number(vox[2]));
-    if (ix < 0 || ix >= nx || iy < 0 || iy >= ny || iz < 0 || iz >= nz) return null;
-    const frame = vol.frame4D ?? 0;
-    return Number(vol.getValue(ix, iy, iz, frame));
-  }
-
-  /** Format number with 4 significant digits (12 → "12.00", 12.123 → "12.12"). */
-  formatSigFigs4(val) {
-    if (val === 0 || !Number.isFinite(val)) return String(val);
-    return Number(val).toPrecision(4);
-  }
-
-  /** Intensity at crosshair for the volume used by {@link getVolumeForIntensity}. */
-  _intensityFromLocationData(data) {
-    const { vol, dim3 } = this.getVolumeForIntensity();
-    if (!vol) return null;
-
-    const values = data?.values;
-    if (Array.isArray(values) && values.length) {
-      const entry = values.find((e) => e.id != null && e.id === vol.id)
-        ?? values.find((e) => e.name && e.name === vol.name);
-      if (entry != null && Number.isFinite(entry.value)) return entry.value;
-    }
-
-    const mm = data?.mm;
-    if ((Array.isArray(mm) || ArrayBuffer.isView(mm)) && mm.length >= 3 && typeof vol.mm2vox === "function") {
-      const voxVol = vol.mm2vox(mm);
-      return this.getIntensityAtVox(vol, voxVol, dim3);
-    }
-
-    const vox = data?.vox;
-    if ((Array.isArray(vox) || ArrayBuffer.isView(vox)) && vox.length >= 3) {
-      return this.getIntensityAtVox(vol, vox, dim3);
-    }
-    return null;
-  }
-
   updateCrosshairIntensity(data) {
-    if (!this.crosshairIntensityEl) return;
-    try {
-      const val = this._intensityFromLocationData(data);
-      if (val === null || Number.isNaN(val)) {
-        this.crosshairIntensityEl.textContent = "—";
-        return;
-      }
-      this.crosshairIntensityEl.textContent = this.formatSigFigs4(val);
-    } catch (e) {
-      this.crosshairIntensityEl.textContent = "—";
-    }
+    const { vol } = this.getVolumeForIntensity();
+    updateCrosshairIntensityOverlay(this.crosshairIntensityEl, this.nv, data, vol);
   }
 
   /** Re-fire location callback after volume list changes (keeps intensity overlay in sync). */
   refreshCrosshairIntensityOverlay() {
-    if (!this.nv?.createOnLocationChange) return;
     const ax = typeof this.currentAxCorSag === "number" && Number.isFinite(this.currentAxCorSag)
       ? this.currentAxCorSag
       : NaN;
-    this.nv.createOnLocationChange(ax);
+    refreshCrosshairIntensityForNv(this.nv, ax);
   }
 
   readAnglesBestEffort() {
@@ -3589,6 +3536,90 @@ os.makedirs('/phantom/averaged', exist_ok=True)
   }
 }
 
+/** Format number with 4 significant digits (12 → "12.00", 12.123 → "12.12"). */
+export function formatSigFigs4(val) {
+  if (val === 0 || !Number.isFinite(val)) return String(val);
+  return Number(val).toPrecision(4);
+}
+
+/** Get voxel intensity at voxel indices [i, j, k]. Returns null if no volume or out of bounds. */
+export function getIntensityAtVox(vol, vox, dim3) {
+  if (!vol || !dim3 || dim3.length < 3) return null;
+  const nx = dim3[0], ny = dim3[1], nz = dim3[2];
+  const ix = Math.round(Number(vox[0]));
+  const iy = Math.round(Number(vox[1]));
+  const iz = Math.round(Number(vox[2]));
+  if (ix < 0 || ix >= nx || iy < 0 || iy >= ny || iz < 0 || iz >= nz) return null;
+  const frame = vol.frame4D ?? 0;
+  return Number(vol.getValue(ix, iy, iz, frame));
+}
+
+export function dim3FromVolume(vol) {
+  const hdr = vol?.hdr ?? vol?.header ?? null;
+  const dimRaw = hdr?.dims ?? hdr?.dim ?? vol?.dims ?? vol?.dim ?? null;
+  if (!Array.isArray(dimRaw)) return null;
+  if (dimRaw.length >= 4) return [dimRaw[1], dimRaw[2], dimRaw[3]];
+  if (dimRaw.length === 3) return [dimRaw[0], dimRaw[1], dimRaw[2]];
+  return null;
+}
+
+/** Resolve volume + 3D dims for crosshair intensity (preview: first volume; main: selected/visible). */
+export function getVolumeForIntensityFromNv(nv, preferVol = null) {
+  const list = nv?.volumes;
+  if (!list?.length) return { vol: null, dim3: null };
+  let vol = null;
+  if (preferVol && list.includes(preferVol)) {
+    vol = preferVol;
+  } else {
+    vol = list.find((v) => v.opacity > 0) ?? list[0];
+  }
+  return { vol, dim3: dim3FromVolume(vol) };
+}
+
+/** Intensity at crosshair for the given volume (or first visible volume on nv). */
+export function intensityFromLocationData(nv, data, preferVol = null) {
+  const { vol, dim3 } = getVolumeForIntensityFromNv(nv, preferVol);
+  if (!vol) return null;
+
+  const values = data?.values;
+  if (Array.isArray(values) && values.length) {
+    const entry = values.find((e) => e.id != null && e.id === vol.id)
+      ?? values.find((e) => e.name && e.name === vol.name);
+    if (entry != null && Number.isFinite(entry.value)) return entry.value;
+  }
+
+  const mm = data?.mm;
+  if ((Array.isArray(mm) || ArrayBuffer.isView(mm)) && mm.length >= 3 && typeof vol.mm2vox === "function") {
+    return getIntensityAtVox(vol, vol.mm2vox(mm), dim3);
+  }
+
+  const vox = data?.vox;
+  if ((Array.isArray(vox) || ArrayBuffer.isView(vox)) && vox.length >= 3) {
+    return getIntensityAtVox(vol, vox, dim3);
+  }
+  return null;
+}
+
+export function updateCrosshairIntensityOverlay(el, nv, data, preferVol = null) {
+  if (!el) return;
+  try {
+    const val = intensityFromLocationData(nv, data, preferVol);
+    el.textContent = (val === null || Number.isNaN(val)) ? "—" : formatSigFigs4(val);
+  } catch {
+    el.textContent = "—";
+  }
+}
+
+export function refreshCrosshairIntensityForNv(nv, axCorSag = NaN) {
+  if (!nv?.createOnLocationChange) return;
+  const ax = Number.isFinite(axCorSag)
+    ? axCorSag
+    : (typeof nv.opts?.sliceType === "number" && nv.opts.sliceType < SLICE_TYPE.RENDER
+      ? nv.opts.sliceType
+      : 0);
+  nv.createOnLocationChange(ax);
+}
+
 /** Sync options for scan preview (B) ↔ compare (C) panes */
 const PREVIEW_CROSSHAIR_WIDTH = 0.35;
 
@@ -3644,6 +3675,7 @@ function stepPreviewPanesFrame4D(sourceNv, delta) {
       }
       syncVolumeClimsToCurrent4DFrame(vol, nv, next);
       nv.drawScene?.();
+      refreshCrosshairIntensityForNv(nv);
     }
     window.jointHist?.syncFromVolumes?.();
   } finally {
@@ -3770,6 +3802,7 @@ export class ScanPreviewModule {
     this._previewViewKeyLast = 0;
     this.container = null;
     this.canvas = null;
+    this.crosshairIntensityEl = null;
     this.currentScanName = null;
     this.isInitialized = false;
     this._isSyncing = false;
@@ -3790,6 +3823,7 @@ export class ScanPreviewModule {
       <div class="viewer-stack-body" style="flex:1;min-height:0;display:flex;flex-direction:column;">
       <div class="${this.viewerClass}" style="flex:1;min-height:0;position:relative;background:black;">
         <canvas id="${this.canvasId}"></canvas>
+        <div class="crosshair-intensity viewer-canvas-overlay viewer-canvas-overlay--tl" id="crosshairIntensity-${this.instanceId}">—</div>
         <div class="preview-label viewer-canvas-overlay viewer-canvas-overlay--bl">${this.labelDefault}</div>
         ${this.hintText ? `<div class="preview-hint viewer-canvas-overlay viewer-canvas-overlay--tr">${this.hintText}</div>` : ''}
       </div>
@@ -3797,8 +3831,17 @@ export class ScanPreviewModule {
     `;
 
     this.canvas = this.container.querySelector(`#${this.canvasId}`);
-    
+    this.crosshairIntensityEl = this.container.querySelector(`#crosshairIntensity-${this.instanceId}`);
+
     setTimeout(() => this.initNiivue(), 10);
+  }
+
+  updateCrosshairIntensity(data) {
+    updateCrosshairIntensityOverlay(this.crosshairIntensityEl, this.nv, data);
+  }
+
+  refreshCrosshairIntensityOverlay() {
+    refreshCrosshairIntensityForNv(this.nv);
   }
 
   applyViewOptions(opts) {
@@ -3833,7 +3876,9 @@ export class ScanPreviewModule {
       this.nv.setSliceType(SLICE_TYPE.AXIAL);
 
       this._applyPreviewCrosshairStyle();
-      
+
+      this.nv.onLocationChange = (data) => this.updateCrosshairIntensity(data);
+
       eventHub.on('viewOptionsChange', (opts) => this.applyViewOptions(opts));
       installPreviewSyncHooks(this.nv);
       window.jointHist?.installPreviewHooks?.();
@@ -3936,6 +3981,7 @@ export class ScanPreviewModule {
         this.currentScanName = null;
         this.updateLabel("No Scan Visible");
         this.nv.drawScene();
+        this.updateCrosshairIntensity(null);
         return;
       }
       
@@ -3949,6 +3995,7 @@ export class ScanPreviewModule {
       
       this.currentScanName = name;
       this.nv.drawScene();
+      this.refreshCrosshairIntensityOverlay();
 
       const labelName = this._shortScanLabel(name);
       this.updateLabel(labelName);

@@ -242,7 +242,7 @@ const defaultStyle = Object.freeze({
   lineGrabPx: 10,
   minColor: "#5ba4e6",
   maxColor: "#e05555",
-  barColor: "rgba(100,100,180,0.50)",
+  barColor: "rgba(140, 140, 140, 0.55)",
   barColorA: "rgba(91, 164, 230, 0.45)",
   barColorB: "rgba(230, 170, 60, 0.45)",
   multiFrameStackAlpha: 1,
@@ -254,10 +254,6 @@ const defaultStyle = Object.freeze({
   handleLabelDecimals: 2,
   axisTickDecimals: 2,
 });
-
-function hueForFrameIndex(frameIndex) {
-  return ((frameIndex * 137.508) % 360 + 360) % 360;
-}
 
 function createPlotLayout(hCanvas, hCtx, S) {
   let plotL, plotR, plotT, plotB, plotW, plotH, cssW = 300, cssH = 64, backingDpr = 1;
@@ -646,7 +642,7 @@ export function attachNiivueHistogramPanel(config) {
           const segPx = perFrameBarH[f][i] * scale;
           if (segPx <= 0) continue;
           cum += segPx;
-          offBarsCtx.fillStyle = `hsla(${hueForFrameIndex(f)}, 72%, 52%, ${alpha})`;
+          offBarsCtx.fillStyle = `rgba(140, 140, 140, ${alpha})`;
           offBarsCtx.fillRect(plot.plotL + i * barW, plot.plotB - cum, barW + 0.5, segPx);
         }
       }
