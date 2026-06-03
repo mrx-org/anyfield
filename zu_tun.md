@@ -2,6 +2,8 @@
 
 # Definitly at some point
 
+-- revisit PSF and FOV and traj calculation especially regarding nyquist freq... unclear what exact nyquist shoudl be used regarding different spoilngs.. NYQUIST_SCALE = 1.5 seesm to work ok
+
 -- add full report
 
 -- add "share" link to protocol/ui
@@ -48,7 +50,7 @@
 
 -- in seq_plot .py/.js is a "monkey patch" of seq.calculate_kspace as PyPulseq’s Sequence.calculate_kspace() returns k-trajectory values but, in the public API you use, it does not reliably expose a per-column time array aligned with k_traj. This shoudl be remobved once pypulseq fixes it online.
 
--- image scaling is somehow weird, try gre 128 and gre 130, very different image intensties. probably due to nuuft/fft recon dcf...
+-- image scaling is somehow weird, try gre 128 and gre 130, very different image intensties. probably due to nuuft/fft recon dcf, partially was fixed already. residual difference is design as signal changes with numer of phantom voxels.
 
 
 -- speedup at startup: prebundle Pyodide (custom build or pre-built wheels for pypulseq/nibabel). [burden is high because you need a reproducible build pipeline, wheel compatibility checks for Pyodide/Python versions, larger artifact management, and ongoing maintenance whenever Pyodide or deps update.] (benefit: ++, burden: +++)

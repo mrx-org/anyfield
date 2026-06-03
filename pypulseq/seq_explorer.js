@@ -14,6 +14,7 @@ import { eventHub } from "../event_hub.js";
 import {
     SEQ_DEFAULT_PLOT_SPEED,
     buildSeqPlotExecuteFragments,
+    clearKspaceHostCache,
     disposeSeqChartGpuHost,
     releaseChartgpuPythonPayload,
     releaseKspaceCache,
@@ -580,6 +581,7 @@ plt.rcParams['font.size'] = 8`;
      */
     async disposeSeqChartGpu() {
         await disposeSeqChartGpuHost(this);
+        clearKspaceHostCache(this);
         if (this.config.pyodide) {
             await releaseKspaceCache(this.config.pyodide);
         }

@@ -6,13 +6,33 @@
 export const SEQ_DEFAULT_PLOT_SPEED = 'chartgpu';
 
 /** Pinned ChartGPU ESM (see insights/SPEC_seq_plot.md). */
-const CHARTGPU_MODULE_URL = 'https://esm.sh/chartgpu@0.3.2?target=es2022';
+export const CHARTGPU_MODULE_URL = 'https://esm.sh/chartgpu@0.3.2?target=es2022';
+
+/** Lab shell sidebar / scan list surface (`--bg-elevated` in index.html). */
+export const LAB_SHELL_BG_ELEVATED = '#0f1424';
+
+/**
+ * ChartGPU dark theme aligned with niivue lab shell (not ChartGPU default purple tint).
+ * @param {Record<string, unknown> | undefined} preset `darkTheme` from chartgpu
+ * @param {number} [fontSize]
+ */
+export function seqChartGpuLabTheme(preset, fontSize = 10) {
+    const base = preset && typeof preset === 'object' ? preset : {};
+    return {
+        ...base,
+        backgroundColor: LAB_SHELL_BG_ELEVATED,
+        gridLineColor: 'rgba(255, 255, 255, 0.08)',
+        axisLineColor: 'rgba(255, 255, 255, 0.1)',
+        axisTickColor: 'rgba(255, 255, 255, 0.1)',
+        fontSize,
+    };
+}
 
 /**
  * Tear down ChartGPU charts and shared WebGPU device created for sequence plots.
  */
 const KSPACE_TIME_MARGIN_S = 1e-6;
-const KSPACE_GRID = { left: 60, right: 12, top: 8, bottom: 52 };
+export const KSPACE_GRID = { left: 60, right: 12, top: 8, bottom: 52 };
 const KSPACE_COLOR_LINE = '#ff0000';
 const KSPACE_COLOR_MARKER = '#00e5ff';
 const KSPACE_LINE_WIDTH = 3;
@@ -36,14 +56,108 @@ function detachSeqZoomKspaceListener(host) {
     }
 }
 
-function disposeKspaceCharts(host) {
-    if (host._kspaceInteractionCleanup) {
+/** Per-panel kx–ky ChartGPU state (`xy` = seq_check side panel; other slots e.g. `fig4`). */
+function getKspaceKySlot(host, slot = 'xy') {
+    if (slot === 'xy') {
+        return {
+            getChart: () => host._kspaceChart,
+            setChart: (c) => {
+                host._kspaceChart = c;
+            },
+            getCleanup: () => host._kspaceInteractionCleanup,
+            setCleanup: (f) => {
+                host._kspaceInteractionCleanup = f;
+            },
+            getAxisView: () => host._kspaceAxisView,
+            setAxisView: (v) => {
+                host._kspaceAxisView = v;
+            },
+            clearAxisView: () => {
+                host._kspaceAxisView = null;
+            },
+            clearSeriesBase: () => {
+                host._kspaceSeriesBase = null;
+            },
+            getSeriesBase: () => host._kspaceSeriesBase,
+            setSeriesBase: (v) => {
+                host._kspaceSeriesBase = v;
+            },
+            getLastPayload: () => host._lastKspacePayload,
+            setLastPayload: (p) => {
+                host._lastKspacePayload = p;
+            },
+            clearLastPayload: () => {
+                host._lastKspacePayload = null;
+            },
+        };
+    }
+    if (!host._kspaceKySlots) host._kspaceKySlots = {};
+    const box = host._kspaceKySlots[slot] || (host._kspaceKySlots[slot] = {});
+    return {
+        getChart: () => box.chart,
+        setChart: (c) => {
+            box.chart = c;
+        },
+        getCleanup: () => box.cleanup,
+        setCleanup: (f) => {
+            box.cleanup = f;
+        },
+        getAxisView: () => box.axisView,
+        setAxisView: (v) => {
+            box.axisView = v;
+        },
+        clearAxisView: () => {
+            box.axisView = null;
+        },
+        clearSeriesBase: () => {
+            box.seriesBase = null;
+        },
+        getSeriesBase: () => box.seriesBase,
+        setSeriesBase: (v) => {
+            box.seriesBase = v;
+        },
+        getLastPayload: () => box.lastPayload,
+        setLastPayload: (p) => {
+            box.lastPayload = p;
+        },
+        clearLastPayload: () => {
+            box.lastPayload = null;
+        },
+    };
+}
+
+export function disposeKspaceKySlot(host, slot = 'xy') {
+    const s = getKspaceKySlot(host, slot);
+    const cleanup = s.getCleanup();
+    if (cleanup) {
         try {
-            host._kspaceInteractionCleanup();
+            cleanup();
         } catch (e) {
             /* ignore */
         }
-        host._kspaceInteractionCleanup = null;
+        s.setCleanup(null);
+    }
+    const chart = s.getChart();
+    if (chart) {
+        try {
+            chart.dispose();
+        } catch (e) {
+            /* ignore */
+        }
+        s.setChart(null);
+    }
+    s.clearAxisView();
+    s.clearSeriesBase();
+    s.clearLastPayload();
+}
+
+function disposeKspaceCharts(host) {
+    disposeKspaceKySlot(host, 'xy');
+    if (host._kspaceKySlots) {
+        for (const key of Object.keys(host._kspaceKySlots)) {
+            disposeKspaceKySlot(host, key);
+        }
+        host._kspaceKySlots = null;
     }
     if (host._kspaceYzInteractionCleanup) {
         try {
@@ -52,14 +166,6 @@ function disposeKspaceCharts(host) {
             /* ignore */
         }
         host._kspaceYzInteractionCleanup = null;
-    }
-    if (host._kspaceChart) {
-        try {
-            host._kspaceChart.dispose();
-        } catch (e) {
-            /* ignore */
-        }
-        host._kspaceChart = null;
     }
     if (host._kspaceYzChart) {
         try {
@@ -71,10 +177,13 @@ function disposeKspaceCharts(host) {
     }
     host._kspaceAxisView = null;
     host._kspaceYzAxisView = null;
-    host._kspaceSeriesBase = null;
     host._kspaceYzSeriesBase = null;
-    host._lastKspacePayload = null;
     host._lastKspaceYzPayload = null;
+}
+
+/** Drop JS k-space time series (not called by chart dispose — see seq_check / setupKspacePanels). */
+export function clearKspaceHostCache(host) {
+    if (!host) return;
     host._kspaceCache = null;
     host._seqDispTimeRange = null;
 }
@@ -117,6 +226,7 @@ export async function disposeSeqChartGpuHost(host) {
     }
     host._seqChartGpuDevice = null;
     host._seqChartGpuAdapter = null;
+    host._seqChartZoomPadFraction = 0;
 }
 
 /**
@@ -295,6 +405,29 @@ export function chartGpuYAnchorForExtentHelper(seriesArr) {
  * @param {number} xMax
  * @param {number} yAnchor
  */
+/**
+ * Extra x-axis span (fraction of sequence length per side) so wheel zoom-out can show margins.
+ * ChartGPU max zoom-out is 0–100% of the data domain; padding widens that domain.
+ */
+export const SEQ_CHARTGPU_ZOOM_PAD_FRACTION = 0.4;
+
+/** @param {number} padFraction per-side padding as a fraction of sequence span */
+export function seqChartGpuInitialZoomPct(padFraction) {
+    const f = Number(padFraction);
+    if (!Number.isFinite(f) || f <= 0) return { start: 0, end: 100 };
+    const denom = 1 + 2 * f;
+    return { start: (f / denom) * 100, end: ((1 + f) / denom) * 100 };
+}
+
+/** @param {number} xMin @param {number} xMax @param {number} padFraction */
+export function chartGpuPaddedXBounds(xMin, xMax, padFraction = SEQ_CHARTGPU_ZOOM_PAD_FRACTION) {
+    const span = xMax - xMin;
+    const f = Number.isFinite(padFraction) ? padFraction : 0;
+    const pad =
+        Number.isFinite(span) && span > 0 ? span * f : f > 0 ? Math.max(Math.abs(xMax - xMin), 0.01) * f : 0;
+    return { min: xMin - pad, max: xMax + pad };
+}
+
 export function chartGpuWithSharedXExtentSeries(seriesArr, xMin, xMax, yAnchor) {
     const base = Array.isArray(seriesArr) ? [...seriesArr] : [];
     base.push({
@@ -347,7 +480,7 @@ function upperBoundTime(arr, t) {
     return lo;
 }
 
-function indexRangeForTimeWindow(tArr, tLo, tHi, margin = KSPACE_TIME_MARGIN_S) {
+export function indexRangeForTimeWindow(tArr, tLo, tHi, margin = KSPACE_TIME_MARGIN_S) {
     const n = tArr.length;
     if (!n) return { iLo: 0, iHi: -1 };
     const tMin = tLo - margin;
@@ -360,16 +493,131 @@ function indexRangeForTimeWindow(tArr, tLo, tHi, margin = KSPACE_TIME_MARGIN_S) 
 
 function seqZoomToTimeWindow(host, zoomPct) {
     const [t0, t1] = host._seqDispTimeRange || [0, 1];
-    const span = t1 - t0;
+    const padFrac = host._seqChartZoomPadFraction || 0;
+    const seqSpan = t1 - t0;
+    const pad =
+        Number.isFinite(seqSpan) && seqSpan > 0
+            ? seqSpan * padFrac
+            : padFrac > 0
+              ? 0.01
+              : 0;
+    const xLo = t0 - pad;
+    const xSpan = t1 + pad - xLo || 1;
     const start = Number(zoomPct?.start ?? 0);
     const end = Number(zoomPct?.end ?? 100);
     return {
-        tLo: t0 + (start / 100) * span,
-        tHi: t0 + (end / 100) * span,
+        tLo: xLo + (start / 100) * xSpan,
+        tHi: xLo + (end / 100) * xSpan,
     };
 }
 
-function buildKspaceSlice(cache, tLo, tHi, plane = 'xy') {
+/** HSV hue in [0,1] → hex color (ADC time rainbow). */
+export function hsvToHex(h, s = 1, v = 1) {
+    const hh = ((h % 1) + 1) % 1;
+    const i = Math.floor(hh * 6);
+    const f = hh * 6 - i;
+    const p = v * (1 - s);
+    const q = v * (1 - f * s);
+    const t = v * (1 - (1 - f) * s);
+    let r = 0;
+    let g = 0;
+    let b = 0;
+    switch (i % 6) {
+        case 0:
+            r = v;
+            g = t;
+            b = p;
+            break;
+        case 1:
+            r = q;
+            g = v;
+            b = p;
+            break;
+        case 2:
+            r = p;
+            g = v;
+            b = t;
+            break;
+        case 3:
+            r = p;
+            g = q;
+            b = v;
+            break;
+        case 4:
+            r = t;
+            g = p;
+            b = v;
+            break;
+        case 5:
+            r = v;
+            g = p;
+            b = q;
+            break;
+        default:
+            break;
+    }
+    const toHex = (x) => Math.round(Math.min(1, Math.max(0, x)) * 255).toString(16).padStart(2, '0');
+    return `#${toHex(r)}${toHex(g)}${toHex(b)}`;
+}
+
+/** Matplotlib-style stops [t, [r,g,b]] with t in [0, 1]. */
+const COLORMAP_STOPS = {
+    viridis: [
+        [0, [68, 1, 84]],
+        [0.25, [59, 82, 139]],
+        [0.5, [33, 145, 140]],
+        [0.75, [94, 201, 98]],
+        [1, [253, 231, 37]],
+    ],
+    parula: [
+        [0, [53, 42, 135]],
+        [0.2, [15, 92, 221]],
+        [0.4, [0, 181, 206]],
+        [0.6, [0, 200, 122]],
+        [0.8, [162, 252, 60]],
+        [1, [248, 230, 32]],
+    ],
+};
+
+/**
+ * Sample viridis or parula at t in [0, 1] (for ChartGPU scatter kspaceColor).
+ * @param {number} t
+ * @param {'viridis' | 'parula'} [name]
+ */
+export function colormapHex(t, name = 'viridis') {
+    const stops = COLORMAP_STOPS[name] || COLORMAP_STOPS.viridis;
+    const x = Math.min(1, Math.max(0, Number(t) || 0));
+    let i = 0;
+    while (i < stops.length - 1 && stops[i + 1][0] < x) i++;
+    const [t0, c0] = stops[i];
+    const [t1, c1] = stops[Math.min(i + 1, stops.length - 1)];
+    const u = t1 > t0 ? (x - t0) / (t1 - t0) : 0;
+    const r = Math.round(c0[0] + u * (c1[0] - c0[0]));
+    const g = Math.round(c0[1] + u * (c1[1] - c0[1]));
+    const b = Math.round(c0[2] + u * (c1[2] - c0[2]));
+    const h = (n) => n.toString(16).padStart(2, '0');
+    return `#${h(r)}${h(g)}${h(b)}`;
+}
+
+function isRainbowAdcForHost(host) {
+    return !!host?._rainbowAdc;
+}
+
+/** @param {*} host @returns {{ tLo: number, tHi: number } | null} */
+export function getTimeWindowFromZoom(host) {
+    const charts = host._seqChartGpuCharts;
+    if (!charts?.length || !host._seqDispTimeRange) return null;
+    const anchor = charts[charts.length - 1];
+    let z = { start: 0, end: 100 };
+    try {
+        z = anchor.getZoomRange() || z;
+    } catch (_) {
+        /* ignore */
+    }
+    return seqZoomToTimeWindow(host, z);
+}
+
+function buildKspaceSlice(cache, tLo, tHi, plane = 'xy', opts = {}) {
     if (tHi < tLo) {
         const s = tLo;
         tLo = tHi;
@@ -429,14 +677,41 @@ function buildKspaceSlice(cache, tLo, tHi, plane = 'xy') {
             allB.push(b);
         }
         if (adcPts.length > 0) {
-            series.push({
-                type: 'scatter',
-                data: adcPts,
-                kspaceRole: 'adc',
-                symbol: 'circle',
-                symbolSize: 3,
-                sampling: 'none',
-            });
+            const rainbowAdc = !!opts.rainbowAdc;
+            if (rainbowAdc) {
+                const nBins = Math.min(48, Math.max(8, Math.ceil(adcPts.length / 24)));
+                const bins = Array.from({ length: nBins }, () => []);
+                const denom = Math.max(1, nAdc - 1);
+                for (let i = aLo; i <= aHi; i++) {
+                    const a = aA[i];
+                    const b = bA[i] ?? 0;
+                    if (!Number.isFinite(a) || !Number.isFinite(b)) continue;
+                    const tNorm = Math.max(0, Math.min(1, i / denom));
+                    const bin = Math.min(nBins - 1, Math.floor(tNorm * nBins));
+                    bins[bin].push([a, b]);
+                }
+                for (let bi = 0; bi < nBins; bi++) {
+                    if (!bins[bi].length) continue;
+                    series.push({
+                        type: 'scatter',
+                        data: bins[bi],
+                        kspaceRole: 'adc',
+                        kspaceColor: hsvToHex(bi / Math.max(1, nBins - 1)),
+                        symbol: 'circle',
+                        symbolSize: 3,
+                        sampling: 'none',
+                    });
+                }
+            } else {
+                series.push({
+                    type: 'scatter',
+                    data: adcPts,
+                    kspaceRole: 'adc',
+                    symbol: 'circle',
+                    symbolSize: 3,
+                    sampling: 'none',
+                });
+            }
         }
     }
 
@@ -459,25 +734,38 @@ function buildKspaceSlice(cache, tLo, tHi, plane = 'xy') {
     return { series, bounds: [aBounds, bBounds] };
 }
 
-function buildKspacePayloadTime(cache, tLo, tHi) {
-    const r = buildKspaceSlice(cache, tLo, tHi, 'xy');
+export function buildKspacePayloadTime(cache, tLo, tHi, hostOrOpts = null) {
+    const opts =
+        hostOrOpts && typeof hostOrOpts === 'object' && '_rainbowAdc' in hostOrOpts
+            ? { rainbowAdc: isRainbowAdcForHost(hostOrOpts) }
+            : hostOrOpts && typeof hostOrOpts === 'object'
+              ? hostOrOpts
+              : {};
+    const r = buildKspaceSlice(cache, tLo, tHi, 'xy', opts);
     return { series: r.series, kxBounds: r.bounds[0], kyBounds: r.bounds[1] };
 }
 
-function buildKspaceYzPayloadTime(cache, tLo, tHi) {
-    const r = buildKspaceSlice(cache, tLo, tHi, 'yz');
+export function buildKspaceYzPayloadTime(cache, tLo, tHi, hostOrOpts = null) {
+    const opts =
+        hostOrOpts && typeof hostOrOpts === 'object' && '_rainbowAdc' in hostOrOpts
+            ? { rainbowAdc: isRainbowAdcForHost(hostOrOpts) }
+            : hostOrOpts && typeof hostOrOpts === 'object'
+              ? hostOrOpts
+              : {};
+    const r = buildKspaceSlice(cache, tLo, tHi, 'yz', opts);
     return { series: r.series, kyBounds: r.bounds[0], kzBounds: r.bounds[1] };
 }
 
-function normalizeKspaceChartGpuSeries(seriesIn) {
+export function normalizeKspaceChartGpuSeries(seriesIn) {
     const normalized = normalizeChartGpuSeries(seriesIn);
     return normalized.map((s, i) => {
         const src = seriesIn[i];
         if (src?.kspaceRole === 'adc' || src?.type === 'scatter') {
+            const adcColor = src?.kspaceColor || KSPACE_COLOR_MARKER;
             return {
                 ...s,
                 type: 'scatter',
-                color: KSPACE_COLOR_MARKER,
+                color: adcColor,
                 symbol: src?.symbol ?? 'circle',
                 symbolSize: s.symbolSize ?? src?.symbolSize ?? 3,
                 sampling: 'none',
@@ -516,10 +804,12 @@ function boundsToPlaneAxisView(xBounds, yBounds, padFrac = 0.08) {
     return { xMin: x0 - dx, xMax: x1 + dx, yMin: y0 - dy, yMax: y1 + dy };
 }
 
-function ensureKspaceAxisView(host, payload) {
-    if (host._kspaceAxisView) return host._kspaceAxisView;
+function ensureKspaceAxisView(host, payload, slot = 'xy') {
+    const s = getKspaceKySlot(host, slot);
+    const cur = s.getAxisView();
+    if (cur) return cur;
     const v = boundsToPlaneAxisView(payload?.kxBounds ?? null, payload?.kyBounds ?? null);
-    if (v) host._kspaceAxisView = v;
+    if (v) s.setAxisView(v);
     return v;
 }
 
@@ -578,12 +868,12 @@ function applyPlaneChartView(chart, view, seriesBase, xName, yName) {
     }
 }
 
-function planeGridFractionFromEvent(chart, containerEl, ev) {
+function planeGridFractionFromEvent(chart, containerEl, ev, grid = KSPACE_GRID) {
     const canvas = containerEl.querySelector('canvas');
     if (!canvas) return null;
     const rect = canvas.getBoundingClientRect();
-    const plotW = rect.width - KSPACE_GRID.left - KSPACE_GRID.right;
-    const plotH = rect.height - KSPACE_GRID.top - KSPACE_GRID.bottom;
+    const plotW = rect.width - grid.left - grid.right;
+    const plotH = rect.height - grid.top - grid.bottom;
     if (!(plotW > 0 && plotH > 0)) return null;
     let ht = { isInGrid: false };
     try {
@@ -597,8 +887,8 @@ function planeGridFractionFromEvent(chart, containerEl, ev) {
             fy: Math.min(1, Math.max(0, 1 - ht.gridY / plotH)),
         };
     }
-    const cx = ev.clientX - rect.left - KSPACE_GRID.left;
-    const cy = ev.clientY - rect.top - KSPACE_GRID.top;
+    const cx = ev.clientX - rect.left - grid.left;
+    const cy = ev.clientY - rect.top - grid.top;
     if (cx < 0 || cy < 0 || cx > plotW || cy > plotH) return null;
     return {
         fx: Math.min(1, Math.max(0, cx / plotW)),
@@ -606,7 +896,7 @@ function planeGridFractionFromEvent(chart, containerEl, ev) {
     };
 }
 
-function planeViewFromChartOptions(chart) {
+export function planeViewFromChartOptions(chart) {
     const o = chart?.options;
     const xa = o?.xAxis;
     const ya = o?.yAxis;
@@ -649,20 +939,52 @@ function panPlaneAxisView(view, dx, dy) {
     };
 }
 
-function attachKspacePlaneInteraction(containerEl, chart, plane) {
+function zoomPlaneAxisViewXOnly(view, factor, centerFrac) {
+    const fx = centerFrac?.fx ?? 0.5;
+    const spanX = view.xMax - view.xMin;
+    const newSpanX = Math.max(spanX * factor, 1e-12);
+    const xAt = view.xMin + fx * spanX;
+    return {
+        xMin: xAt - fx * newSpanX,
+        xMax: xAt + (1 - fx) * newSpanX,
+        yMin: view.yMin,
+        yMax: view.yMax,
+    };
+}
+
+function panPlaneAxisViewXOnly(view, dx) {
+    return {
+        xMin: view.xMin + dx,
+        xMax: view.xMax + dx,
+        yMin: view.yMin,
+        yMax: view.yMax,
+    };
+}
+
+/**
+ * Wheel zoom + left-drag pan on a ChartGPU value-axis chart (k-space planes, PSF profiles, …).
+ * @param {HTMLElement} containerEl
+ * @param {*} chart
+ * @param {*} plane { isChartOk, getView, setView, ensureView, applyView }
+ * @param {{ left: number, right: number, top: number, bottom: number }} [grid]
+ * @param {{ xOnly?: boolean }} [opts] If true, wheel/drag affect x-axis only (PSF profiles).
+ * @returns {() => void} cleanup
+ */
+export function attachChartGpuPlaneInteraction(containerEl, chart, plane, grid = KSPACE_GRID, opts = {}) {
+    const xOnly = !!opts.xOnly;
     const canvas = () => containerEl.querySelector('canvas');
     const plotSize = () => {
         const c = canvas();
         if (!c) return { w: 0, h: 0 };
         const rect = c.getBoundingClientRect();
         return {
-            w: rect.width - KSPACE_GRID.left - KSPACE_GRID.right,
-            h: rect.height - KSPACE_GRID.top - KSPACE_GRID.bottom,
+            w: rect.width - grid.left - grid.right,
+            h: rect.height - grid.top - grid.bottom,
         };
     };
     const onWheel = (e) => {
         if (!plane.isChartOk()) return;
-        const frac = planeGridFractionFromEvent(chart, containerEl, e);
+        const frac = planeGridFractionFromEvent(chart, containerEl, e, grid);
         if (!frac) return;
         e.preventDefault();
         e.stopPropagation();
@@ -672,7 +994,9 @@ function attachKspacePlaneInteraction(containerEl, chart, plane) {
         if (!view) return;
         plane.setView(view);
         const factor = e.deltaY < 0 ? 0.88 : 1.12;
-        plane.setView(zoomPlaneAxisView(view, factor, frac));
+        plane.setView(
+            xOnly ? zoomPlaneAxisViewXOnly(view, factor, frac) : zoomPlaneAxisView(view, factor, frac),
+        );
         plane.applyView(chart, plane.getView());
     };
     const DRAG_THRESHOLD = 4;
@@ -717,14 +1041,16 @@ function attachKspacePlaneInteraction(containerEl, chart, plane) {
         const spanX = view.xMax - view.xMin;
         const spanY = view.yMax - view.yMin;
         const ddx = (-rawDx / w) * spanX;
-        const ddy = (rawDy / h) * spanY;
-        plane.setView(panPlaneAxisView(view, ddx, ddy));
+        const ddy = xOnly ? 0 : (rawDy / h) * spanY;
+        plane.setView(
+            xOnly ? panPlaneAxisViewXOnly(view, ddx) : panPlaneAxisView(view, ddx, ddy),
+        );
         plane.applyView(chart, plane.getView());
     };
     const onPointerDown = (ev) => {
         if (!plane.isChartOk()) return;
         if (ev.button !== 0 || ev.shiftKey) return;
-        const frac = planeGridFractionFromEvent(chart, containerEl, ev);
+        const frac = planeGridFractionFromEvent(chart, containerEl, ev, grid);
         if (!frac) return;
         stopPan();
         pan = {
@@ -748,24 +1074,44 @@ function attachKspacePlaneInteraction(containerEl, chart, plane) {
     };
 }
 
-function attachKspaceInteraction(host, containerEl, chart) {
-    if (host._kspaceInteractionCleanup) {
+function attachKspacePlaneInteraction(containerEl, chart, plane) {
+    return attachChartGpuPlaneInteraction(containerEl, chart, plane, KSPACE_GRID);
+}
+
+function attachKspaceKySlotInteraction(host, containerEl, chart, slot = 'xy') {
+    const s = getKspaceKySlot(host, slot);
+    const prev = s.getCleanup();
+    if (prev) {
         try {
-            host._kspaceInteractionCleanup();
+            prev();
         } catch (_) {
             /* ignore */
         }
-        host._kspaceInteractionCleanup = null;
+        s.setCleanup(null);
     }
-    host._kspaceInteractionCleanup = attachKspacePlaneInteraction(containerEl, chart, {
-        isChartOk: () => host._kspaceChart && !host._kspaceChart.disposed,
-        getView: () => host._kspaceAxisView,
-        setView: (v) => {
-            host._kspaceAxisView = v;
-        },
-        ensureView: () => ensureKspaceAxisView(host, host._lastKspacePayload),
-        applyView: (c, v) => applyPlaneChartView(c, v, host._kspaceSeriesBase, 'kx (1/m)', 'ky (1/m)'),
-    });
+    s.setCleanup(
+        attachKspacePlaneInteraction(containerEl, chart, {
+            isChartOk: () => {
+                const c = s.getChart();
+                return c && !c.disposed;
+            },
+            getView: () => s.getAxisView(),
+            setView: (v) => s.setAxisView(v),
+            ensureView: () => {
+                const payload = s.getLastPayload();
+                if (payload) ensureKspaceAxisView(host, payload, slot);
+                return s.getAxisView();
+            },
+            applyView: (c, v) => {
+                const series = s.getSeriesBase();
+                applyPlaneChartView(c, v, series, 'kx (1/m)', 'ky (1/m)');
+            },
+        }),
+    );
+}
+
+function attachKspaceInteraction(host, containerEl, chart) {
+    attachKspaceKySlotInteraction(host, containerEl, chart, 'xy');
 }
 
 function attachKspaceYzInteraction(host, containerEl, chart) {
@@ -788,25 +1134,38 @@ function attachKspaceYzInteraction(host, containerEl, chart) {
     });
 }
 
-async function renderKspaceChartGpu(host, containerEl, ctx, payload) {
-    if (host._kspaceInteractionCleanup) {
+/**
+ * @param {*} host
+ * @param {HTMLElement} containerEl
+ * @param {*} ctx WebGPU context
+ * @param {*} payload
+ * @param {{ slot?: string, interact?: boolean }} [renderOpts] `slot` defaults to `xy` (zoom-linked panel)
+ */
+export async function renderKspaceChartGpu(host, containerEl, ctx, payload, renderOpts = {}) {
+    const slot = renderOpts.slot || 'xy';
+    const interact = renderOpts.interact !== false;
+    const s = getKspaceKySlot(host, slot);
+
+    const prevCleanup = s.getCleanup();
+    if (prevCleanup) {
         try {
-            host._kspaceInteractionCleanup();
+            prevCleanup();
         } catch (_) {
             /* ignore */
         }
-        host._kspaceInteractionCleanup = null;
+        s.setCleanup(null);
     }
-    if (host._kspaceChart) {
+    const prevChart = s.getChart();
+    if (prevChart) {
         try {
-            host._kspaceChart.dispose();
+            prevChart.dispose();
         } catch (_) {
             /* ignore */
         }
-        host._kspaceChart = null;
+        s.setChart(null);
     }
-    host._kspaceAxisView = null;
-    host._kspaceSeriesBase = null;
+    s.clearAxisView();
+    s.clearSeriesBase();
     containerEl.innerHTML = '';
     if (!payload?.series?.length) {
         containerEl.innerHTML =
@@ -815,15 +1174,14 @@ async function renderKspaceChartGpu(host, containerEl, ctx, payload) {
     }
     const mod = await import(/* @vite-ignore */ CHARTGPU_MODULE_URL);
     const ChartGPU = mod.ChartGPU;
-    const darkTheme = mod.darkTheme;
-    const theme =
-        darkTheme && typeof darkTheme === 'object' ? { ...darkTheme, fontSize: 10 } : 'dark';
-    host._kspaceSeriesBase = normalizeKspaceChartGpuSeries(payload.series);
-    host._lastKspacePayload = payload;
-    const axisView = ensureKspaceAxisView(host, payload);
+    const theme = seqChartGpuLabTheme(mod.darkTheme, 10);
+    const seriesBase = normalizeKspaceChartGpuSeries(payload.series);
+    s.setSeriesBase(seriesBase);
+    s.setLastPayload(payload);
+    const axisView = ensureKspaceAxisView(host, payload, slot);
     const axisOpts = planeAxisChartOptions(axisView, 'kx (1/m)', 'ky (1/m)');
     try {
-        host._kspaceChart = await ChartGPU.create(
+        const chart = await ChartGPU.create(
             containerEl,
             {
                 theme,
@@ -832,11 +1190,14 @@ async function renderKspaceChartGpu(host, containerEl, ctx, payload) {
                 grid: KSPACE_GRID,
                 ...axisOpts,
                 tooltip: { show: true },
-                series: host._kspaceSeriesBase,
+                series: seriesBase,
             },
             ctx,
         );
-        attachKspaceInteraction(host, containerEl, host._kspaceChart);
+        s.setChart(chart);
+        if (interact) {
+            attachKspaceKySlotInteraction(host, containerEl, chart, slot);
+        }
     } catch (e) {
         console.error(e);
         containerEl.innerHTML =
@@ -844,7 +1205,7 @@ async function renderKspaceChartGpu(host, containerEl, ctx, payload) {
     }
 }
 
-async function renderKspaceYzChart(host, containerEl, ctx, tLo, tHi, payloadOverride) {
+export async function renderKspaceYzChart(host, containerEl, ctx, tLo, tHi, payloadOverride) {
     if (host._kspaceYzInteractionCleanup) {
         try {
             host._kspaceYzInteractionCleanup();
@@ -864,7 +1225,7 @@ async function renderKspaceYzChart(host, containerEl, ctx, tLo, tHi, payloadOver
     host._kspaceYzAxisView = null;
     host._kspaceYzSeriesBase = null;
     containerEl.innerHTML = '';
-    const payload = payloadOverride ?? buildKspaceYzPayloadTime(host._kspaceCache, tLo, tHi);
+    const payload = payloadOverride ?? buildKspaceYzPayloadTime(host._kspaceCache, tLo, tHi, host);
     if (!payload.series.length) {
         containerEl.innerHTML =
             '<div class="seq-chartgpu-fallback">No ky–kz data in this time window.</div>';
@@ -872,9 +1233,7 @@ async function renderKspaceYzChart(host, containerEl, ctx, tLo, tHi, payloadOver
     }
     const mod = await import(/* @vite-ignore */ CHARTGPU_MODULE_URL);
     const ChartGPU = mod.ChartGPU;
-    const darkTheme = mod.darkTheme;
-    const theme =
-        darkTheme && typeof darkTheme === 'object' ? { ...darkTheme, fontSize: 10 } : 'dark';
+    const theme = seqChartGpuLabTheme(mod.darkTheme, 10);
     host._kspaceYzSeriesBase = normalizeKspaceChartGpuSeries(payload.series);
     host._lastKspaceYzPayload = payload;
     const axisView = ensureKspaceYzAxisView(host, payload);
@@ -901,19 +1260,14 @@ async function renderKspaceYzChart(host, containerEl, ctx, tLo, tHi, payloadOver
     }
 }
 
-async function refreshKspaceForSeqWindow(host) {
+export async function refreshKspaceForSeqWindow(host) {
     if (!host._kspaceCache || !host._seqDispTimeRange) return;
     const charts = host._seqChartGpuCharts;
     if (!charts?.length) return;
-    const anchor = charts[charts.length - 1];
-    let z = { start: 0, end: 100 };
-    try {
-        z = anchor.getZoomRange() || z;
-    } catch (_) {
-        /* ignore */
-    }
-    const { tLo, tHi } = seqZoomToTimeWindow(host, z);
-    const payload = buildKspacePayloadTime(host._kspaceCache, tLo, tHi);
+    const win = getTimeWindowFromZoom(host);
+    if (!win) return;
+    const { tLo, tHi } = win;
+    const payload = buildKspacePayloadTime(host._kspaceCache, tLo, tHi, host);
     if (!payload?.series?.length) {
         host._lastKspacePayload = payload;
         if (host._kspaceChart && !host._kspaceChart.disposed) {
@@ -934,7 +1288,7 @@ async function refreshKspaceForSeqWindow(host) {
     if (host._kspaceChart && !host._kspaceChart.disposed) {
         applyPlaneChartView(host._kspaceChart, host._kspaceAxisView, host._kspaceSeriesBase, 'kx (1/m)', 'ky (1/m)');
     }
-    const yzPayload = buildKspaceYzPayloadTime(host._kspaceCache, tLo, tHi);
+    const yzPayload = buildKspaceYzPayloadTime(host._kspaceCache, tLo, tHi, host);
     host._kspaceYzSeriesBase = normalizeKspaceChartGpuSeries(yzPayload.series);
     host._lastKspaceYzPayload = yzPayload;
     if (!host._kspaceYzAxisView) ensureKspaceYzAxisView(host, yzPayload);
@@ -949,7 +1303,12 @@ async function refreshKspaceForSeqWindow(host) {
     }
 }
 
-function attachSeqZoomToKspaceSync(host) {
+/**
+ * @param {*} host
+ * @param {{ onAfterWindowRefresh?: (w: { tLo: number, tHi: number }) => void | Promise<void> }} [options]
+ */
+export function attachSeqZoomToKspaceSync(host, options = {}) {
+    const { onAfterWindowRefresh } = options;
     detachSeqZoomKspaceListener(host);
     const charts = host._seqChartGpuCharts;
     if (!charts?.length || !host._seqDispTimeRange) return;
@@ -957,7 +1316,13 @@ function attachSeqZoomToKspaceSync(host) {
     const onZoom = () => {
         clearTimeout(debounce);
         debounce = setTimeout(() => {
-            void refreshKspaceForSeqWindow(host);
+            void (async () => {
+                await refreshKspaceForSeqWindow(host);
+                if (onAfterWindowRefresh) {
+                    const w = getTimeWindowFromZoom(host);
+                    if (w) await onAfterWindowRefresh(w);
+                }
+            })();
         }, KSPACE_ZOOM_DEBOUNCE_MS);
     };
     const unsubs = [];
@@ -978,13 +1343,46 @@ function attachSeqZoomToKspaceSync(host) {
     };
     requestAnimationFrame(() => {
         requestAnimationFrame(() => {
-            void refreshKspaceForSeqWindow(host);
+            void (async () => {
+                await refreshKspaceForSeqWindow(host);
+                if (onAfterWindowRefresh) {
+                    const w = getTimeWindowFromZoom(host);
+                    if (w) await onAfterWindowRefresh(w);
+                }
+            })();
         });
     });
 }
 
+/**
+ * seq_check_web: mount kx–ky / ky–kz panels and wire zoom sync.
+ * @param {*} host
+ * @param {*} pyodide
+ * @param {HTMLElement} kxyEl
+ * @param {HTMLElement} kyzEl
+ * @param {{ onAfterWindowRefresh?: Function }} [options]
+ */
+export async function setupSeqCheckKspacePanels(host, pyodide, kxyEl, kyzEl, options = {}) {
+    if (!host._kspaceCache || !host._seqDispTimeRange) {
+        console.warn('[seq_check] k-space panels skipped:', {
+            hasCache: !!host._kspaceCache,
+            hasDispRange: !!host._seqDispTimeRange,
+        });
+        return;
+    }
+    const [t0, t1] = host._seqDispTimeRange;
+    const ctx =
+        host._seqChartGpuDevice && host._seqChartGpuAdapter
+            ? { adapter: host._seqChartGpuAdapter, device: host._seqChartGpuDevice }
+            : undefined;
+    const kPayload = buildKspacePayloadTime(host._kspaceCache, t0, t1, host);
+    await renderKspaceChartGpu(host, kxyEl, ctx, kPayload);
+    await renderKspaceYzChart(host, kyzEl, ctx, t0, t1);
+    attachSeqZoomToKspaceSync(host, options);
+}
+
 /** Display time span [t0, t1] in seconds from ChartGPU export (before payload is dropped for GC). */
-function extractSeqDispTimeRange(payload) {
+export function extractSeqDispTimeRange(payload) {
     if (!payload || typeof payload !== 'object') return null;
     const xr = payload.xRange;
     if (Array.isArray(xr) && xr.length >= 2 && Number.isFinite(xr[0]) && Number.isFinite(xr[1])) {
@@ -1163,7 +1561,9 @@ export async function renderSeqChartGpuAfterPlot(host, plotRoot, pyodide, plotCo
     let theme;
     if (darkTheme && lightTheme && typeof darkTheme === 'object' && typeof lightTheme === 'object') {
         const base = wantsDarkResolved ? darkTheme : lightTheme;
-        theme = { ...base, fontSize: CHARTGPU_SEQ_FONT_PX };
+        theme = wantsDarkResolved
+            ? seqChartGpuLabTheme(base, CHARTGPU_SEQ_FONT_PX)
+            : { ...base, fontSize: CHARTGPU_SEQ_FONT_PX };
     } else {
         theme = wantsDarkResolved ? 'dark' : 'light';
     }
@@ -1178,14 +1578,17 @@ export async function renderSeqChartGpuAfterPlot(host, plotRoot, pyodide, plotCo
 
     // Align all rows to the same x span without xAxis.min/max: ChartGPU uses explicit min/max
     // for value-axis *tick* domain, so zoom does not refresh tick labels. Instead, append an
-    // invisible two-point line at the exported global [xMin,xMax] so auto x-bounds match while
-    // ticks still derive from the visible zoom window (see createRenderCoordinator non-time branch).
+    // invisible two-point line at a padded [xMin,xMax] so wheel zoom-out can show margins beyond
+    // the sequence; initial zoom is set to the unpadded display window (see seqChartGpuInitialZoomPct).
     let sharedXExtent = null;
     {
         const xrPanel = panels[0] && panels[0].x;
         const xrFlat = payload.xRange;
+        let xMin;
+        let xMax;
         if (xrPanel && Number.isFinite(xrPanel.min) && Number.isFinite(xrPanel.max) && xrPanel.max > xrPanel.min) {
-            sharedXExtent = { min: xrPanel.min, max: xrPanel.max };
+            xMin = xrPanel.min;
+            xMax = xrPanel.max;
         } else if (
             Array.isArray(xrFlat) &&
             xrFlat.length >= 2 &&
@@ -1193,7 +1596,15 @@ export async function renderSeqChartGpuAfterPlot(host, plotRoot, pyodide, plotCo
             Number.isFinite(xrFlat[1]) &&
             xrFlat[1] > xrFlat[0]
         ) {
-            sharedXExtent = { min: xrFlat[0], max: xrFlat[1] };
+            xMin = xrFlat[0];
+            xMax = xrFlat[1];
+        }
+        if (xMin !== undefined && xMax !== undefined) {
+            const padded = chartGpuPaddedXBounds(xMin, xMax, SEQ_CHARTGPU_ZOOM_PAD_FRACTION);
+            sharedXExtent = { min: padded.min, max: padded.max };
+            host._seqChartZoomPadFraction = SEQ_CHARTGPU_ZOOM_PAD_FRACTION;
+        } else {
+            host._seqChartZoomPadFraction = 0;
         }
     }
 
@@ -1252,6 +1663,7 @@ export async function renderSeqChartGpuAfterPlot(host, plotRoot, pyodide, plotCo
         chartCreatePromises.push(ChartGPU.create(hosts[i], opts, ctx));
     }
     const seqDispTimeRange = extractSeqDispTimeRange(payload);
+    if (seqDispTimeRange) host._seqDispTimeRange = seqDispTimeRange;
     payload = null;
     const settled = await Promise.allSettled(chartCreatePromises);
     const charts = [];
@@ -1425,15 +1837,9 @@ export async function renderSeqChartGpuAfterPlot(host, plotRoot, pyodide, plotCo
             }
         });
     }
-    const anchor = charts[charts.length - 1] || charts[0];
-    let z0 = null;
-    try {
-        z0 = anchor?.getZoomRange?.();
-    } catch (e) {
-        /* ignore */
-    }
-    if (z0 && charts.length > 0) {
-        doBroadcastZoomToAll(z0.start, z0.end);
+    if (charts.length > 0) {
+        const initZoom = seqChartGpuInitialZoomPct(host._seqChartZoomPadFraction || 0);
+        doBroadcastZoomToAll(initZoom.start, initZoom.end);
     }
 
     // ChartGPU 0.3.x only pans x-zoom with Shift+left or middle button. Add plain left-drag pan
