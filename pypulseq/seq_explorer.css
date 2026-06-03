@@ -728,6 +728,25 @@ body {
     flex-shrink: 0;
 }
 
+/* Plot options + footer tree filter — same compact checkbox label style */
+.seq-plot-option-label {
+    display: flex;
+    align-items: center;
+    gap: 0.4rem;
+    font-size: 0.75rem;
+    color: var(--muted);
+    cursor: pointer;
+    user-select: none;
+}
+
+.seq-plot-option-label input[type='checkbox'] {
+    width: 0.8rem;
+    height: 0.8rem;
+    margin: 0;
+    cursor: pointer;
+    flex-shrink: 0;
+}
+
 #slot-main.scrollable > #seq-plot-container #seq-mpl-actual-target {
     flex: 1 1 auto;
     min-height: 0;

@@ -28,6 +28,39 @@ export function seqChartGpuLabTheme(preset, fontSize = 10) {
     };
 }
 
+/** seq_check host flag or explorer #seq-dark-plot-checkbox. */
+export function resolveSeqPlotWantsDark(host, plotRoot) {
+    if (host && host._seqDarkPlot !== undefined) return !!host._seqDarkPlot;
+    const darkCb = plotRoot?.querySelector('#seq-dark-plot-checkbox');
+    return darkCb ? darkCb.checked : true;
+}
+
+/** Python run before seq.plot — sets mpl rcParams so ChartGPU export gets isDark. */
+export function getSeqPlotMatplotlibThemePy(useDark = true) {
+    if (useDark) {
+        return `
+plt.rcParams.update({
+    'figure.figsize': [8, 2.8],
+    'font.size': 8,
+    'figure.facecolor': '#0f1424',
+    'axes.facecolor': '#0f1424',
+    'axes.edgecolor': (1.0, 1.0, 1.0, 0.1),
+    'axes.labelcolor': '#e8ecff',
+    'text.color': '#e8ecff',
+    'xtick.color': '#a9b3da',
+    'ytick.color': '#a9b3da',
+    'grid.color': (1.0, 1.0, 1.0, 0.1),
+    'figure.edgecolor': '#0f1424',
+    'savefig.facecolor': '#0f1424',
+    'savefig.edgecolor': '#0f1424',
+})`;
+    }
+    return `
+plt.rcdefaults()
+plt.rcParams['figure.figsize'] = [8, 2.8]
+plt.rcParams['font.size'] = 8`;
+}
+
 /**
  * Tear down ChartGPU charts and shared WebGPU device created for sequence plots.
  */
@@ -852,9 +885,18 @@ function applyPlaneChartView(chart, view, seriesBase, xName, yName) {
     if (!Array.isArray(seriesBase) || !seriesBase.length) return;
     const axisPatch = planeAxisChartOptions(view, xName, yName);
     const prev = chart.options && typeof chart.options === 'object' ? chart.options : {};
+    const fontSize =
+        typeof prev.theme === 'object' && Number.isFinite(prev.theme.fontSize)
+            ? prev.theme.fontSize
+            : 10;
+    const theme = seqChartGpuLabTheme(
+        typeof prev.theme === 'object' ? prev.theme : undefined,
+        fontSize,
+    );
     try {
         chart.setOption({
             ...prev,
+            theme,
             animation: false,
             legend: prev.legend ?? { show: false },
             grid: prev.grid ?? KSPACE_GRID,
@@ -1273,6 +1315,11 @@ export async function refreshKspaceForSeqWindow(host) {
         if (host._kspaceChart && !host._kspaceChart.disposed) {
             try {
                 host._kspaceChart.setOption({
+                    theme: seqChartGpuLabTheme(undefined, 10),
+                    animation: false,
+                    legend: { show: false },
+                    grid: KSPACE_GRID,
+                    tooltip: { show: true },
                     ...planeAxisChartOptions(host._kspaceAxisView, 'kx (1/m)', 'ky (1/m)'),
                     series: [],
                 });
@@ -1448,8 +1495,191 @@ if seq is not None:
     attachSeqZoomToKspaceSync(host);
 }
 
+/** Matplotlib plot_speed used when ChartGPU / WebGPU is unavailable (e.g. many mobile browsers). */
+export const SEQ_CHARTGPU_FALLBACK_PLOT_SPEED = 'faster';
+
+/** @returns {boolean} */
+export function isWebGpuAvailable() {
+    return typeof navigator !== 'undefined' && !!navigator.gpu;
+}
+
+/**
+ * If ChartGPU was requested but WebGPU is missing, use matplotlib faster plot instead.
+ * @param {string} requested
+ * @returns {{ plotSpeed: string, skippedChartGpu: boolean, reason: string }}
+ */
+export function resolveSeqPlotSpeed(requested) {
+    if (requested === 'chartgpu' && !isWebGpuAvailable()) {
+        return {
+            plotSpeed: SEQ_CHARTGPU_FALLBACK_PLOT_SPEED,
+            skippedChartGpu: true,
+            reason: 'WebGPU is not available in this browser',
+        };
+    }
+    return { plotSpeed: requested, skippedChartGpu: false, reason: '' };
+}
+
+/** @param {unknown} raw @param {number} fallback */
+export function parseSeqPlotTimeValue(raw, fallback) {
+    if (raw === Infinity) return Infinity;
+    if (raw === -Infinity) return -Infinity;
+    const s = String(raw ?? '')
+        .trim()
+        .toLowerCase();
+    if (s === '' && fallback !== undefined) return fallback;
+    if (s === 'inf' || s === '+inf' || s === 'infinity' || s === '∞') return Infinity;
+    if (s === '-inf' || s === '-infinity') return -Infinity;
+    const n = parseFloat(s);
+    return Number.isFinite(n) ? n : fallback;
+}
+
+/** @param {number} t */
+export function formatSeqPlotTimeForPython(t) {
+    if (t === Infinity) return 'float("inf")';
+    if (t === -Infinity) return 'float("-inf")';
+    if (!Number.isFinite(t)) return '0';
+    return String(t);
+}
+
+/** @param {HTMLInputElement | null} startEl @param {HTMLInputElement | null} stopEl */
+export function readSeqPlotTimeFromInputs(startEl, stopEl) {
+    let t0 = parseSeqPlotTimeValue(startEl?.value, 0);
+    let t1 = parseSeqPlotTimeValue(stopEl?.value, Infinity);
+    if (Number.isFinite(t0) && Number.isFinite(t1) && t1 < t0) {
+        const s = t0;
+        t0 = t1;
+        t1 = s;
+    }
+    return [t0, t1];
+}
+
+/** @param {HTMLElement | null} plotRoot */
+export function readSeqPlotTimeRange(plotRoot) {
+    const roots = [];
+    const add = (el) => {
+        if (el && !roots.includes(el)) roots.push(el);
+    };
+    add(plotRoot);
+    if (typeof document !== 'undefined') {
+        add(document.getElementById('seq-plot-container'));
+    }
+    for (const el of roots) {
+        const startEl = el.querySelector('#seq-plot-time-start');
+        const stopEl = el.querySelector('#seq-plot-time-stop');
+        if (!startEl || !stopEl) continue;
+        return readSeqPlotTimeFromInputs(startEl, stopEl);
+    }
+    return [0, Infinity];
+}
+
+function notifyChartGpuFallback(host, plotRoot, detail) {
+    const sel = plotRoot?.querySelector('#seq-plot-speed-selector');
+    if (sel && sel.value === 'chartgpu') {
+        sel.value = SEQ_CHARTGPU_FALLBACK_PLOT_SPEED;
+        sel.dispatchEvent(new Event('change', { bubbles: true }));
+    }
+    if (typeof host?.syncPlotSpeedKspaceCheckbox === 'function') {
+        host.syncPlotSpeedKspaceCheckbox(plotRoot);
+    }
+    if (typeof host?.showStatus === 'function') {
+        host.showStatus(
+            detail || 'ChartGPU unavailable — using faster matplotlib plot',
+            'info',
+        );
+    }
+}
+
+function sweepMatplotlibIntoPlotTarget(plotContainer) {
+    if (!plotContainer?.isConnected) return;
+    document.querySelectorAll('div.ui-dialog, div[id^="matplotlib_"]').forEach((el) => {
+        if (!plotContainer.contains(el) && el !== plotContainer) {
+            try {
+                plotContainer.appendChild(el);
+            } catch (_) {
+                /* ignore */
+            }
+        }
+    });
+}
+
+/**
+ * Re-plot with matplotlib after ChartGPU could not load (seq must already exist in Pyodide).
+ * @param {*} host
+ * @param {HTMLElement | null} plotRoot
+ * @param {*} pyodide
+ * @param {HTMLElement} plotContainer
+ * @param {{ reason?: string, plotSpeed?: string, timeRange?: [number, number] }} [opts]
+ * @returns {Promise<boolean>}
+ */
+export async function renderMatplotlibSeqPlotFallback(
+    host,
+    plotRoot,
+    pyodide,
+    plotContainer,
+    opts = {},
+) {
+    const plotSpeed = opts.plotSpeed || SEQ_CHARTGPU_FALLBACK_PLOT_SPEED;
+    const reason = opts.reason || 'ChartGPU unavailable';
+    if (!pyodide) return false;
+
+    await disposeSeqChartGpuHost(host);
+    clearKspaceHostCache(host);
+
+    let t0 = 0;
+    let t1 = Infinity;
+    if (Array.isArray(opts.timeRange) && opts.timeRange.length >= 2) {
+        [t0, t1] = readSeqPlotTimeFromInputs(
+            { value: opts.timeRange[0] },
+            { value: opts.timeRange[1] },
+        );
+    } else if (Array.isArray(host?._seqDispTimeRange) && host._seqDispTimeRange.length >= 2) {
+        [t0, t1] = readSeqPlotTimeFromInputs(
+            { value: host._seqDispTimeRange[0] },
+            { value: host._seqDispTimeRange[1] },
+        );
+    } else {
+        [t0, t1] = readSeqPlotTimeRange(plotRoot);
+    }
+
+    await releaseChartgpuPythonPayload(pyodide);
+    await releaseKspaceCache(pyodide);
+
+    plotContainer.innerHTML = `<div class="seq-chartgpu-fallback">${reason}. Showing <strong>${plotSpeed}</strong> matplotlib plot.</div>`;
+
+    const prevMpl = document.pyodideMplTarget;
+    document.pyodideMplTarget = plotContainer;
+    window.pyodideMplTarget = plotContainer;
+
+    const themePy = getSeqPlotMatplotlibThemePy(resolveSeqPlotWantsDark(host, plotRoot));
+    try {
+        await pyodide.runPythonAsync(`
+import matplotlib.pyplot as plt
+plt.close('all')
+${themePy}
+if seq is not None:
+    seq.plot(plot_now=False, plot_speed="${plotSpeed}", time_range=(${formatSeqPlotTimeForPython(t0)}, ${formatSeqPlotTimeForPython(t1)}))
+    plt.show()
+else:
+    raise RuntimeError("No sequence in Pyodide (seq is None)")
+`);
+        sweepMatplotlibIntoPlotTarget(plotContainer);
+        notifyChartGpuFallback(host, plotRoot, `${reason} — using faster plot`);
+        return true;
+    } catch (e) {
+        console.error('Matplotlib fallback plot failed:', e);
+        plotContainer.innerHTML = `<div class="seq-chartgpu-fallback">ChartGPU failed (${reason}). Matplotlib fallback also failed: ${e?.message || e}</div>`;
+        return false;
+    } finally {
+        if (prevMpl !== undefined) {
+            document.pyodideMplTarget = prevMpl;
+            window.pyodideMplTarget = prevMpl;
+        }
+    }
+}
+
 /**
  * Load ChartGPU and render stacked panels from Python export (plot_speed chartgpu).
+ * Falls back to matplotlib {@link SEQ_CHARTGPU_FALLBACK_PLOT_SPEED} when WebGPU/ChartGPU fails.
  * @param {*} host SequenceExplorer instance (mutated: `_seqChartGpu*` fields).
  * @param {HTMLElement | null} plotRoot
  * @param {*} pyodide
@@ -1457,13 +1687,23 @@ if seq is not None:
  */
 export async function renderSeqChartGpuAfterPlot(host, plotRoot, pyodide, plotContainer) {
     await disposeSeqChartGpuHost(host);
-    const darkCb = plotRoot?.querySelector('#seq-dark-plot-checkbox');
     const showKspace = isShowKspaceChecked(plotRoot);
-    const wantsDark = darkCb ? darkCb.checked : true;
+    const wantsDark = resolveSeqPlotWantsDark(host, plotRoot);
+    const timeRange = readSeqPlotTimeRange(plotRoot);
 
-    if (!navigator.gpu) {
-        plotContainer.innerHTML =
-            '<div class="seq-chartgpu-fallback">WebGPU is required for ChartGPU (e.g. Chrome 113+, Edge 113+, Safari 18+). This browser does not expose <code>navigator.gpu</code>.</div>';
+    const tryMatplotlibFallback = async (reason) => {
+        const ok = await renderMatplotlibSeqPlotFallback(host, plotRoot, pyodide, plotContainer, {
+            reason,
+            timeRange,
+        });
+        if (!ok && !plotContainer.querySelector('.seq-chartgpu-fallback')) {
+            plotContainer.innerHTML = `<div class="seq-chartgpu-fallback">${reason}</div>`;
+        }
+        return ok;
+    };
+
+    if (!isWebGpuAvailable()) {
+        await tryMatplotlibFallback('WebGPU is not available in this browser');
         return;
     }
 
@@ -1506,15 +1746,14 @@ export async function renderSeqChartGpuAfterPlot(host, plotRoot, pyodide, plotCo
         lightTheme = mod.lightTheme;
     } catch (e) {
         console.error('ChartGPU import failed:', e);
-        plotContainer.innerHTML =
-            '<div class="seq-chartgpu-fallback">Failed to load ChartGPU from CDN (esm.sh). Check network or try another plot mode.</div>';
         await releaseChartgpuPythonPayload(pyodide);
+        await tryMatplotlibFallback('Failed to load ChartGPU from CDN');
         return;
     }
 
     if (!ChartGPU || typeof ChartGPU.create !== 'function') {
-        plotContainer.innerHTML = '<div class="seq-chartgpu-fallback">ChartGPU module did not export ChartGPU.create.</div>';
         await releaseChartgpuPythonPayload(pyodide);
+        await tryMatplotlibFallback('ChartGPU module did not load correctly');
         return;
     }
 
@@ -1545,9 +1784,8 @@ export async function renderSeqChartGpuAfterPlot(host, plotRoot, pyodide, plotCo
     // Omit powerPreference: on Windows Chromium ignores it and logs a warning (crbug.com/369219127).
     const adapter = await navigator.gpu.requestAdapter();
     if (!adapter) {
-        plotContainer.innerHTML =
-            '<div class="seq-chartgpu-fallback">WebGPU adapter could not be created (GPU busy or blocked). Retry or switch plot mode. For large sequences, try a <strong>shorter sequence</strong> or a <strong>limited time range</strong> (when your code supports it).</div>';
         await releaseChartgpuPythonPayload(pyodide);
+        await tryMatplotlibFallback('WebGPU adapter could not be created');
         return;
     }
     const device = await adapter.requestDevice();
@@ -1680,8 +1918,7 @@ export async function renderSeqChartGpuAfterPlot(host, plotRoot, pyodide, plotCo
             console.error('ChartGPU.create failed:', r.reason);
             await disposeSeqChartGpuHost(host);
             await releaseChartgpuPythonPayload(pyodide);
-            plotContainer.innerHTML =
-                '<div class="seq-chartgpu-fallback">ChartGPU failed to build one or more waveform panels. Try another plot mode or reload the page. For large sequences, try a <strong>shorter sequence</strong> or a <strong>limited time range</strong> (when your code supports it).</div>';
+            await tryMatplotlibFallback('ChartGPU failed to build waveform panels');
             return;
         }
         charts.push(r.value);
@@ -2019,8 +2256,7 @@ export async function renderSeqChartGpuAfterPlot(host, plotRoot, pyodide, plotCo
         console.error('ChartGPU render failed:', renderErr);
         await disposeSeqChartGpuHost(host);
         await releaseChartgpuPythonPayload(pyodide);
-        plotContainer.innerHTML =
-            '<div class="seq-chartgpu-fallback">ChartGPU failed to initialize (WebGPU or library error). Try another plot mode or reload the page. For large sequences, try a <strong>shorter sequence</strong> or a <strong>limited time range</strong> (when your code supports it).</div>';
+        await tryMatplotlibFallback('ChartGPU failed to initialize');
     }
 }
 
@@ -2030,12 +2266,12 @@ export async function renderSeqChartGpuAfterPlot(host, plotRoot, pyodide, plotCo
  * @returns {{ plotBlock: string, chartgpuClearPy: string }}
  */
 export function buildSeqPlotExecuteFragments(opts) {
-    const { silent, plotSpeed, debug = false, showKspace = false, timeRange = [0, 100] } = opts;
-    let t0 = Number(timeRange[0]);
-    let t1 = Number(timeRange[1]);
-    if (!Number.isFinite(t0)) t0 = 0;
-    if (!Number.isFinite(t1)) t1 = 100;
-    const timeRangePy = `time_range=(${t0}, ${t1})`;
+    const { silent, plotSpeed, debug = false, showKspace = false, timeRange = [0, Infinity] } = opts;
+    const [t0, t1] = readSeqPlotTimeFromInputs(
+        { value: timeRange[0] },
+        { value: timeRange[1] },
+    );
+    const timeRangePy = `time_range=(${formatSeqPlotTimeForPython(t0)}, ${formatSeqPlotTimeForPython(t1)})`;
     const kspaceAfterPlot =
         showKspace && !silent
             ? `\n        ensure_kspace_cache(seq, ${timeRangePy})`

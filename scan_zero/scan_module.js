@@ -1737,10 +1737,27 @@ data
                     const plotSpeed =
                         plotRoot.querySelector('#seq-plot-speed-selector')?.value ||
                         SequenceExplorer.DEFAULT_PLOT_SPEED;
+                    const timeRange =
+                        typeof explorer.getSeqPlotTimeRange === 'function'
+                            ? explorer.getSeqPlotTimeRange(plotRoot)
+                            : [0, Infinity];
+                    const t0 =
+                        timeRange[0] === Infinity
+                            ? 'float("inf")'
+                            : timeRange[0] === -Infinity
+                              ? 'float("-inf")'
+                              : String(timeRange[0]);
+                    const t1 =
+                        timeRange[1] === Infinity
+                            ? 'float("inf")'
+                            : timeRange[1] === -Infinity
+                              ? 'float("-inf")'
+                              : String(timeRange[1]);
+                    const timeRangePy = `time_range=(${t0}, ${t1})`;
                     const plotBlock =
                         plotSpeed === 'chartgpu'
-                            ? `        seq.plot(plot_now=False, plot_speed="chartgpu")`
-                            : `        seq.plot(plot_now=False, plot_speed="${plotSpeed}")
+                            ? `        seq.plot(plot_now=False, plot_speed="chartgpu", ${timeRangePy})`
+                            : `        seq.plot(plot_now=False, plot_speed="${plotSpeed}", ${timeRangePy})
         plt.show()`;
                     void (async () => {
                         try {

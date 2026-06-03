@@ -18,17 +18,27 @@ import {
     disposeSeqChartGpuHost,
     releaseChartgpuPythonPayload,
     releaseKspaceCache,
+    resolveSeqPlotSpeed,
+    readSeqPlotTimeFromInputs,
     renderSeqChartGpuAfterPlot as mountChartGpuSequencePlot,
 } from "./seq_plot.js";
 
 /**
  * HTML template builders for sequence explorer UI (single file, no extra modules). */
 const SEQ_TEMPLATES = {
+    plotOptionCheckbox({ id, label, labelId = '', checked = true, title = '' } = {}) {
+        const lid = labelId ? ` id="${labelId}"` : '';
+        const tit = title ? ` title="${title.replace(/"/g, '&quot;')}"` : '';
+        return `<label class="seq-plot-option-label"${lid}${tit}>
+                    <input type="checkbox" id="${id}"${checked ? ' checked' : ''}>
+                    <span>${label}</span>
+                </label>`;
+    },
     plotTimeRangeControls() {
-        return `<span class="seq-plot-time-range" title="seq.plot time_range (display time units, usually seconds)">
+        return `<span class="seq-plot-time-range" title="seq.plot time_range — seconds; stop may be inf (full sequence). Re-run plot seq to apply.">
                 <span class="seq-plot-time-range-label">time_range</span>
                 <input type="number" id="seq-plot-time-start" class="seq-plot-time-input" value="0" step="any" aria-label="time range start" />
-                <input type="number" id="seq-plot-time-stop" class="seq-plot-time-input" value="100" step="any" aria-label="time range stop" />
+                <input type="text" id="seq-plot-time-stop" class="seq-plot-time-input" value="inf" inputmode="decimal" aria-label="time range stop" />
             </span>`;
     },
     showConsoleCheckbox() {
@@ -55,14 +65,13 @@ const SEQ_TEMPLATES = {
                     <div id="seq-params-section">
                         ${SEQ_TEMPLATES.protocolHeader({ popSeq: true })}
                         <div style="display: flex; align-items: center; justify-content: space-between; margin-bottom: 0.75rem; padding-top: 0.5rem; border-top: 1px solid var(--border);">
-                            <label style="display: flex; align-items: center; cursor: pointer; font-size: 0.875rem; color: var(--text);">
-                                <input type="checkbox" id="seq-dark-plot-checkbox" checked style="margin-right: 0.5rem; cursor: pointer; width: 1rem; height: 1rem;">
-                                <span>Dark plot</span>
-                            </label>
-                            <label id="seq-show-kspace-label" style="display: flex; align-items: center; cursor: pointer; font-size: 0.875rem; color: var(--text); margin-right: 0.75rem;" title="ChartGPU only: kx–ky and ky–kz follow waveform time zoom">
-                                <input type="checkbox" id="seq-show-kspace-checkbox" checked style="margin-right: 0.5rem; cursor: pointer; width: 1rem; height: 1rem;">
-                                <span>Show k-space</span>
-                            </label>
+                            ${SEQ_TEMPLATES.plotOptionCheckbox({ id: 'seq-dark-plot-checkbox', label: 'Dark plot' })}
+                            ${SEQ_TEMPLATES.plotOptionCheckbox({
+                                id: 'seq-show-kspace-checkbox',
+                                label: 'Show k-space',
+                                labelId: 'seq-show-kspace-label',
+                                title: 'ChartGPU only: kx–ky and ky–kz follow waveform time zoom',
+                            })}
                             ${SEQ_TEMPLATES.plotTimeRangeControls()}
                             <select id="seq-plot-speed-selector" style="padding: 0.25rem; background: rgba(255, 255, 255, 0.08); border: 1px solid var(--border); border-radius: 4px; color: var(--text); font-size: 0.75rem; cursor: pointer;">
                                 <option value="full">Full plot</option>
@@ -138,14 +147,13 @@ const SEQ_TEMPLATES = {
                 </div>
             </div>
             <div class="seq-plot-options-row" style="display: flex; align-items: center; justify-content: flex-end; flex-wrap: wrap; gap: 0.5rem 0.75rem; margin-top: 0.5rem; padding: 0.5rem; background: rgba(0,0,0,0.2); border-radius: 4px;">
-                <label style="display: flex; align-items: center; cursor: pointer; font-size: 0.875rem; color: var(--text);">
-                    <input type="checkbox" id="seq-dark-plot-checkbox" checked style="margin-right: 0.5rem; cursor: pointer; width: 1rem; height: 1rem;">
-                    <span>Dark plot</span>
-                </label>
-                <label id="seq-show-kspace-label" style="display: flex; align-items: center; cursor: pointer; font-size: 0.875rem; color: var(--text);" title="ChartGPU only: kx–ky and ky–kz follow waveform time zoom">
-                    <input type="checkbox" id="seq-show-kspace-checkbox" checked style="margin-right: 0.5rem; cursor: pointer; width: 1rem; height: 1rem;">
-                    <span>Show k-space</span>
-                </label>
+                ${SEQ_TEMPLATES.plotOptionCheckbox({ id: 'seq-dark-plot-checkbox', label: 'Dark plot' })}
+                ${SEQ_TEMPLATES.plotOptionCheckbox({
+                    id: 'seq-show-kspace-checkbox',
+                    label: 'Show k-space',
+                    labelId: 'seq-show-kspace-label',
+                    title: 'ChartGPU only: kx–ky and ky–kz follow waveform time zoom',
+                })}
                 ${SEQ_TEMPLATES.plotTimeRangeControls()}
                 <select id="seq-plot-speed-selector" style="padding: 0.25rem; background: rgba(255, 255, 255, 0.08); border: 1px solid var(--border); border-radius: 4px; color: var(--text); font-size: 0.75rem; cursor: pointer;">
                     <option value="full">Full plot</option>
@@ -157,8 +165,8 @@ const SEQ_TEMPLATES = {
     },
     treeHeading(showFilter, filterChecked) {
         const filterHtml = showFilter
-            ? `<label style="display: flex; align-items: center; gap: 0.4rem; font-size: 0.75rem; color: var(--muted); cursor: pointer; user-select: none;">
-                        <input type="checkbox" id="seq-filter-checkbox" ${filterChecked ? 'checked' : ''} style="width: 0.8rem; height: 0.8rem; margin: 0; cursor: pointer;">
+            ? `<label class="seq-plot-option-label">
+                        <input type="checkbox" id="seq-filter-checkbox" ${filterChecked ? 'checked' : ''}>
                         <span>Only seq_/prot_ or main</span>
                     </label>`
             : '';
@@ -1113,21 +1121,28 @@ plt.rcParams['font.size'] = 8`;
      * @param {{ modulePath: string, functionName: string, argsDict: object, silent: boolean, themeCode: string, plotSpeed: string, debug?: boolean }} options
      * @returns {string} Python script
      */
-    /** Read seq.plot time_range from UI (defaults 0, 100). */
+    /** Root that holds plot options (time_range, k-space, plot speed) — lab: plot pane; standalone: params pane. */
+    getSeqPlotOptionsRoot() {
+        return this.plotTarget || this.paramsTarget || this.container;
+    }
+
+    /** Read seq.plot time_range from UI (defaults 0, inf). Searches plot + params roots (lab vs standalone layout). */
     getSeqPlotTimeRange(root) {
-        const el = root || this.paramsTarget || this.container;
-        const startEl = el?.querySelector('#seq-plot-time-start');
-        const stopEl = el?.querySelector('#seq-plot-time-stop');
-        let t0 = parseFloat(startEl?.value ?? '0');
-        let t1 = parseFloat(stopEl?.value ?? '100');
-        if (!Number.isFinite(t0)) t0 = 0;
-        if (!Number.isFinite(t1)) t1 = 100;
-        if (t1 < t0) {
-            const s = t0;
-            t0 = t1;
-            t1 = s;
+        const roots = [];
+        const add = (el) => {
+            if (el && !roots.includes(el)) roots.push(el);
+        };
+        add(root);
+        add(this.plotTarget);
+        add(this.paramsTarget);
+        add(this.container);
+        for (const el of roots) {
+            const startEl = el.querySelector('#seq-plot-time-start');
+            const stopEl = el.querySelector('#seq-plot-time-stop');
+            if (!startEl || !stopEl) continue;
+            return readSeqPlotTimeFromInputs(startEl, stopEl);
         }
-        return [t0, t1];
+        return [0, Infinity];
     }
 
     /** Enable k-space checkbox only when ChartGPU plot speed is selected. */
@@ -1157,7 +1172,7 @@ plt.rcParams['font.size'] = 8`;
             plotSpeed,
             debug = false,
             showKspace = false,
-            timeRange = [0, 100],
+            timeRange = [0, Infinity],
         } = options;
         const argsJson = JSON.stringify(argsDict);
         const execCall = `manager.execute_function(\n        module_path='${modulePath}',\n        function_name='${functionName}',\n        args_dict=${argsJson}\n    )`;
@@ -3085,14 +3100,21 @@ json.dumps(_result)
                 window.pyodideMplTarget = plotContainer;
             }
             
-            // Get plot speed
+            // Get plot speed (ChartGPU → faster when WebGPU unavailable, e.g. mobile)
             const plotSpeedSelector = plotRoot.querySelector('#seq-plot-speed-selector');
-            const plotSpeed = plotSpeedSelector ? plotSpeedSelector.value : SEQ_DEFAULT_PLOT_SPEED;
-            const paramsRootForKspace = this.paramsTarget || this.container;
+            const plotSpeedRequested = plotSpeedSelector ? plotSpeedSelector.value : SEQ_DEFAULT_PLOT_SPEED;
+            const resolvedPlot = resolveSeqPlotSpeed(plotSpeedRequested);
+            let plotSpeed = resolvedPlot.plotSpeed;
+            if (resolvedPlot.skippedChartGpu) {
+                if (plotSpeedSelector) plotSpeedSelector.value = plotSpeed;
+                this.syncPlotSpeedKspaceCheckbox(plotRoot);
+                this.showStatus(`${resolvedPlot.reason} — using faster plot`, 'info');
+            }
+            const plotOptsRoot = this.getSeqPlotOptionsRoot();
             const showKspace =
                 plotSpeed === 'chartgpu' &&
-                !!paramsRootForKspace.querySelector('#seq-show-kspace-checkbox')?.checked;
-            const timeRange = this.getSeqPlotTimeRange(paramsRootForKspace);
+                !!plotOptsRoot?.querySelector('#seq-show-kspace-checkbox')?.checked;
+            const timeRange = this.getSeqPlotTimeRange(plotOptsRoot);
             
             // Get theme code
             const themeCode = this.getMatplotlibThemeCode();
@@ -3503,12 +3525,20 @@ json.dumps(out)
         try {
             const pyodide = this.config.pyodide;
             const argsDict = {};
-            const plotSpeedSelector = plotRoot ? plotRoot.querySelector('#seq-plot-speed-selector') : null;
-            const plotSpeed = plotSpeedSelector?.value || SEQ_DEFAULT_PLOT_SPEED;
+            const plotOptsRoot = this.getSeqPlotOptionsRoot();
+            const plotSpeedSelector = plotOptsRoot?.querySelector('#seq-plot-speed-selector');
+            const plotSpeedRequested = plotSpeedSelector?.value || SEQ_DEFAULT_PLOT_SPEED;
+            const resolvedPlot = resolveSeqPlotSpeed(plotSpeedRequested);
+            let plotSpeed = resolvedPlot.plotSpeed;
+            if (resolvedPlot.skippedChartGpu) {
+                if (plotSpeedSelector) plotSpeedSelector.value = plotSpeed;
+                this.syncPlotSpeedKspaceCheckbox(plotOptsRoot);
+                this.showStatus(`${resolvedPlot.reason} — using faster plot`, 'info');
+            }
             const showKspace =
                 plotSpeed === 'chartgpu' &&
-                !!plotRoot?.querySelector('#seq-show-kspace-checkbox')?.checked;
-            const timeRange = this.getSeqPlotTimeRange(this.paramsTarget || this.container);
+                !!plotOptsRoot?.querySelector('#seq-show-kspace-checkbox')?.checked;
+            const timeRange = this.getSeqPlotTimeRange(plotOptsRoot);
             const darkPlotCheckbox = plotRoot ? plotRoot.querySelector('#seq-dark-plot-checkbox') : null;
             const darkPlot = darkPlotCheckbox?.checked ?? true;
             
