@@ -3179,6 +3179,9 @@ os.makedirs('/phantom/averaged', exist_ok=True)
             return;
           }
           if (!isScan) return;
+          if (window.viewManager?.currentMode !== 'planning') {
+            window.viewManager.setMode('planning');
+          }
           this.selectedVolume = this.selectedVolume === vol ? null : vol;
           this.updateVolumeList();
           this.updatePreviewFromSelection();
@@ -4034,6 +4037,17 @@ export class ScanPreviewModule {
  * Lazy compare pane (C): no WebGL until first Ctrl+load. Synced from scan preview (B).
  */
 export class ComparePane {
+  static ensureEmptyPlaceholder(container) {
+    if (!container) return;
+    if (container.querySelector('.viewer.compare-preview-viewer')) return;
+    if (container.querySelector('.compare-pane-placeholder')) return;
+    const el = document.createElement('div');
+    el.className = 'compare-pane-placeholder';
+    el.setAttribute('aria-hidden', 'true');
+    el.textContent = 'Ctrl+click on a scan item to activate';
+    container.appendChild(el);
+  }
+
   constructor() {
     this.module = null;
     this._initPromise = null;

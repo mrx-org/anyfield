@@ -32,15 +32,15 @@ import {
   createSvgRoot,
   setSvgRootSize,
   updatePanelChrome,
-} from "./paper_plot_figure.js";
-import { PaperPanel } from "./paper_plot_panel.js";
-import { PaperPlotSync, capturePanelAtNativeResolution } from "./paper_plot_sync.js";
+} from "./paper_plot_figure.js?v=3";
+import { PaperPanel } from "./paper_plot_panel.js?v=3";
+import { PaperPlotSync, capturePanelAtNativeResolution } from "./paper_plot_sync.js?v=3";
 import {
   buildScanLabelRefs,
   getPanelCaptionDetail,
   getProtocolTooltipForScanNumber,
   parsePanelExpr,
-} from "./paper_plot_expr.js";
+} from "./paper_plot_expr.js?v=3";
 
 export class PaperPlotModule {
   constructor() {
@@ -89,6 +89,10 @@ export class PaperPlotModule {
 
   get diffColormap() {
     return this.state.options.diffColormap;
+  }
+
+  get detailedCaption() {
+    return this.state.options.detailedCaption;
   }
 
   get figure() {
@@ -202,6 +206,7 @@ export class PaperPlotModule {
                   <select id="paper-diff-colormap" class="paper-plot-colormap-select"></select>
                 </label>
                 <span class="paper-plot-toolbar-sep" aria-hidden="true"></span>
+                <label class="paper-plot-check"><input type="checkbox" id="paper-detailed-caption" /> Detailed caption</label>
                 <button type="button" class="paper-plot-export" id="paper-plot-export">Download SVG</button>
               </div>
             </div>
@@ -259,6 +264,9 @@ export class PaperPlotModule {
     });
     this.overlay.querySelector("#paper-link-all-clims").addEventListener("change", (e) => {
       this.setAllRowLinkClims(e.target.checked);
+    });
+    this.overlay.querySelector("#paper-detailed-caption").addEventListener("change", (e) => {
+      this.setDetailedCaption(e.target.checked);
     });
     this.overlay.querySelector("#paper-plot-export").addEventListener("click", () => this.exportSvg());
     this.overlay.querySelector("#paper-plot-close").addEventListener("click", () => this.close());
@@ -481,6 +489,12 @@ export class PaperPlotModule {
     this.state.options.showColorbar = !!on;
     for (const p of this.panels) p.applyColorbarVisibility();
     this._syncHtmlPositions();
+    this.autosaveLayout();
+  }
+
+  setDetailedCaption(on) {
+    this.state.options.detailedCaption = !!on;
+    this.updateCaption();
     this.autosaveLayout();
   }
 
@@ -748,6 +762,7 @@ export class PaperPlotModule {
       if (!p.state?.expr?.trim()) continue;
       const detail = getPanelCaptionDetail(p.state.expr, {
         scanLabelRefs: buildScanLabelRefs(panelEntries, i),
+        detailed: this.detailedCaption,
       });
       if (!detail) continue;
       if (detail.includes("\n")) {
@@ -845,7 +860,9 @@ export class PaperPlotModule {
     this.ensureRowLinkArrays();
     const linkPosition = q("#paper-link-all-position");
     const linkClims = q("#paper-link-all-clims");
+    const detailedCaption = q("#paper-detailed-caption");
     if (colorbar) colorbar.checked = this.showColorbar;
+    if (detailedCaption) detailedCaption.checked = this.detailedCaption;
     if (linkPosition) linkPosition.checked = !!this.state.options.linkPosition;
     if (linkClims) linkClims.checked = !!this.state.options.linkClims;
     if (this.scanColormapSelect) this.scanColormapSelect.value = this.scanColormap;

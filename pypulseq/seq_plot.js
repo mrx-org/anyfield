@@ -2287,7 +2287,7 @@ export function buildSeqPlotExecuteFragments(opts) {
     const plotBlock = plotSpeed === 'chartgpu' ? plotBlockChartgpu : plotBlockMpl;
 
     const chartgpuClearPy =
-        plotSpeed === 'chartgpu'
+        plotSpeed === 'chartgpu' && !silent
             ? 'import __main__\nsetattr(__main__, \'_chartgpu_last_payload\', None)\nclear_kspace_cache()\n'
             : '';
     return { plotBlock, chartgpuClearPy };

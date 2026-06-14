@@ -13,13 +13,13 @@ import {
   syncVolumeClimsToCurrent4DFrame,
   updatePanelState,
   volumeIs4D,
-} from "./paper_plot_figure.js";
+} from "./paper_plot_figure.js?v=3";
 import {
   getAxialAspectRatio,
   getPanelCaptionDetail,
   resolvePanelLoad,
   revokeBlobUrl,
-} from "./paper_plot_expr.js";
+} from "./paper_plot_expr.js?v=3";
 
 const PAPER_NV_OPTS = {
   logging: false,
@@ -225,7 +225,12 @@ export class PaperPanel {
       vol.frame4D = frame;
       this.nv.updateGLVolume?.();
     }
-    syncVolumeClimsToCurrent4DFrame(vol, this.nv, frame);
+    if (this.state.isDiff) {
+      // Difference panels keep their symmetric window across frames (no per-frame rescale).
+      this.nv.updateGLVolume?.();
+    } else {
+      syncVolumeClimsToCurrent4DFrame(vol, this.nv, frame);
+    }
     this.updateState({ frame4D: frame });
     this.nv.drawScene?.();
   }
@@ -304,14 +309,22 @@ export class PaperPanel {
         vol.cal_min = spec.calMin;
         vol.cal_max = spec.calMax;
       }
-      if (!spec.isDiff && volumeIs4D(vol)) {
+      if (volumeIs4D(vol)) {
         const fr = spec.frame4D ?? 0;
         if (typeof this.nv.setFrame4D === "function") {
           this.nv.setFrame4D(vol.id, fr);
         } else {
           vol.frame4D = fr;
         }
-        syncVolumeClimsToCurrent4DFrame(vol, this.nv, fr);
+        if (spec.isDiff) {
+          // Keep the symmetric difference window fixed across frames.
+          if (Number.isFinite(spec.calMin) && Number.isFinite(spec.calMax)) {
+            vol.cal_min = spec.calMin;
+            vol.cal_max = spec.calMax;
+          }
+        } else {
+          syncVolumeClimsToCurrent4DFrame(vol, this.nv, fr);
+        }
         this.updateState({ frame4D: fr });
       }
       this.updateState({

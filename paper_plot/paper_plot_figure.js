@@ -1,7 +1,7 @@
 /**
  * Paper Plot layout geometry, SVG rendering, figure state, and colormaps.
  */
-import { formatPanelLabel } from "./paper_plot_expr.js";
+import { formatPanelLabel } from "./paper_plot_expr.js?v=3";
 
 // ── Figure state (serializable) ──────────────────────────────────────────────
 
@@ -22,6 +22,7 @@ export const DEFAULT_PAPER_OPTIONS = Object.freeze({
   rowLinkPosition: [],
   rowLinkClims: [],
   showInlineInputs: false,
+  detailedCaption: false,
 });
 
 export function createPanelState(index) {
@@ -87,6 +88,7 @@ export function normalizeFigureState(raw) {
       rowLinkPosition: Array.isArray(rawOptions.rowLinkPosition) ? rawOptions.rowLinkPosition.slice(0, rows) : [],
       rowLinkClims: Array.isArray(rawOptions.rowLinkClims) ? rawOptions.rowLinkClims.slice(0, rows) : [],
       showInlineInputs: rawOptions.showInlineInputs ?? base.options.showInlineInputs,
+      detailedCaption: rawOptions.detailedCaption ?? base.options.detailedCaption,
     },
     panels: Array.isArray(raw?.panels) ? raw.panels : base.panels,
   };
@@ -604,6 +606,17 @@ function colorStopsForMap(name) {
   return [["0%", "#000"], ["100%", "#fff"]];
 }
 
+/**
+ * Format a colorbar limit so small magnitudes keep ~2 significant digits
+ * (e.g. 0.003 instead of "0.00"), while >=1 keeps 2 decimals.
+ */
+function formatColorbarValue(v) {
+  if (!Number.isFinite(v)) return "";
+  if (v === 0) return "0";
+  if (Math.abs(v) >= 1) return v.toFixed(2);
+  return String(parseFloat(v.toPrecision(2)));
+}
+
 export function appendVerticalColorbar(parent, rect, panelState, opts = {}) {
   const theme = opts.theme ?? "screen";
   const id = `paper-cbar-${Math.random().toString(36).slice(2)}`;
@@ -633,11 +646,11 @@ export function appendVerticalColorbar(parent, rect, panelState, opts = {}) {
   const max = Number.isFinite(panelState.calMax) ? panelState.calMax : null;
   if (min == null || max == null) return;
   const fill = theme === "export" || theme === "screen" ? "#fff" : "#111";
-  appendText(parent, rect.x + rect.w + 2, rect.y + 5, max.toFixed(2), {
+  appendText(parent, rect.x + rect.w + 2, rect.y + 5, formatColorbarValue(max), {
     fill,
     "font-size": "16",
   });
-  appendText(parent, rect.x + rect.w + 2, rect.y + rect.h, min.toFixed(2), {
+  appendText(parent, rect.x + rect.w + 2, rect.y + rect.h, formatColorbarValue(min), {
     fill,
     "font-size": "16",
   });

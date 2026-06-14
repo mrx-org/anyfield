@@ -2,7 +2,7 @@
  * Scan / diff expression parsing and volume resolution for paper plot panels.
  */
 import { NVImage } from "https://unpkg.com/@niivue/niivue@0.65.0/dist/index.js";
-import { getNVox3D, voxelBufferForDisplayedLayer } from "./paper_plot_figure.js";
+import { getNVox3D, voxelBufferForDisplayedLayer } from "./paper_plot_figure.js?v=3";
 
 /** @typedef {{ type: 'scan', scanNum: number, phase: boolean }} ScanParsed */
 /** @typedef {{ type: 'diff', left: number, right: number, abs: boolean, reverse: boolean }} DiffParsed */
@@ -75,12 +75,19 @@ export function resolveScanSource(scanNum) {
   return { vol: null, url: null, name: `scan_${scanNum}` };
 }
 
+function volumeFrameCount(vol, nVox) {
+  const n = nVox ?? getNVox3D(vol);
+  if (!n || !vol?.img) return 1;
+  return (
+    vol.nFrame4D ??
+    (vol.hdr?.dims?.[4] > 1 ? vol.hdr.dims[4] : Math.max(1, Math.floor(vol.img.length / n)))
+  );
+}
+
 function volumeFrameSlice(vol, frame4D) {
   const nVox = getNVox3D(vol);
   if (!nVox || !vol?.img) return null;
-  const nFr =
-    vol.nFrame4D ??
-    (vol.hdr?.dims?.[4] > 1 ? vol.hdr.dims[4] : Math.max(1, Math.floor(vol.img.length / nVox)));
+  const nFr = volumeFrameCount(vol, nVox);
   if (nFr <= 1) return vol.img;
   const fi = Math.min(Math.max(0, frame4D ?? 0), nFr - 1);
   const prev = vol.frame4D;
@@ -170,10 +177,12 @@ function symmetricClim(data) {
 
 /**
  * Build a diff NIfTI blob URL from two loaded volumes.
+ * The difference is computed for ALL 4D frames so the panel can navigate frames
+ * in diff mode just like a regular scan.
  * @param {object} volA
  * @param {object} volB
- * @param {{ abs?: boolean, reverse?: boolean, frame4D?: number }} opts
- * @returns {{ url: string, name: string, calMin: number, calMax: number }}
+ * @param {{ abs?: boolean, reverse?: boolean }} opts
+ * @returns {{ url: string, name: string, calMin: number, calMax: number, nFrame4D: number }}
  */
 export function buildDiffVolumeUrl(volA, volB, opts = {}) {
   if (!volA?.img || !volB?.img) {
@@ -183,21 +192,30 @@ export function buildDiffVolumeUrl(volA, volB, opts = {}) {
     throw new Error("Scans must have matching matrix dimensions for a difference plot.");
   }
 
-  const frame4D = opts.frame4D ?? 0;
-  const bufA = volumeFrameSlice(volA, frame4D);
-  const bufB = volumeFrameSlice(volB, frame4D);
-  if (!bufA || !bufB || bufA.length !== bufB.length) {
-    throw new Error("Could not read voxel buffers for difference.");
+  const nVox = getNVox3D(volA);
+  if (!nVox) {
+    throw new Error("Could not determine voxel count for difference.");
+  }
+  const nFr = Math.max(1, Math.min(volumeFrameCount(volA, nVox), volumeFrameCount(volB, nVox)));
+
+  const diff = new Float32Array(nVox * nFr);
+  for (let f = 0; f < nFr; f++) {
+    const bufA = volumeFrameSlice(volA, f);
+    const bufB = volumeFrameSlice(volB, f);
+    if (!bufA || !bufB) {
+      throw new Error("Could not read voxel buffers for difference.");
+    }
+    const off = f * nVox;
+    const n = Math.min(nVox, bufA.length, bufB.length);
+    for (let i = 0; i < n; i++) {
+      let d = opts.reverse ? bufB[i] - bufA[i] : bufA[i] - bufB[i];
+      if (opts.abs) d = Math.abs(d);
+      diff[off + i] = d;
+    }
   }
 
-  const diff = new Float32Array(bufA.length);
-  for (let i = 0; i < bufA.length; i++) {
-    let d = opts.reverse ? bufB[i] - bufA[i] : bufA[i] - bufB[i];
-    if (opts.abs) d = Math.abs(d);
-    diff[i] = d;
-  }
-
-  const niftiDims = niftiDimsFromVolume(volA);
+  const dims3 = niftiDimsFromVolume(volA);
+  const niftiDims = nFr > 1 ? [...dims3, nFr] : dims3;
   const pixDims = pixDimsFromVolume(volA, niftiDims);
   const affine = affineFromVolume(volA);
   const [calMin, calMax] = symmetricClim(diff);
@@ -212,7 +230,7 @@ export function buildDiffVolumeUrl(volA, volB, opts = {}) {
       ? `diff_${right}-${left}.nii`
       : `diff_${left}-${right}.nii`;
 
-  return { url, name, calMin, calMax };
+  return { url, name, calMin, calMax, nFrame4D: nFr };
 }
 
 /**
@@ -265,7 +283,6 @@ export async function resolvePanelLoad(expr, frame4D = 0) {
     const built = buildDiffVolumeUrl(srcA.vol, srcB.vol, {
       abs: parsed.abs,
       reverse: false,
-      frame4D,
       left: parsed.left,
       right: parsed.right,
     });
@@ -273,7 +290,7 @@ export async function resolvePanelLoad(expr, frame4D = 0) {
       url: built.url,
       name: built.name,
       isDiff: true,
-      frame4D: 0,
+      frame4D: Math.min(Math.max(0, frame4D), Math.max(0, (built.nFrame4D ?? 1) - 1)),
       calMin: built.calMin,
       calMax: built.calMax,
       colormap: "bkr",
@@ -320,56 +337,81 @@ export function getProtocolTooltipForScanNumber(scanNum) {
   return "";
 }
 
-/** Turn multi-line protocol tooltip into one semicolon-separated caption line. */
-export function formatProtocolTooltipForCaption(rawTooltip) {
+/**
+ * Parse a raw multi-line protocol tooltip into structured fields.
+ * @param {string} rawTooltip
+ * @returns {{ name: string, sequence: string, seqFile: string, protocol: string, protName: string, params: string[] }}
+ */
+export function parseProtocolTooltip(rawTooltip) {
   const lines = String(rawTooltip ?? "").split(/\r?\n/);
-  const segments = [];
-  let seqLine = "";
-  let seqFile = "";
-  let protocolLine = "";
-  let protName = "";
-  const protParams = [];
+  const out = { name: "", sequence: "", seqFile: "", protocol: "", protName: "", params: [] };
   let inParams = false;
 
   for (const line of lines) {
     const trimmed = line.trim();
     if (!trimmed) continue;
+    if (trimmed.startsWith("Name:")) {
+      out.name = trimmed.slice("Name:".length).trim();
+      inParams = false;
+      continue;
+    }
     if (trimmed.startsWith("Sequence:")) {
-      seqLine = trimmed.replace(/\s+/g, " ");
+      out.sequence = trimmed.replace(/\s+/g, " ");
       inParams = false;
       continue;
     }
     if (trimmed.startsWith("Protocol:")) {
-      protocolLine = trimmed.replace(/\s+/g, " ");
+      out.protocol = trimmed.replace(/\s+/g, " ");
       inParams = false;
       continue;
     }
     if (/^prot_\w+:$/.test(trimmed)) {
-      protName = trimmed.slice(0, -1);
+      out.protName = trimmed.slice(0, -1);
       inParams = true;
       continue;
     }
     if (inParams) {
-      protParams.push(trimmed.replace(/\s+/g, " "));
+      out.params.push(trimmed.replace(/\s+/g, " "));
       continue;
     }
-    if (seqLine && !protocolLine && !seqFile) {
-      seqFile = trimmed.replace(/\s+/g, " ");
+    if (out.sequence && !out.protocol && !out.seqFile) {
+      out.seqFile = trimmed.replace(/\s+/g, " ");
     }
   }
 
-  if (seqLine) segments.push(seqLine);
-  if (seqFile) segments.push(seqFile);
-  if (protocolLine) segments.push(protocolLine);
-  if (protName) {
-    segments.push(protParams.length ? `${protName}: ${protParams.join("; ")}` : `${protName}:`);
-  }
+  return out;
+}
 
+/** Short caption: just the protocol name. */
+export function formatProtocolCaptionShort(parsed) {
+  if (parsed?.name) return `Name: ${parsed.name}`;
+  if (parsed?.sequence) return parsed.sequence;
+  return "";
+}
+
+/** Detailed caption: name + sequence + protocol path + prot params, semicolon-separated. */
+export function formatProtocolCaptionDetailed(parsed) {
+  const segments = [];
+  if (parsed?.name) segments.push(`Name: ${parsed.name}`);
+  if (parsed?.sequence) segments.push(parsed.sequence);
+  if (parsed?.seqFile) segments.push(parsed.seqFile);
+  if (parsed?.protocol) segments.push(parsed.protocol);
+  if (parsed?.protName) {
+    segments.push(parsed.params.length ? `${parsed.protName}: ${parsed.params.join("; ")}` : `${parsed.protName}:`);
+  }
   return segments.join("; ");
 }
 
-function formatScanProtocolCaptionBody(rawTooltip) {
-  const full = formatProtocolTooltipForCaption(rawTooltip);
+/** Turn multi-line protocol tooltip into one semicolon-separated caption line (detailed). */
+export function formatProtocolTooltipForCaption(rawTooltip) {
+  return formatProtocolCaptionDetailed(parseProtocolTooltip(rawTooltip));
+}
+
+/** Body for diff caption sides: short name when available, else detailed sans leading "Sequence:". */
+function formatScanProtocolCaptionBody(rawTooltip, detailed = true) {
+  const parsed = parseProtocolTooltip(rawTooltip);
+  if (!detailed) return formatProtocolCaptionShort(parsed);
+  const full = formatProtocolCaptionDetailed(parsed);
   return full.replace(/^Sequence:\s*/, "");
 }
 
@@ -393,26 +435,47 @@ export function buildScanLabelRefs(panels, excludeIndex = -1) {
   return refs;
 }
 
+/** Short name for a scan (protocol Name, else "scan N"). */
+function scanShortName(scanNum) {
+  const tip = getProtocolTooltipForScanNumber(scanNum);
+  if (tip) {
+    const short = formatProtocolCaptionShort(parseProtocolTooltip(tip)).replace(/^Name:\s*/, "");
+    if (short) return short;
+  }
+  return `scan ${scanNum}`;
+}
+
 /** Caption detail for figure legend (scan / diff panels). */
 export function getPanelCaptionDetail(expr, opts = {}) {
   const parsed = parsePanelExpr(expr);
   if (!parsed) return "";
+  const detailed = opts.detailed !== false;
 
   if (parsed.type === "scan") {
     const tip = getProtocolTooltipForScanNumber(parsed.scanNum);
     if (tip) {
-      const formatted = formatProtocolTooltipForCaption(tip);
-      return parsed.phase ? `${formatted} (phase frame)` : formatted;
+      const info = parseProtocolTooltip(tip);
+      const formatted = detailed ? formatProtocolCaptionDetailed(info) : formatProtocolCaptionShort(info);
+      if (formatted) return parsed.phase ? `${formatted} (phase frame)` : formatted;
     }
     return parsed.phase ? `scan ${parsed.scanNum} (phase)` : `scan ${parsed.scanNum}`;
   }
 
   if (parsed.type === "diff") {
     const refs = opts.scanLabelRefs;
-    const tipL = getProtocolTooltipForScanNumber(parsed.left);
-    const tipR = getProtocolTooltipForScanNumber(parsed.right);
     const leftRef = refs?.get(parsed.left);
     const rightRef = refs?.get(parsed.right);
+    const nameL = scanShortName(parsed.left);
+    const nameR = scanShortName(parsed.right);
+    // Both sides shown as their own panels: cross-reference labels + names (always).
+    if (leftRef && rightRef) {
+      return `${leftRef} \u2212 ${rightRef}   ${nameL} \u2212 ${nameR}`;
+    }
+    if (!detailed) {
+      return `${nameL} \u2212 ${nameR}`;
+    }
+    const tipL = getProtocolTooltipForScanNumber(parsed.left);
+    const tipR = getProtocolTooltipForScanNumber(parsed.right);
     const bodyL = leftRef ?? (tipL ? formatScanProtocolCaptionBody(tipL) : `scan ${parsed.left}`);
     const bodyR = rightRef ?? (tipR ? formatScanProtocolCaptionBody(tipR) : `scan ${parsed.right}`);
     return [

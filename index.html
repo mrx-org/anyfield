@@ -264,6 +264,17 @@
             <div class="header-content">
                 <div class="header-title">Any-Field <span class="header-subtitle">Scanner</span><span class="app-version" aria-label="Version v1.2.1">v1.2.1</span></div>
                 <div class="header-actions">
+                    <div class="header-view-modes" role="group" aria-label="Main view mode">
+                        <button type="button" id="view-mode-planning-btn" class="credits-btn view-mode-btn" title="Planning view (main + preview)" aria-label="Planning view, main and preview">
+                            <svg class="view-mode-icon" viewBox="0 0 16 16" aria-hidden="true"><rect x="1" y="3" width="6" height="10" rx="1" fill="none" stroke="currentColor" stroke-width="1.2"/><rect x="9" y="3" width="6" height="10" rx="1" fill="none" stroke="currentColor" stroke-width="1.2"/></svg>
+                        </button>
+                        <button type="button" id="view-mode-compare-btn" class="credits-btn view-mode-btn" title="Planning view with compare pane (A + B + C)" aria-label="Planning view with compare pane">
+                            <svg class="view-mode-icon" viewBox="0 0 16 16" aria-hidden="true"><rect x="0.5" y="3" width="4" height="10" rx="0.8" fill="none" stroke="currentColor" stroke-width="1.1"/><rect x="6" y="3" width="4" height="10" rx="0.8" fill="none" stroke="currentColor" stroke-width="1.1"/><rect x="11.5" y="3" width="4" height="10" rx="0.8" fill="none" stroke="currentColor" stroke-width="1.1"/></svg>
+                        </button>
+                        <button type="button" id="view-mode-sequence-btn" class="credits-btn view-mode-btn" title="Sequence plot view" aria-label="Sequence plot view">
+                            <svg class="view-mode-icon" viewBox="0 0 16 16" aria-hidden="true"><path d="M1.5 8 C3.5 4.5 5.5 11.5 8 8 S12.5 4.5 14.5 8" fill="none" stroke="currentColor" stroke-width="1.3" stroke-linecap="round"/></svg>
+                        </button>
+                    </div>
                     <button type="button" id="paper-plot-btn" class="credits-btn paper-plot-launch-btn" title="Paper plot figure builder"><i class="bi bi-grid-3x3-gap" aria-hidden="true"></i></button>
                     <button type="button" id="credits-btn" class="credits-btn" title="Credits &amp; dependencies"><i class="bi bi-award" aria-hidden="true"></i></button>
                 </div>
@@ -338,7 +349,7 @@
         <div id="scan-module-container" class="scan-module"></div>
     </div>
 
-    <script type="module" src="paper_plot/launch.js?v=8"></script>
+    <script type="module" src="paper_plot/launch.js?v=11"></script>
     <script type="module">
         import { NiivueModule, ScanPreviewModule, ComparePane } from './niivue_app.js';
         import { MainHistogramController, PreviewJointHistogramController } from './hist_panel/histogram-clim-panel.js';
@@ -409,6 +420,34 @@
                     this.toggleViewerMaximize(containerId);
                 });
             }
+
+            bindViewModeButtons() {
+                document.getElementById('view-mode-planning-btn')?.addEventListener('click', () => {
+                    if (this.compareActive) this.deactivateCompareColumn();
+                    this.setMode('planning');
+                });
+                document.getElementById('view-mode-compare-btn')?.addEventListener('click', () => {
+                    this.setMode('planning');
+                    this.activateCompareColumn();
+                });
+                document.getElementById('view-mode-sequence-btn')?.addEventListener('click', () => {
+                    if (this.currentMode !== 'sequence') {
+                        this.setMode('sequence');
+                    }
+                    this.seq?.executeFunction?.();
+                });
+                this.syncViewModeButtons();
+            }
+
+            syncViewModeButtons() {
+                const planningBtn = document.getElementById('view-mode-planning-btn');
+                const compareBtn = document.getElementById('view-mode-compare-btn');
+                const sequenceBtn = document.getElementById('view-mode-sequence-btn');
+                const compare = !!this.compareActive;
+                planningBtn?.classList.toggle('is-active', this.currentMode === 'planning' && !compare);
+                compareBtn?.classList.toggle('is-active', this.currentMode === 'planning' && compare);
+                sequenceBtn?.classList.toggle('is-active', this.currentMode === 'sequence');
+            }
             
             toggleViewerMaximize(containerId) {
                 if (this.currentMode !== 'planning') return;
@@ -446,9 +485,11 @@
                     compare.style.minHeight = '0';
                 }
                 if (main) main.classList.add('has-compare-pane');
+                ComparePane.ensureEmptyPlaceholder(compare);
                 if (this.currentMode === 'planning') {
                     this.applyViewerLayout();
                 }
+                this.syncViewModeButtons();
             }
 
             deactivateCompareColumn() {
@@ -465,6 +506,7 @@
                 if (this.currentMode === 'planning') {
                     this.applyViewerLayout();
                 }
+                this.syncViewModeButtons();
             }
 
             applyViewerLayout() {
@@ -512,6 +554,7 @@
                     showCol(bcStack);
                     hideInner(preview);
                     showInner(compare);
+                    ComparePane.ensureEmptyPlaceholder(compare);
                     if (compare) compare.style.borderLeft = 'none';
                     if (bcStack) bcStack.style.borderLeft = 'none';
                 } else {
@@ -524,6 +567,7 @@
                         if (compare) {
                             compare.classList.remove('compare-pane-hidden');
                             compare.style.borderLeft = border;
+                            ComparePane.ensureEmptyPlaceholder(compare);
                         }
                     } else {
                         hideInner(compare);
@@ -611,6 +655,7 @@
                         this.preview.nv.resizeListener();
                     }, 50);
                 }
+                this.syncViewModeButtons();
             }
         }
 
@@ -678,6 +723,7 @@ await micropip.install('pypulseq==1.4.2.post2', deps=False)
 
                 const viewManager = new ViewManager(nvModule, explorer, scanModule, scanPreview);
                 viewManager.setMode('planning');
+                viewManager.bindViewModeButtons();
 
                 const mainViewerEl = document.getElementById('nv-viewer-container');
                 if (mainViewerEl) mainViewerEl.classList.add('viewer-waiting-demo');

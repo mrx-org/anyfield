@@ -92,13 +92,9 @@ export class PaperPlotSync {
     for (const p of this.module.panels) {
       if (p === source) continue;
       if (!linkAll && this.module.getPanelRow(p) !== row) continue;
-      if (p.isDiff) {
-        p.reloadAtFrame(frameIdx).catch(() => {});
-        continue;
-      }
-      const nv = p.nv;
-      const vol = nv?.volumes?.[0];
+      const vol = p.nv?.volumes?.[0];
       if (!vol) continue;
+      // Diff volumes are now 4D, so frame navigation is just a frame change (no rebuild).
       p.setFrame4D?.(frameIdx);
     }
   }

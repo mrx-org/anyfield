@@ -3081,21 +3081,23 @@ json.dumps(_result)
                 plotOutput.appendChild(plotContainer);
             }
             
-            // Clear the container
-            if (plotContainer) {
+            // Clear plot container for visible plot seq only — silent SIM prep must not wipe ChartGPU.
+            if (plotContainer && !silent) {
                 await this.disposeSeqChartGpu();
                 plotContainer.innerHTML = '';
             }
             
             // Also remove any stray matplotlib figures from the document body
-            document.querySelectorAll('div.ui-dialog, div[id^="matplotlib_"]').forEach(el => {
-                if (!plotContainer?.contains(el) && !plotOutput?.contains(el)) {
-                    el.remove();
-                }
-            });
+            if (!silent) {
+                document.querySelectorAll('div.ui-dialog, div[id^="matplotlib_"]').forEach(el => {
+                    if (!plotContainer?.contains(el) && !plotOutput?.contains(el)) {
+                        el.remove();
+                    }
+                });
+            }
             
-            // Set matplotlib target
-            if (plotContainer) {
+            // Set matplotlib target (visible plot seq only)
+            if (plotContainer && !silent) {
                 document.pyodideMplTarget = plotContainer;
                 window.pyodideMplTarget = plotContainer;
             }
@@ -3188,25 +3190,29 @@ json.dumps(_result)
             }
 
             // Final sweep for any matplotlib figures that might have been created outside our container
-            setTimeout(() => {
-                // Re-query the container since it may have been recreated
-                const currentPlotContainer = plotRoot.querySelector('#seq-mpl-actual-target');
-                if (currentPlotContainer) {
-                    // Check for matplotlib elements that ended up outside our container
-                    document.querySelectorAll('div.ui-dialog, div[id^="matplotlib_"]').forEach(el => {
-                        if (!currentPlotContainer.contains(el) && el !== currentPlotContainer && !plotRoot.contains(el)) {
-                            console.log('Manual sweep: Found plot container outside target, moving it...');
-                            currentPlotContainer.appendChild(el);
-                        }
-                    });
-                }
-            }, 800);
+            if (!silent) {
+                setTimeout(() => {
+                    // Re-query the container since it may have been recreated
+                    const currentPlotContainer = plotRoot.querySelector('#seq-mpl-actual-target');
+                    if (currentPlotContainer) {
+                        // Check for matplotlib elements that ended up outside our container
+                        document.querySelectorAll('div.ui-dialog, div[id^="matplotlib_"]').forEach(el => {
+                            if (!currentPlotContainer.contains(el) && el !== currentPlotContainer && !plotRoot.contains(el)) {
+                                console.log('Manual sweep: Found plot container outside target, moving it...');
+                                currentPlotContainer.appendChild(el);
+                            }
+                        });
+                    }
+                }, 800);
+            }
             
             if (this.config.onFunctionExecute) {
                 this.config.onFunctionExecute(this.selectedSequence, resultObj);
             }
             
-            this.showStatus(resultObj.message || 'Function executed successfully', 'success');
+            if (!silent) {
+                this.showStatus(resultObj.message || 'Function executed successfully', 'success');
+            }
 
             // SIM prep: silent execute with protocolName — push Pulseq seq.definitions FOV (m → mm) to Niivue.
             // Scan pipeline runs this *before* generateFovMaskNifti() so mask voxel size × matrix matches seq FOV.
