@@ -14,11 +14,11 @@
 """2D multi-shot TSE sequence (PyPulseq), MRzero-style.
 
 Self-describing script: deps + config in the PEP 723 block above.
-Run with ``uv run mr0_tse_2d_seq_toml2pep.py``, or just run the cell in Colab.
+Run with ``uv run mr0_tse_2d_seq.py``, or just run the cell in Colab.
 Builds the sequence, writes ``TSE_2D.seq``, simulates it (MRzeroCore), plots |signal|.
 """
 # --- Notebook setup (Colab / Jupyter / JupyterLab / VS Code) ----------------
-_ipython = globals().get('get_ipython', lambda: None)() # detect nb
+_ipython = globals().get('get_ipython', lambda: None)()  # detect nb
 if _ipython is not None:
     _ipython.run_line_magic(
         'pip', 'install -q numpy matplotlib pypulseq==1.4.2.post2 MRzeroCore')
