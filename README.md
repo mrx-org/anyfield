@@ -19,9 +19,17 @@ Then open `http://localhost:8000` (main **Any-Field Scanner** UI: `index.html`).
 http://localhost:8000/?s_category=<ns>&s_file=<stem>&s_func=<name>
 ```
 
-Example: pypulseq `write_epi` / `main`:
+Examples:
 
-`http://localhost:8000/?s_category=pypulseq_examples&s_file=write_epi&s_func=main`
+**builtin:** https://mrx-org.github.io/anyfield/?s_category=builtin&s_file=mr0_tse_2d_seq&s_func=prot_TSE_2D_asym_ex 
+
+**builtin:** https://mrx-org.github.io/anyfield/?s_category=builtin&s_file=mr0_tse_2d_seq&s_func=prot_TSE_2D
+
+**pulseq file interpreter:** https://mrx-org.github.io/anyfield/?seq_url=https://raw.githubusercontent.com/pulseq-frame/test-seqs/refs/heads/main/spiral-TSE/ssTSE.seq
+
+**mrseq**: https://mrx-org.github.io/anyfield/?s_category=mrseq&s_file=spiral_flash&s_func=main&sp_rf_flip_angle=5&sp_fov_xy=0.22
+
+
 
 Use the real file stem (no `.py`) and the exact Python function name. Namespaces:
 
