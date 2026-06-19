@@ -194,6 +194,22 @@ body {
     transform: rotate(-90deg);
 }
 
+.seq-source-download-btn {
+    flex-shrink: 0;
+    padding: 0.2rem 0.45rem;
+    background: rgba(255, 255, 255, 0.08);
+    color: var(--text, #ddd);
+    border: 1px solid var(--border, #333);
+    border-radius: 4px;
+    cursor: pointer;
+    font-size: 0.75rem;
+    line-height: 1;
+}
+
+.seq-source-download-btn:hover {
+    background: rgba(255, 255, 255, 0.14);
+}
+
 .seq-source-items {
     margin-left: 1rem;
     padding-left: 0.5rem;
@@ -702,6 +718,12 @@ body {
 .seq-editor-body .CodeMirror {
     height: 100%;
     font-size: 14px;
+    user-select: text;
+}
+
+.seq-editor-body .CodeMirror pre,
+.seq-editor-body .CodeMirror-line {
+    user-select: text;
 }
 
 /* Lab shell: plot fills the main row; options sit below the fold — scroll #slot-main to reach them */

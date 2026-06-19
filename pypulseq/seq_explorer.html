@@ -103,7 +103,7 @@ print(f"Matplotlib backend: {plt.get_backend()}")
         explorer = new SequenceExplorer('seq-explorer-widget', {
             onlySeqPrefix: true,
             pyodide: pyodide,
-            sources: [], // Start empty, will load from sources_config.py
+            sources: [], // Start empty, will load from sources.toml
             onSequenceSelect: (sequence) => {
                 console.log('Selected sequence:', sequence);
                 // Handle sequence selection

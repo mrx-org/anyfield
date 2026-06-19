@@ -24,67 +24,116 @@ In-browser Python environment for executing PyPulseq scripts and visualizing MRI
 
 ## Cases
 
-### 1. Web Scraping and sources_config
+### 1. Source registry (`sources.toml`)
 
-This is what the sources_config.py does. We scrape:
-- pypulseq examples from GitHub folder
-- mrseq sequences from the mrseq module
-- MRzero sequences from the playground (GitHub folder)
-- specific .py files from GitHub or a remote website
-- sequences from a local folder (built-in), e.g. served from localhost
+The registry is **`pypulseq/sources.toml`**. Default entries:
 
-All of them are loaded in the seq explorer and mirrored into the local Pyodide structure so they can be remixed. For remixing and playback, each file carries a **mini TOML** header (see below). Config sources use `type` ("file" | "folder" | "module"), `path` (or `url`), optional `name` (tree label), **`seq_func`** (entry-point function; legacy: `base_sequence`), and `dependencies`.
+| `name` | `type` | Role |
+|--------|--------|------|
+| `anyseq` | folder | Built-in sequences from `mrx-org/anyfield/pypulseq/anyseq` |
+| `builtin` | folder | Interpreter / built-in seq helpers from `built_in_seq` |
+| `mrseq.scripts` | module | Installed `mrseq` package scripts |
+| `pypulseq_examples` | folder | Upstream PyPulseq example scripts (GitHub) |
+| `MRzero` | file | MRzero playground notebook |
 
-### 2. Mini TOML in each file
+Parsed by `SourceManager.load_sources_config` via `tomllib`.
 
-Each sequence or protocol file has a header that describes dependencies and metadata. With this header, the app can install deps, resolve imports, and run the file.
+Each `[[sources]]` entry sets:
 
-**TOML schema (single source of truth):**
-- **`[dependencies]`**: package specs (e.g. `pypulseq = "*"`).
-- **`[metadata]`**:
-  - **`kind`**: `"sequence"` | `"protocol"` — whether this file is a sequence or a protocol wrapper.
-  - **`seq_func_file`**: path/module of the **sequence we use** (call target). For a sequence file = this file; for a protocol = the file we import from and call.
-  - **`seq_func`**: name of the **function we call** (call target). For a sequence = this file’s function; for a protocol = the base sequence (e.g. `seq_gre`, `main`). Protocol files do **not** store their own name in TOML.
-  - **`type`**: `"file"` | `"module"` (loader type).
+- `type` — `"file" | "folder" | "module"`
+- `path` — local path, GitHub tree URL, raw URL, or dotted module path
+- `name` — tree label, **`s_category` / `init_prot` namespace**, and **VFS import prefix** for folder sources (e.g. `anyseq` → `anyseq.scripts.gre_seq`)
+- `dependencies` — PEP 508 install strings (**required** for folder and module sources)
+- `micropip_no_deps` — packages installed with micropip `deps=False`
 
-**Example — sequence file:**
+**Folder sources (registry-owned install headers):** Upstream `.py` files may be plain PyPulseq (no PEP/Colab/AnyField wrappers). On `loadFolder()`, the explorer:
+
+1. Fetches raw upstream text from GitHub
+2. **Strips** any accidental PEP 723, notebook guard, or `_anyfield_json` blocks
+3. **Materializes** PEP 723 + notebook guard from the folder entry's `dependencies` / `micropip_no_deps` (`materializeFolderScript`)
+4. Writes the materialized file to VFS and caches it on `sequences[].code`
+5. Sets per-file `source.dependencies` from the **registry only** (`source.anyfield = {}` for base sequences)
+
+Micropip installs from `sources.toml` at startup (`loadSequences`) and again per folder if needed. PEP in the cached file matches the registry (for `uv run` / Colab if copied out of the app).
+
+**Module sources (`mrseq.scripts`):** No VFS materialization; registry `dependencies` attach to each discovered function. Installed wheel files are AST-scanned without import.
+
+**First-party artifacts (`user/prot/*`, fixtures):** Loaded via `parseFile`, not `loadFolder`. File-owned PEP + marked `_anyfield_json` are preserved as-is.
+
+**Naming collision:** Folder `name` must not equal an installed PyPI top-level package (e.g. do **not** use `name = "pypulseq"` — use `pypulseq_examples`). Otherwise `import pypulseq.scripts.foo` resolves to the library, not VFS.
+
+### 2. File metadata standard
+
+Two tiers:
+
+| Tier | Examples | PEP 723 | Notebook guard | `_anyfield_json` |
+|------|----------|---------|----------------|------------------|
+| **Registry folder / module bases** | anyseq, builtin, pypulseq_examples, mrseq | Materialized at load (folders) or registry-only (modules) | Materialized at load (folders) | No |
+| **First-party protocols / fixtures** | `user/prot/*`, smoke tests | Yes | Yes | Yes (marked block, required for protocols) |
+
+Generated protocol capsules always use the **full hybrid** format below.
+
+**PEP 723 install block** (install metadata only; no scanner fields in TOML):
 ```python
-# Source configuration (TOML format)
-_source_config_toml = """
-[dependencies]
-    pypulseq = "*"
-
-[metadata]
-kind = "sequence"
-seq_func_file = "built_in_seq/mr0_rare_2d_seq.py"
-seq_func = "seq_RARE_2D"
-type = "file"
-"""
+# /// script
+# requires-python = ">=3.9"
+# dependencies = ["numpy", "pypulseq==1.4.2.post2"]
+#
+# [tool.anyfield]
+# micropip_no_deps = ["pypulseq"]
+# ///
 ```
 
-**Example — protocol file (wraps a sequence; TOML only describes the call target):**
+**Notebook setup guard:**
 ```python
-# Source configuration (TOML format)
-_source_config_toml = """
-[dependencies]
-    pypulseq = "*"
-
-[metadata]
-kind = "protocol"
-seq_func_file = "built_in_seq/gre_seq.py"
-seq_func = "seq_gre"
-type = "file"
-"""
-# ... import and def prot_gre(...): return seq_gre(**kwargs)
+# --- Notebook setup (Colab / Jupyter / JupyterLab / VS Code) ---
+_ipython = globals().get('get_ipython', lambda: None)()
+if _ipython is not None:
+    _ipython.run_line_magic('pip', 'install -q numpy pypulseq==1.4.2.post2')
+# --- Notebook setup end ---
 ```
 
-Protocols always call the base sequence (`seq_*` or `main`). Saving a protocol from an existing protocol still generates code that calls the original base, not a `prot_*` function.
+**AnyField runtime metadata block** (protocols and fixtures only; no `anyfield_config()` helper):
+```python
+# --- AnyField metadata begin ---
+_anyfield_json = r'''
+{
+  "kind": "protocol",
+  "prot_func": "prot_gre",
+  "seq_definition": "inline",
+  "seq_func": "anyseq.scripts.gre_seq:seq_gre",
+  "simulation": {
+    "backend": "mr0sim",
+    "phantom_matrix": [64, 64, 1],
+    "phantom_fov_affine": [2.5, 0, 0, -80, 0, 2.5, 0, -80, 0, 0, 2.5, -80, 0, 0, 0, 1]
+  },
+  "recon": {
+    "matrix": [8, 8, 1],
+    "method": "anyfield-pynufft"
+  }
+}
+'''
+# --- AnyField metadata end ---
+```
+
+JSON formatting: **arrays of primitives** (e.g. `phantom_fov_affine`, `phantom_matrix`, `recon.matrix`) are written **on one line**; nested objects remain indented (`formatAnyfieldJson` / `_stringifyAnyfieldJson`).
+
+Protocols always call a base sequence via `_anyfield_base_callable`. Package-backed protocols import a versioned package dependency; non-package protocols inline the base sequence source (wrappers stripped before embed).
+
+### 2a. Metadata parse and cache
+
+- **Authoritative parse:** Python `parse_script_metadata(code)` at `loadFolder`, `parseFile`, share import
+- **Runtime cache:** `source.anyfield` (+ `source.dependencies`) on each sequence/protocol entry
+- **Hot paths** (tooltips, chain walk, share validation): read **`source.anyfield`** first
+- **Sync fallback:** `extractAnyfieldJsonFromCode()` — marked block only (~15 lines), when cache absent
+
+Legacy paths removed: `sources_config.py`, PEP scanner fields in TOML (`entry`, sim/recon in PEP), `anyfield_config()` emission, unmarked JSON fallbacks.
 
 ### 3. Tree organization
 
 - **User Refined**: user-edited **sequences** (saved under `user/seq/`).
 - **User Protocols**: user-saved **protocols** (saved under `user/prot/`).
-- Other groups by source `name` (e.g. Built-in, mrseq.scripts).
+- Other groups by source `name` (e.g. anyseq, mrseq.scripts).
 
 ### 4. Virtual filesystem layout (Pyodide)
 
@@ -93,13 +142,15 @@ All in-memory paths used for loading and saving. **Every loaded sequence is stor
 - **`user/seq/`** — User-edited sequences only. Save As (from the editor) shows and overwrites only files here. Treated as package `user.seq` for imports; each sequence has **`fullModulePath`** (e.g. `user.seq.foo`).
 - **`user/prot/`** — User-saved protocols only. Treated as package `user.prot` for imports; each protocol has **`fullModulePath`** (e.g. `user.prot.prot_gre`). Set when saving a protocol snapshot and when loading from `user/prot/`.
 - **`/remote_modules/`** — Single files fetched from a URL (GitHub raw, remote file, MRzero notebook, etc.) are written only here (no separate `remote/` cache). Sequence key is **`fullModulePath`** (e.g. `remote_modules.foo`).
-- **`/<package>_examples/scripts/`** — Files from a folder source (e.g. pypulseq examples, MRzero playground) are written only under this package path (no separate `folder/<sourceKey>/` cache). Sequence key is **`fullModulePath`** (e.g. `pypulseq_examples.scripts.gre`).
+- **`/<name>/scripts/`** — Files from a folder source are written under `/<name>/scripts/` (e.g. `/anyseq/scripts/`, `/pypulseq_examples/scripts/`). Sequence key is **`fullModulePath`** (e.g. `anyseq.scripts.gre_seq`, `pypulseq_examples.scripts.write_epi`).
 
-Built-in sequences are mirrored under **`/built_in_seq/`** (filesystem root) for imports (`built_in_seq.gre_seq`, etc.). The Save As dialog lists only `user/seq/` or `user/prot/` so loaded pypulseq/MRzero files do not appear there.
+Built-in sequences are fetched from GitHub (`anyseq`, `builtin` folder sources) and materialized into VFS as above. The Save As dialog lists only `user/seq/` or `user/prot/` so loaded registry files do not appear there.
+
+**Session-only user artifacts:** `user/seq/` and `user/prot/` exist only for the current browser session (Pyodide VFS + in-memory). A full reload starts a fresh scanner — no `localStorage` restore. To keep protocols: **Download** (tree menu) or **Share** (`#protocol_gz` URL). Cross-session restore from disk is deferred.
 
 #### 4a. Unified module model (all seq funcs as modules)
 
-**Intent:** Config (JSON / sources_config) only describes *where* to get code (`type`, `path`/`url`). At runtime, **every loaded sequence function is always used as a module** — i.e. we always call with `module_path` and `function_name`, never with raw `code`.
+**Intent:** `sources.toml` only describes *where* to get code (`type`, `path`/`url`). At runtime, **every loaded sequence function is always used as a module** — i.e. we always call with `module_path` and `function_name`, never with raw `code`.
 
 **Benefits:**
 - **Single code path** for parameter extraction and execution: no branching on “file vs module”.
@@ -109,18 +160,23 @@ Built-in sequences are mirrored under **`/built_in_seq/`** (filesystem root) for
 **Implementation outline:**
 - Each **loader** (built-in file, folder, remote file, local/user file) must:
   1. Fetch or read the code from the configured path/url (unchanged).
-  2. Write files into a VFS directory that is a valid Python package (with `__init__.py` where needed), e.g. `/built_in_seq/`, `/pypulseq_examples/scripts/`, `/remote_modules/`, `/user/seq/`, `/user/prot/`.
-  3. Set **`fullModulePath`** (e.g. `built_in_seq.gre_seq`, `pypulseq_examples.scripts.gre`, `user.seq.foo`, `user.prot.prot_gre`) for each discovered sequence/protocol and attach it to the source/sequence metadata. The sequence key in the explorer is `fullModulePath` for folder and remote; for built-in and user it is path or `fullModulePath` as set by the loader.
+  2. Write files into a VFS directory that is a valid Python package (with `__init__.py` where needed), e.g. `/anyseq/scripts/`, `/pypulseq_examples/scripts/`, `/remote_modules/`, `/user/seq/`, `/user/prot/`.
+  3. Set **`fullModulePath`** (e.g. `anyseq.scripts.gre_seq`, `pypulseq_examples.scripts.write_epi`, `user.seq.foo`, `user.prot.prot_gre`) for each discovered sequence/protocol and attach it to the source/sequence metadata. The sequence key in the explorer is `fullModulePath` for folder and remote; for user files it is path or `fullModulePath` as set by the loader.
 - **Parameter loading** and **execution** use only the module path: `extract_function_parameters(module_path, function_name)` and `execute_function(module_path, function_name, args_dict)`. There is no `code` argument or fallback; if `fullModulePath` is missing, the UI throws a clear error (e.g. "Sequence has no module path; cannot load parameters."). All loaders must provide `fullModulePath`.
-- Protocol generation and import statements use the same module path (e.g. `from built_in_seq.gre_seq import seq_gre`).
+- Protocol generation and import statements use the same module path (e.g. `from anyseq.scripts.gre_seq import seq_gre`).
 
 ### 5. Protocol generation and FOV sync
 
 Protocol files are generated with:
-- TOML header with `kind = "protocol"`, `seq_func_file` and `seq_func` set to the **call target** (the base sequence), plus dependencies.
-- An import for the base sequence and a `def prot_*(...): return seq_func(**kwargs)` that forwards parameters. No protocol file path or `prot_*` name is written into the TOML.
+- A PEP 723 header for install metadata only: `dependencies` plus `[tool.anyfield] micropip_no_deps` hints for Pyodide.
+- The portable Colab/Jupyter install guard in the body (built from the protocol's dependencies).
+- A marked `_anyfield_json` block (`# --- AnyField metadata begin ---` ... `# --- AnyField metadata end ---`) with scanner/runtime metadata: `kind`, `prot_func`, `seq_definition = "package" | "inline"`, `seq_func = "module:callable"`, `simulation`, `recon`, and optional `seq_origin`.
+- Package-backed bases (e.g. `mrseq`) keep an import wrapper and pin bare package dependencies to the installed version when saving.
+- Non-package bases (folder/raw/local sources such as `anyseq` or pypulseq examples) are frozen inline into the protocol body, then `def prot_*(...): return _anyfield_base_callable(**kwargs)` forwards parameters. The generated protocol is standalone for UV/Colab as long as its package dependencies install.
 
-**Automatic protocol on SIM:** The Scan Module calls `executeFunction(silent=true, protocolName)` with the scan number as `protocolName`. The Sequence Explorer creates a protocol snapshot with a scan-number prefix (e.g. `1_prot_gre.py`) and registers it under User Protocols; the protocol always calls the **base sequence**.
+**Automatic protocol on SIM:** The Scan Module calls `executeFunction(silent=true, protocolName)` with the scan number as `protocolName`. The Sequence Explorer creates a protocol snapshot with a scan-number prefix (e.g. `user/prot/4_prot_3_gre.py`, display **`4. 3.gre`**) and registers it under User Protocols; the protocol always calls the **base sequence** (after resolving protocol-of-protocol chains).
+
+**Protocol-of-protocol naming:** When the selected sequence is already a numbered protocol (`user/prot/3_prot_gre.py`), the Scan Module draft defaults the **name** to `{parentScan}.{label}` (e.g. `3.gre`), shown in the queue row as **`4. 3.gre`** (next scan number + draft name). `saveProtocolSnapshot` uses the same stem for the filename prefix (`4_prot_3_gre.py`). Helpers: `protocolDerivedDefaultName`, `protocolUserLabelFromPath`.
 
 **FOV from Pulseq (authoritative for mm size):** After a successful silent execute with `protocolName`, the explorer reads **`seq.definitions['FOV']`** from the last built sequence (`SourceManager._last_sequence` / `__main__.seq`), converts **m → mm**, and emits **`sequence_fov_dims`** on the event hub. Niivue applies this to the FOV **size** sliders (`applySequenceFovDimensions`). **Why:** the sequence run defines the true acquisition FOV; traj / k-space and recon must use the same physical extent. **Mask matrix (X/Y/Z), offsets, and rotation** remain whatever the user set in the FOV tab — only the **mm box size** is overwritten from the sequence.
 
@@ -128,9 +184,11 @@ Protocol files are generated with:
 
 **Manual sync:** **`getFovFromSequence()`** still exists for explicitly re-running the sequence and pushing FOV without starting a full SIM job.
 
-**Protocol source enrichment:** When parsing protocol files (`user/prot/...`), the stored source is enriched with `seq_func_file` and `seq_func` from the file’s TOML. That way the base sequence is known even after reload, so re-scanning or loading the protocol later still resolves the correct call target.
+**Protocol source enrichment:** When parsing protocol files (`user/prot/...`), `parseFile` runs `parse_script_metadata` and stores **`source.anyfield`** (canonical cache). Tree filter uses `prot_func` from JSON. Inline capsules expose only their `prot_func` in the tree and call their originating base through `_anyfield_base_callable`. `resolveProtocolBaseEntry` walks `seq_func` chains for protocol-of-protocol.
 
-**Re-scanning protocols:** Re-scanning an existing protocol (e.g. `1_prot_gre`) creates a new numbered protocol (e.g. `2_prot_gre`) that calls the **same base sequence** (e.g. built-in `seq_gre`), not the previous protocol. This applies to built-in, folder, and module-derived protocols alike.
+**Re-scanning protocols:** Re-scanning a package protocol creates a new protocol that calls the same package base. Re-scanning an inline capsule creates a new inline capsule from the selected protocol file, preserving standalone behavior.
+
+**Sharing / receiving protocols:** The params header includes two share actions. The dashed share icon is a light source link and is only visible for configured `sources.toml` sequences (`anyseq`, `mrseq`, `pypulseq_examples`, …); it copies `?s_category=...&s_file=...&s_func=...` plus changed-only `sp_<param>=...` overrides from the current params pane. `s_category` matches the source `name` in `sources.toml`. The solid share icon first snapshots the current params pane into a protocol capsule, gzip-compresses JSON `{ v, kind, filename, code }`, base64url-encodes it, and writes `#protocol_gz=...` into a share URL. On startup, `#protocol_gz` is imported before normal `init_prot` selection: the protocol is stored under `user/prot/`, parsed, rendered, and selected (session only). It is not auto-run. `init_prot` / `s_category` links remain selector-only links for existing configured sources.
 
 ### 6. Parameter inspection and protocol arguments
 
@@ -165,11 +223,11 @@ Protocol files are generated with:
 
 **Approach:** A built-in sequence `seq_pulseq_interpreter(filename=...)` that reads the given path with `pypulseq.Sequence().read(filename)` and returns the sequence. Standard parameter inspection then exposes a single `filename` parameter. A **special parameter type** (`'file'` or `'url'`) is used so the UI can render an upload control in addition to a text field.
 
-**Python (built-in sequence):**
-- Add a built-in file (e.g. `built_in_seq/seq_pulseq_interpreter.py`) with a TOML header and:
-  - `def seq_pulseq_interpreter(filename: Annotated[str, "file"] = "fn.seq"):` (or type alias `SeqFile = Annotated[str, "file"]`).
-  - Implementation: `seq = pp.Sequence(); seq.read(filename); return seq`.
-- Add this file to `sources_config.py` like other built-in sequences.
+**Python (anyseq sequence):**
+- The file `anyseq/seq_pulseq_interpreter.py` carries a PEP 723 header and:
+  - `def seq_pulseq_interpreter(seq_file: Annotated[str, "file"] = "epi_se_rs.seq"):` (or type alias `SeqFile = Annotated[str, "file"]`).
+  - Implementation: `seq = pp.Sequence(); seq.read(seq_file); return seq`.
+- It lives in the `anyseq/` folder and is discovered via the `anyseq` GitHub folder source (no separate registration).
 
 **Type detection (Python, `seq_source_manager.py`):**
 - In `extract_function_parameters`, after deriving `type_name` from the default value, **optionally** inspect the parameter’s annotation.
@@ -194,9 +252,12 @@ Protocol files are generated with:
 
 ---
 
-*Parse and use when needed:*
+*Parse and use when needed (Python side, `seq_source_manager.py`):*
 ```python
-# import tomli
-# config = tomli.loads(_source_config_toml)
-# deps = list(config['dependencies'].keys())
+# from seq_source_manager import parse_script_metadata
+# meta = json.loads(parse_script_metadata(code))
+# deps = meta['dependencies']              # PEP 508 array from PEP 723
+# anyfield = meta['anyfield']              # parsed _anyfield_json + install hints
+# prot_func = anyfield.get('prot_func')    # protocol callable in this file
+# seq_func = anyfield.get('seq_func')      # underlying "module:callable"
 ```

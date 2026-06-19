@@ -20,21 +20,120 @@ except ImportError:
     import tomli as tomllib
 
 
-def parse_toml_config(toml_string):
+# PEP 723 inline script metadata block: https://peps.python.org/pep-0723/
+_PEP723_BLOCK = re.compile(
+    r'(?m)^# /// (?P<type>[a-zA-Z0-9-]+)$\s(?P<content>(^#(| .*)$\s)+)^# ///$'
+)
+
+
+def extract_pep723_block(code, block_type='script'):
     """
-    Parse TOML preamble string (e.g. from _source_config_toml in sequence files).
-    Returns a JSON string with keys 'dependencies' and 'metadata' for consumption by JS.
+    Return the de-commented TOML text of the PEP 723 inline metadata block of the
+    given type (default 'script'), or None if no such block is present.
     """
-    data = tomllib.loads(toml_string)
-    dependencies = data.get("dependencies", {})
-    metadata = data.get("metadata", {})
-    simulation = data.get("simulation", {})
-    recon = data.get("recon", {})
+    for m in _PEP723_BLOCK.finditer(code or ''):
+        if m.group('type') != block_type:
+            continue
+        lines = []
+        for line in m.group('content').splitlines():
+            if line.startswith('# '):
+                lines.append(line[2:])
+            elif line.startswith('#'):
+                lines.append(line[1:])
+            else:
+                lines.append(line)
+        return '\n'.join(lines)
+    return None
+
+
+def _pep_install_from_toml_data(data):
+    """PEP 723 install fields only — scanner metadata lives in `_anyfield_json`."""
+    tool = data.get('tool', {}) or {}
+    anyfield = tool.get('anyfield', {}) or {}
+    return {
+        'dependencies': data.get('dependencies', []) or [],
+        'requires_python': data.get('requires-python'),
+        'micropip_no_deps': anyfield.get('micropip_no_deps', []) or [],
+    }
+
+
+def extract_anyfield_json(code):
+    """Return parsed `_anyfield_json` dict from the marked metadata block, or {} if absent.
+
+    The scanner metadata is intentionally separate from PEP 723: PEP installs
+    packages, `_anyfield_json` describes AnyField protocol/sim/recon semantics.
+    Use AST literal parsing so no user code is executed while reading metadata.
+    """
+    text = code or ''
+    marked = re.search(
+        r'# --- AnyField metadata begin ---([\s\S]*?)# --- AnyField metadata end ---',
+        text,
+    )
+    if not marked:
+        return {}
+    text = marked.group(1)
+    try:
+        tree = ast.parse(text)
+    except SyntaxError:
+        return {}
+    for node in tree.body:
+        targets = []
+        value = None
+        if isinstance(node, ast.Assign):
+            targets = node.targets
+            value = node.value
+        elif isinstance(node, ast.AnnAssign):
+            targets = [node.target]
+            value = node.value
+        else:
+            continue
+        if not any(isinstance(t, ast.Name) and t.id == '_anyfield_json' for t in targets):
+            continue
+        if not isinstance(value, ast.Constant) or not isinstance(value.value, str):
+            raise ValueError('_anyfield_json must be a string literal')
+        data = json.loads(value.value)
+        if not isinstance(data, dict):
+            raise ValueError('_anyfield_json must decode to an object')
+        return data
+    return {}
+
+
+def parse_script_metadata(code):
+    """
+    Parse PEP 723 install metadata plus optional `_anyfield_json` scanner metadata
+    from a Python source string.
+
+    Returns a JSON string for JS consumption:
+      {
+        "dependencies": [...],        # PEP 508 strings from PEP 723
+        "requires_python": str|None,
+        "anyfield": {...}             # _anyfield_json plus PEP install hints
+      }
+    """
+    toml_text = extract_pep723_block(code, 'script')
+    data = tomllib.loads(toml_text) if toml_text else {}
+    install = _pep_install_from_toml_data(data)
+    json_meta = extract_anyfield_json(code)
+    anyfield = dict(json_meta) if json_meta else {}
+    if install['micropip_no_deps']:
+        anyfield['micropip_no_deps'] = install['micropip_no_deps']
+    meta = {
+        'dependencies': install['dependencies'],
+        'requires_python': install['requires_python'],
+        'micropip_no_deps': install['micropip_no_deps'],
+        'anyfield': anyfield,
+    }
+    return json.dumps(meta)
+
+
+def parse_metadata_toml(toml_text):
+    """Parse already-extracted (de-commented) PEP 723 TOML install metadata."""
+    data = tomllib.loads(toml_text) if toml_text else {}
+    install = _pep_install_from_toml_data(data)
     return json.dumps({
-        "dependencies": dependencies,
-        "metadata": metadata,
-        "simulation": simulation,
-        "recon": recon,
+        'dependencies': install['dependencies'],
+        'requires_python': install['requires_python'],
+        'micropip_no_deps': install['micropip_no_deps'],
     })
 
 
@@ -63,36 +162,22 @@ class SourceManager:
                     return json.loads(config_path_or_code)
                 except json.JSONDecodeError:
                     pass
-            
-            # Try as Python code
-            try:
-                # First, try to compile to catch syntax errors early
+
+            # sources.toml: a [[sources]] array of tables (current registry format)
+            if '[[sources]]' in config_path_or_code:
                 try:
-                    compile(config_path_or_code, '<config>', 'exec')
-                except SyntaxError as syn_err:
-                    # Provide helpful syntax error message with line number
-                    line_num = syn_err.lineno or 'unknown'
-                    line_text = syn_err.text or ''
-                    raise ValueError(f"Python syntax error at line {line_num}: {syn_err.msg}\nLine: {line_text.strip()}")
-                
-                # Execute in a clean namespace
-                namespace = {}
-                exec(config_path_or_code, namespace)
-                
-                # Look for sources variable or get_sources function
-                if 'sources' in namespace:
-                    return namespace['sources']
-                elif 'get_sources' in namespace:
-                    return namespace['get_sources']()
-                else:
-                    raise ValueError("Python config must define 'sources' list or 'get_sources()' function")
-            except ValueError:
-                # Re-raise ValueError as-is (already has good message)
-                raise
-            except Exception as e:
-                raise ValueError(f"Failed to parse config: {type(e).__name__}: {e}")
+                    data = tomllib.loads(config_path_or_code)
+                    if 'sources' in data:
+                        return data['sources']
+                    raise ValueError("sources.toml must define a [[sources]] array")
+                except ValueError:
+                    raise
+                except Exception as e:
+                    raise ValueError(f"Failed to parse sources.toml: {type(e).__name__}: {e}")
+
+            raise ValueError("Config must be sources.toml ([[sources]] array) or JSON")
         else:
-            raise ValueError("Config must be a string (Python code or JSON)")
+            raise ValueError("Config must be a string (TOML or JSON)")
     
     def add_source(self, source):
         """Add a source to the manager."""
@@ -302,7 +387,7 @@ class SourceManager:
         Args:
             file_path: Absolute or root-relative VFS path (e.g. '/built_in_seq/mr0_tse_2d_seq.py')
             function_name: Name of the function to extract from
-            code: Optional source text (user protocols kept in JS memory / localStorage)
+            code: Optional source text (user protocols kept in JS memory / Pyodide VFS for the session)
 
         Returns:
             Dict {'params': [...], 'doc': str}

@@ -19,6 +19,20 @@ The module bridges the gap between **Planning** (Sequence Explorer/Niivue) and *
 - `scanCounter`: A session-based integer that provides unique prefixes (1., 2., etc.) for scans.
 - `currentSequence`: The sequence currently selected in the Sequence Explorer.
 - `currentFov`: The FOV geometry (size, offset, rotation) received from Niivue.
+- `draftJob`: Live row at the top of the queue while a sequence is selected; holds editable scan name and protocol label until **SCAN**.
+
+## Draft row and protocol naming
+
+When a sequence is selected, `_onSequenceSelected` creates `draftJob` with:
+
+- **`userName`** — editable scan label (used in `job.name`, NIfTI/`.seq` basename, protocol save). Defaults via `_defaultDraftName`:
+  - **Numbered protocol** (`user/prot/3_prot_gre.py`): `{parentScan}.{label}` → e.g. `3.gre` (not just `gre`)
+  - **Other sequences**: display name with leading `N. ` stripped
+- **`protocolLabel`** — read-only meta line under the draft title (`_draftProtocolLabel`): underlying file stem or `stem:function`
+
+The draft row shows **`{scanCounter+1}.`** as a fixed prefix and the editable name beside it, e.g. **`4.`** + **`3.gre`** → queue title **`4. 3.gre`** after SCAN.
+
+On SIM, `_prepareCurrentSeqForTools` sets `seqExplorer._pendingProtocolMeta = { scanNumber, name }` then calls `executeFunction(true, scanNumber)`. `saveProtocolSnapshot` writes `user/prot/<scan>_<stem>.py` (e.g. `4_prot_3_gre.py`) and display name **`4. 3.gre`** via `protocolDisplayNameFromPath`.
 
 ## CROP (`runCropScan`)
 1. **Trigger**: User clicks **CROP** (requires at least one volume in Niivue).
@@ -47,6 +61,8 @@ Uses `executeFunction` and prepares `/outputs/<baseName>.seq` for the external s
 **Why the snapshot:** the recon reference determines the output NIfTI's affine/zooms (see `run_sim_recon` in `scan_zero/recon.py`). Previously it was re-derived from live sliders *after* the long-running toolapi calls, so any FOV change in between (user input, `syncFovFromScanVolume` after a prior scan completing, `applySequenceFovDimensions` from a subsequent seq prep) desynced the recon grid from the phantom grid — signal encoded old FOV, output stamped with new affine. The per-job snapshot isolates each in-flight pipeline from later slider mutations. Because `centerWorld` is stored in absolute RAS mm, swapping the "selected" volume mid-pipeline does not shift the snapshot.
 
 **PyNUFFT:** Implemented in **`scan_zero/recon.py`** (`run_sim_recon`). On SIM, the file is fetched and written to Pyodide as `/scan_zero/recon.py` once per session, then imported (keeps recon out of inline JS strings).
+
+**Protocol metadata patch:** After silent execute, `patchProtocolTomlSections` merges simulation/recon into the saved protocol's marked `_anyfield_json` block (compact primitive arrays on one line).
 
 **MR0 compatibility fix:** The in-app translated phantom path now resolves `B1+` / `B1-` robustly across all tissue entries (not only the first tissue) and guarantees non-empty TX/RX map lists with fallback `1.0` maps if needed. This keeps `(▶)` / tool-mr0sim on the same local phantom conversion path as `(▶▶)` / rapisim, without a separate debug button.
 

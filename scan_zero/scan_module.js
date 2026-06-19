@@ -112,7 +112,17 @@ export class ScanModule {
     }
 
     _defaultDraftName(seq) {
-        return (seq?.displayName || seq?.name || 'Untitled').trim() || 'Untitled';
+        const explorer = window.seqExplorer;
+        const path = String(seq?.source?.path || seq?.fileName || '').replace(/\\/g, '/');
+        const isProtocol = seq?.source?.itemKind === 'protocol' || path.startsWith('user/prot/');
+        if (isProtocol && explorer?.protocolDerivedDefaultName) {
+            const derived = explorer.protocolDerivedDefaultName(path);
+            if (derived) return derived;
+        }
+        // Strip any leading "N. " scan-number prefix so the editable name doesn't carry the
+        // queue number (that is shown separately) and doesn't leak into output filenames.
+        const raw = (seq?.displayName || seq?.name || 'Untitled').trim();
+        return raw.replace(/^\s*\d+\.\s*/, '').trim() || 'Untitled';
     }
 
     _draftProtocolLabel(seq) {
@@ -132,6 +142,7 @@ export class ScanModule {
     /** Filesystem-safe segment for scan_<n>_<part>_*.nii.gz / .seq (scan number stays unique). */
     _sanitizeScanBaseNamePart(name) {
         let s = String(name || 'scan')
+            .replace(/^\s*\d+\.\s*/, '')      // drop leading "N. " scan-number prefix
             .replace(/[<>:"/\\|?*]/g, '_')
             .replace(/\s+/g, '_')
             .replace(/^\.+|\.+$/g, '')
@@ -1715,8 +1726,9 @@ data
     async loadJob(jobId, syncFov = true) {
         const job = this.queue.find(j => j.id === jobId);
         if (job && job.status === 'done' && window.nvModule) {
-            // Switch to planning mode if we are in sequence mode
-            if (window.viewManager && window.viewManager.currentMode !== 'planning') {
+            // Planning view only on explicit VIEW SCAN (syncFov=true). Auto-load after SCAN/CROP
+            // keeps the current mode (e.g. plot.seq) so the user switches manually.
+            if (syncFov && window.viewManager && window.viewManager.currentMode !== 'planning') {
                 window.viewManager.setMode('planning');
             }
 

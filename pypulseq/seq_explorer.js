@@ -23,6 +23,42 @@ import {
     renderSeqChartGpuAfterPlot as mountChartGpuSequencePlot,
 } from "./seq_plot.js";
 
+function bindCodeEditorSelectAll(editor, rootEl) {
+    const selectAll = () => {
+        if (editor?.execCommand) {
+            editor.focus();
+            editor.execCommand('selectAll');
+            return;
+        }
+        const ta = rootEl.querySelector('textarea');
+        if (ta) {
+            ta.focus();
+            ta.select();
+        }
+    };
+
+    rootEl.addEventListener('keydown', (e) => {
+        if (!(e.ctrlKey || e.metaKey) || e.key.toLowerCase() !== 'a') return;
+        const cmInput = editor?.getInputField?.();
+        const cmWrap = editor?.getWrapperElement?.();
+        const inEditor = rootEl.contains(e.target)
+            || (cmInput && document.activeElement === cmInput)
+            || (cmWrap && cmWrap.contains(document.activeElement));
+        if (!inEditor) return;
+        e.preventDefault();
+        e.stopPropagation();
+        selectAll();
+    }, true);
+
+    if (editor?.execCommand) {
+        editor.setOption('extraKeys', {
+            ...(editor.getOption('extraKeys') || {}),
+            'Ctrl-A': selectAll,
+            'Cmd-A': selectAll,
+        });
+    }
+}
+
 /**
  * HTML template builders for sequence explorer UI (single file, no extra modules). */
 const SEQ_TEMPLATES = {
@@ -116,6 +152,12 @@ const SEQ_TEMPLATES = {
         const btn = (id, label, primary = false) => btnClass
             ? `<button id="${id}" class="btn btn-secondary btn-md${primary ? ' seq-btn-primary' : ''}">${label}</button>`
             : `<button id="${id}" style="padding: 0.4rem 0.32rem; background: ${primary ? 'var(--accent)' : 'rgba(255, 255, 255, 0.08)'}; color: ${primary ? 'white' : 'var(--text, #ddd)'}; border: ${primary ? 'none' : '1px solid var(--border, #333)'}; border-radius: 4px; cursor: pointer; font-size: ${primary ? '0.875rem' : '0.75rem'}; font-weight: 500;">${label}</button>`;
+        const shareBtn = btnClass
+            ? `<button id="seq-share-btn" class="btn btn-secondary btn-md" title="share sequence protocol&#10;This will share the protocol including either sequence source code, or versioned dependency to the base sequence." aria-label="share sequence protocol"><i class="bi bi-share" aria-hidden="true"></i></button>`
+            : `<button id="seq-share-btn" title="share sequence protocol&#10;This will share the protocol including either sequence source code, or versioned dependency to the base sequence." aria-label="share sequence protocol" style="padding: 0.28rem 0.38rem; background: rgba(255, 255, 255, 0.08); color: var(--text, #ddd); border: 1px solid var(--border, #333); border-radius: 4px; cursor: pointer; font-size: 0.75rem; font-weight: 500;"><i class="bi bi-share" aria-hidden="true"></i></button>`;
+        const lightShareBtn = btnClass
+            ? `<button id="seq-light-share-btn" class="btn btn-secondary btn-md" title="share temporary protocol&#10;This will share the protocol assuming underlying sequence stays the same. This might break when seq packages are updated." aria-label="share temporary protocol" style="border-style: dashed;"><i class="bi bi-share" aria-hidden="true" style="color: #7db7ff;"></i></button>`
+            : `<button id="seq-light-share-btn" title="share temporary protocol&#10;This will share the protocol assuming underlying sequence stays the same. This might break when seq packages are updated." aria-label="share temporary protocol" style="padding: 0.28rem 0.38rem; background: rgba(255, 255, 255, 0.08); color: var(--text, #ddd); border: 1px dashed var(--border, #333); border-radius: 4px; cursor: pointer; font-size: 0.75rem; font-weight: 500;"><i class="bi bi-share" aria-hidden="true" style="color: #7db7ff;"></i></button>`;
         const actions = `
                     <div class="seq-params-header-actions">
                         <div class="seq-params-header-btns">
@@ -128,7 +170,11 @@ const SEQ_TEMPLATES = {
                     </div>`;
         return `<div class="seq-params-header">
                     <div class="seq-params-header-row">
-                        <h3 class="section-title" style="margin: 0;">Protocol</h3>
+                        <div style="display: flex; align-items: center; gap: 0.35rem;">
+                            <h3 class="section-title" style="margin: 0;">Protocol</h3>
+                            ${lightShareBtn}
+                            ${shareBtn}
+                        </div>
                         ${actions}
                     </div>
                     <div id="seq-current-name" class="seq-current-name" title=""></div>
@@ -201,10 +247,6 @@ export async function patchSequencePlot(pyodide, resolvePath) {
 export class SequenceExplorer {
     /** Default plot speed (must match `SEQ_DEFAULT_PLOT_SPEED` and template `selected` option). */
     static DEFAULT_PLOT_SPEED = SEQ_DEFAULT_PLOT_SPEED;
-
-    /** localStorage keys for session-persisted user sequences / protocols (VFS is ephemeral). */
-    static LS_USER_FILES = 'seq_explorer_user_files_v1';
-    static LS_USER_SOURCES = 'seq_explorer_user_sources_v1';
 
     constructor(containerId, config = {}) {
         this.container = typeof containerId === 'string' 
@@ -290,11 +332,20 @@ export class SequenceExplorer {
         if (editBtn) {
             editBtn.addEventListener('click', () => this.showCodeEditor());
         }
+        const shareBtn = this.paramsTarget.querySelector('#seq-share-btn');
+        if (shareBtn) {
+            shareBtn.addEventListener('click', () => this.shareCurrentProtocol());
+        }
+        const lightShareBtn = this.paramsTarget.querySelector('#seq-light-share-btn');
+        if (lightShareBtn) {
+            lightShareBtn.addEventListener('click', () => this.shareCurrentLightLink());
+        }
         const getFovBtn = this.paramsTarget.querySelector('#seq-get-fov-btn');
         if (getFovBtn) {
             getFovBtn.addEventListener('click', () => this.getFovFromSequence());
         }
 
+        this.updateShareButtonVisibility();
         this._bindMobileScanButtons(this.paramsTarget);
     }
 
@@ -369,74 +420,374 @@ export class SequenceExplorer {
     }
 
     isUserArtifactPath(path) {
-        const p = String(path || '').replace(/\\/g, '/');
+        const p = this.normalizeUserArtifactPath(path);
         return p.startsWith('user/seq/') || p.startsWith('user/prot/');
     }
 
-    persistUserArtifacts() {
+    normalizeUserArtifactPath(path) {
+        return String(path || '').replace(/\\/g, '/').replace(/^\/+/, '');
+    }
+
+    getUserArtifactCodeFromCache(path) {
+        const norm = this.normalizeUserArtifactPath(path);
+        if (!this.isUserArtifactPath(norm)) return null;
+        return this.sequences[norm]?.code || null;
+    }
+
+    async getUserArtifactCode(path) {
+        const cached = this.getUserArtifactCodeFromCache(path);
+        if (cached) return cached;
+        const norm = this.normalizeUserArtifactPath(path);
+        if (!this.config.pyodide || !this.isUserArtifactPath(norm)) return null;
         try {
-            const files = {};
-            const sources = [];
-            for (const [path, fileData] of Object.entries(this.sequences)) {
-                if (this.isUserArtifactPath(path) && fileData?.code) {
-                    files[path] = fileData.code;
-                }
-            }
-            for (const s of this.config.sources || []) {
-                const p = this.getSourcePath(s);
-                if (s?.isUserEdited && this.isUserArtifactPath(p)) {
-                    sources.push(s);
-                }
-            }
-            localStorage.setItem(SequenceExplorer.LS_USER_FILES, JSON.stringify(files));
-            localStorage.setItem(SequenceExplorer.LS_USER_SOURCES, JSON.stringify(sources));
-        } catch (e) {
-            console.warn('Could not persist user sequences/protocols:', e);
+            const result = await this.config.pyodide.runPythonAsync(`
+import sys
+import json
+path = ${JSON.stringify(norm)}
+code = ''
+if hasattr(sys.modules['__main__'], '_user_edited_files'):
+    code = sys.modules['__main__']._user_edited_files.get(path, '')
+json.dumps(code)
+`);
+            const fileCode = JSON.parse(result);
+            return fileCode || null;
+        } catch (_) {
+            return null;
         }
     }
 
-    async restorePersistedUserArtifacts() {
-        if (!this.config.pyodide) return;
-        let files = {};
-        let sources = [];
-        try {
-            files = JSON.parse(localStorage.getItem(SequenceExplorer.LS_USER_FILES) || '{}');
-            sources = JSON.parse(localStorage.getItem(SequenceExplorer.LS_USER_SOURCES) || '[]');
-        } catch (e) {
-            console.warn('Could not parse persisted user artifacts:', e);
-            return;
-        }
-        if (!sources.length && !Object.keys(files).length) return;
-
-        for (const [path, code] of Object.entries(files)) {
-            if (!code || !this.isUserArtifactPath(path)) continue;
-            try {
-                await this.storeUserFile(path, code);
-            } catch (e) {
-                console.warn('Could not restore user file to VFS:', path, e);
-            }
-        }
-        for (const src of sources) {
-            const p = this.getSourcePath(src);
-            if (!p || !this.isUserArtifactPath(p)) continue;
-            if (!this.config.sources.some((s) => this.getSourcePath(s) === p)) {
-                this.config.sources.push(src);
-            }
-        }
-        const toLoad = sources.filter((src) => {
-            const p = this.getSourcePath(src);
-            return p && !this.sequences[p];
+    sourceIdentity(source) {
+        const p = this.getSourcePath(source);
+        if (p) return String(p).replace(/\\/g, '/');
+        return JSON.stringify({
+            type: source?.type || '',
+            name: source?.name || '',
+            module: source?.module || '',
+            url: source?.url || '',
         });
-        for (const src of toLoad) {
-            try {
-                await this.loadSource(src);
-            } catch (e) {
-                console.warn('Could not reload persisted source:', src.path || src.name, e);
+    }
+
+    dedupeSources(sources) {
+        const seen = new Set();
+        const out = [];
+        for (const source of sources || []) {
+            const id = this.sourceIdentity(source);
+            if (!id || seen.has(id)) continue;
+            seen.add(id);
+            out.push(source);
+        }
+        return out;
+    }
+
+    /** Drop legacy browser persistence for user/prot and user/seq (session-only now). */
+    clearLegacyUserArtifactStorage() {
+        try {
+            localStorage.removeItem('seq_explorer_user_files_v1');
+            localStorage.removeItem('seq_explorer_user_sources_v1');
+        } catch (_) { /* ignore */ }
+    }
+
+    _bytesToBase64Url(bytes) {
+        let bin = '';
+        const chunk = 0x8000;
+        for (let i = 0; i < bytes.length; i += chunk) {
+            bin += String.fromCharCode(...bytes.subarray(i, i + chunk));
+        }
+        return btoa(bin).replace(/\+/g, '-').replace(/\//g, '_').replace(/=+$/g, '');
+    }
+
+    _base64UrlToBytes(s) {
+        const b64 = String(s || '').replace(/-/g, '+').replace(/_/g, '/');
+        const padded = b64 + '='.repeat((4 - (b64.length % 4)) % 4);
+        const bin = atob(padded);
+        const bytes = new Uint8Array(bin.length);
+        for (let i = 0; i < bin.length; i++) bytes[i] = bin.charCodeAt(i);
+        return bytes;
+    }
+
+    async _gzipString(text) {
+        if (typeof CompressionStream !== 'function') {
+            throw new Error('Protocol sharing requires a browser with CompressionStream support.');
+        }
+        const stream = new Blob([new TextEncoder().encode(text)])
+            .stream()
+            .pipeThrough(new CompressionStream('gzip'));
+        return new Uint8Array(await new Response(stream).arrayBuffer());
+    }
+
+    async _gunzipString(bytes) {
+        if (typeof DecompressionStream !== 'function') {
+            throw new Error('Shared protocol import requires a browser with DecompressionStream support.');
+        }
+        const stream = new Blob([bytes])
+            .stream()
+            .pipeThrough(new DecompressionStream('gzip'));
+        return new TextDecoder().decode(await new Response(stream).arrayBuffer());
+    }
+
+    _sanitizeProtocolShareFilename(name) {
+        let base = String(name || 'shared_protocol.py')
+            .replace(/\\/g, '/')
+            .split('/')
+            .pop()
+            .replace(/[<>:"/\\|?*]/g, '_')
+            .replace(/\s+/g, '_')
+            .replace(/^_+|_+$/g, '');
+        if (!base) base = 'shared_protocol.py';
+        if (!base.endsWith('.py')) base += '.py';
+        if (!base.startsWith('prot_') && !/^\d+_prot_/.test(base)) base = `prot_${base}`;
+        return `user/prot/${base}`;
+    }
+
+    async _validateSharedProtocolCode(code) {
+        if (!this.extractTomlBlockFromCode(code)) throw new Error('Shared protocol has no PEP 723 script block.');
+        const parsed = await this.parseCodeMetadata(code);
+        if (parsed?.anyfield?.kind !== 'protocol') {
+            throw new Error('Shared script is not an AnyField protocol.');
+        }
+        const fn = parsed?.anyfield?.prot_func;
+        if (!fn || !String(fn).startsWith('prot_')) {
+            throw new Error('Shared protocol entry must point to a prot_* function.');
+        }
+        return { parsed, functionName: fn };
+    }
+
+    async _makeProtocolSharePayload(fileName, code) {
+        await this._validateSharedProtocolCode(code);
+        const payload = {
+            v: 1,
+            kind: 'anyfield.protocol',
+            filename: String(fileName || 'shared_protocol.py').replace(/\\/g, '/').split('/').pop(),
+            code,
+        };
+        const gz = await this._gzipString(JSON.stringify(payload));
+        return this._bytesToBase64Url(gz);
+    }
+
+    async importSharedProtocolPayload(encoded) {
+        if (!encoded) return null;
+        const payloadText = await this._gunzipString(this._base64UrlToBytes(encoded));
+        const payload = JSON.parse(payloadText);
+        if (payload?.v !== 1 || payload?.kind !== 'anyfield.protocol' || typeof payload.code !== 'string') {
+            throw new Error('Unsupported shared protocol payload.');
+        }
+        const { functionName } = await this._validateSharedProtocolCode(payload.code);
+        const finalFileName = this._sanitizeProtocolShareFilename(payload.filename);
+        const tomlConfig = await this.parseCodeMetadata(payload.code);
+        const source = {
+            name: 'User Protocols',
+            itemKind: 'protocol',
+            type: 'file',
+            path: finalFileName,
+            fullModulePath: finalFileName.replace(/\.py$/i, '').replace(/\//g, '.'),
+            description: 'Shared Protocol Capsule',
+            isUserEdited: true,
+            displayName: this.protocolDisplayNameFromPath(finalFileName),
+            dependencies: tomlConfig.dependencies || [],
+            micropip_no_deps: tomlConfig.micropip_no_deps || [],
+            anyfield: tomlConfig.anyfield || {},
+        };
+        await this.storeUserFile(finalFileName, payload.code);
+        const sourceIndex = this.config.sources.findIndex((s) => this.getSourcePath(s) === finalFileName);
+        if (sourceIndex >= 0) this.config.sources[sourceIndex] = source;
+        else this.config.sources.push(source);
+        await this.parseFile(finalFileName, payload.code, source);
+        this._sharedProtocolSelection = { fileName: finalFileName, functionName };
+        return this._sharedProtocolSelection;
+    }
+
+    getSharedProtocolPayloadFromLocation() {
+        const hash = String(window.location.hash || '').replace(/^#/, '');
+        const hashParams = new URLSearchParams(hash);
+        return hashParams.get('protocol_gz') || hashParams.get('compressed_prot') || '';
+    }
+
+    async importSharedProtocolFromLocation() {
+        const encoded = this.getSharedProtocolPayloadFromLocation();
+        if (!encoded) return false;
+        try {
+            await this.importSharedProtocolPayload(encoded);
+            this.showStatus('Imported shared protocol', 'success');
+            return true;
+        } catch (e) {
+            console.error('Could not import shared protocol:', e);
+            this.showStatus(`Could not import shared protocol: ${e.message}`, 'error');
+            return false;
+        }
+    }
+
+    buildCleanShareBaseUrl({ preservePro = true } = {}) {
+        const url = new URL(window.location.href);
+        const pro = url.searchParams.get('pro');
+        url.search = '';
+        url.hash = '';
+        if (preservePro && pro) url.searchParams.set('pro', pro);
+        return url;
+    }
+
+    async shareCurrentProtocol() {
+        if (!this.selectedSequence) {
+            this.showStatus('Select a sequence or protocol before sharing', 'error');
+            return null;
+        }
+        try {
+            // Capsule sharing always snapshots the current params pane first. This avoids
+            // sharing stale code when the user edited parameters without saving a protocol.
+            const protocolPath = await this.saveProtocolSnapshot(true);
+            if (!protocolPath) {
+                this.showStatus('Could not create protocol capsule for sharing', 'error');
+                return null;
+            }
+            const code = this.sequences[protocolPath]?.code;
+            if (!code) throw new Error(`No protocol code found for ${protocolPath}`);
+            const encoded = await this._makeProtocolSharePayload(protocolPath, code);
+            const url = this.buildCleanShareBaseUrl();
+            const hashParams = new URLSearchParams();
+            hashParams.set('protocol_gz', encoded);
+            url.hash = hashParams.toString();
+            const shareUrl = url.toString();
+            if (navigator.clipboard?.writeText) {
+                await navigator.clipboard.writeText(shareUrl);
+                this.showStatus('Protocol share link copied to clipboard', 'success');
+            } else {
+                window.prompt('Copy protocol share link:', shareUrl);
+                this.showStatus('Protocol share link ready', 'success');
+            }
+            return shareUrl;
+        } catch (e) {
+            console.error('Could not share protocol:', e);
+            this.showStatus(`Could not share protocol: ${e.message}`, 'error');
+            return null;
+        }
+    }
+
+    _parseListParamValue(value) {
+        if (Array.isArray(value)) return value;
+        const s = String(value ?? '').trim();
+        if (!s) return [];
+        const npMatch = s.match(/^np\.array\(([\s\S]*)\)$/);
+        const body = npMatch ? npMatch[1].trim() : s;
+        try {
+            return JSON.parse(body);
+        } catch (_) {
+            return body;
+        }
+    }
+
+    _normalizeParamValueForShare(param, value) {
+        if (value == null) return null;
+        if (param.type === 'bool') return Boolean(value);
+        if (param.type === 'int' || param.type === 'float') {
+            const n = Number(value);
+            return Number.isFinite(n) ? n : String(value).trim();
+        }
+        if (param.type === 'list' || param.type === 'ndarray') {
+            return this._parseListParamValue(value);
+        }
+        if (param.type === 'str' || param.type === 'file' || param.type === 'url') {
+            return String(value);
+        }
+        return Array.isArray(value) ? value : String(value).trim();
+    }
+
+    _readCurrentParamValue(param) {
+        const root = this.paramsTarget || this.container;
+        const input = root?.querySelector(`#seq-param-${param.name}`);
+        if (!input) return { hasValue: false, value: null };
+        if (param.type === 'bool') return { hasValue: true, value: input.checked };
+        const raw = String(input.value ?? '').trim();
+        if (raw === '') return { hasValue: false, value: null };
+        return { hasValue: true, value: raw };
+    }
+
+    _paramShareValueEquals(a, b) {
+        return JSON.stringify(a) === JSON.stringify(b);
+    }
+
+    collectChangedSeqParamsForShare() {
+        const changed = {};
+        for (const param of this.functionParams || []) {
+            const current = this._readCurrentParamValue(param);
+            if (!current.hasValue) continue;
+            const currentNorm = this._normalizeParamValueForShare(param, current.value);
+            const defaultNorm = this._normalizeParamValueForShare(param, param.default);
+            if (!this._paramShareValueEquals(currentNorm, defaultNorm)) {
+                changed[param.name] = currentNorm;
             }
         }
-        if (toLoad.length) {
-            this.renderTree();
+        return changed;
+    }
+
+    _formatSpParamValue(value) {
+        if (Array.isArray(value)) return JSON.stringify(value);
+        if (typeof value === 'boolean') return value ? 'true' : 'false';
+        return String(value);
+    }
+
+    getLightShareTarget(sequence = this.selectedSequence) {
+        if (!sequence) return null;
+        const { fileName, functionName, source } = sequence;
+        if (!functionName || source?.isUserEdited || source?.itemKind === 'protocol') return null;
+        const path = String(source?.path || fileName || '').replace(/\\/g, '/');
+        if (path.startsWith('user/seq/') || path.startsWith('user/prot/')) return null;
+        const modulePath = String(source?.fullModulePath || source?.module || source?.path || fileName || '')
+            .replace(/\\/g, '/')
+            .replace(/\.py$/i, '');
+        for (const cfg of this.config.sources || []) {
+            if (cfg.type === 'folder') {
+                const pkg = this.getFolderPackagePrefix(cfg);
+                const needle = `${pkg}.scripts.`;
+                const idx = modulePath.indexOf(needle);
+                if (idx < 0) continue;
+                const stem = modulePath.slice(idx + needle.length).split(/[/.]/)[0];
+                if (!stem) continue;
+                return { category: this.getSourceInitNamespace(cfg), stem, functionName };
+            }
+            if (cfg.type === 'module' || cfg.type === 'pyodide_module') {
+                const modPath = String(cfg.path || cfg.name || '').replace(/\.py$/i, '');
+                const needle = `${modPath}.`;
+                const idx = modulePath.indexOf(needle);
+                if (idx < 0) continue;
+                const stem = modulePath.slice(idx + needle.length).split(/[/.]/)[0];
+                if (!stem) continue;
+                return { category: this.getSourceInitNamespace(cfg), stem, functionName };
+            }
         }
+        return null;
+    }
+
+    buildLightShareUrl(target) {
+        const url = this.buildCleanShareBaseUrl();
+        url.searchParams.set('s_category', target.category);
+        url.searchParams.set('s_file', target.stem);
+        url.searchParams.set('s_func', target.functionName);
+        const changedParams = this.collectChangedSeqParamsForShare();
+        for (const [name, value] of Object.entries(changedParams)) {
+            url.searchParams.set(`sp_${name}`, this._formatSpParamValue(value));
+        }
+        return url.toString();
+    }
+
+    async shareCurrentLightLink() {
+        const target = this.getLightShareTarget();
+        if (!target) {
+            this.showStatus('Light sharing is only available for configured sources', 'error');
+            return null;
+        }
+        const shareUrl = this.buildLightShareUrl(target);
+        try {
+            if (navigator.clipboard?.writeText) {
+                await navigator.clipboard.writeText(shareUrl);
+                this.showStatus('Source share link copied to clipboard', 'success');
+            } else {
+                window.prompt('Copy source share link:', shareUrl);
+                this.showStatus('Source share link ready', 'success');
+            }
+        } catch (e) {
+            console.error('Could not copy source share link:', e);
+            window.prompt('Copy source share link:', shareUrl);
+        }
+        return shareUrl;
     }
 
     /** Ensure a .py file exists on the VFS (absolute paths) before AST/noexec or import. */
@@ -703,6 +1054,7 @@ plt.rcParams['font.size'] = 8`;
     }
     
     async loadSequences() {
+        this.config.sources = this.dedupeSources(this.config.sources);
         console.log('Loading sequences from', this.config.sources.length, 'sources...');
         this.showStatus('Loading sequences...', 'info');
         this.sequences = {};
@@ -711,13 +1063,12 @@ plt.rcParams['font.size'] = 8`;
         if (this.config.pyodide) {
             const allDeps = [];
             for (const source of this.config.sources) {
-                if (source.dependencies && source.dependencies.length > 0) {
-                    for (const d of source.dependencies) allDeps.push(d);
-                }
+                for (const d of this.normalizeSourceDeps(source)) allDeps.push(d);
             }
             const seen = new Set();
             const uniqueDeps = allDeps.filter((d) => {
-                const pkgName = typeof d === 'string' ? d.split(/[>=<!=]/)[0].trim() : (d.name || d);
+                const spec = typeof d === 'string' ? d : (d.name || '');
+                const pkgName = String(spec).split(/[>=<!~]/)[0].trim();
                 if (seen.has(pkgName)) return false;
                 seen.add(pkgName);
                 return true;
@@ -740,6 +1091,7 @@ plt.rcParams['font.size'] = 8`;
         });
         
         await Promise.all(loadPromises);
+        await this.importSharedProtocolFromLocation();
         
         // Preload built-in epi_se_rs.seq unless ?seq_url= will supply the interpreter file
         if (this.config.pyodide && !(this.config.initialSeqUrl || '').trim()) {
@@ -937,12 +1289,12 @@ plt.rcParams['font.size'] = 8`;
 
     /** @param {object} source - source object */
     getSourcePath(source) {
-        return source?.path ?? source?.seq_func_file ?? '';
+        return source?.path ?? this.parseProtocolBase(source).module ?? '';
     }
 
     /** @param {object} source - source object. Returns seq_func (call target). */
     getSourceBaseSequence(source) {
-        return source?.seq_func ?? '';
+        return this.parseProtocolBase(source).func || '';
     }
 
     /**
@@ -1011,6 +1363,23 @@ plt.rcParams['font.size'] = 8`;
         return stem ? `${n}. ${stem}` : String(n);
     }
 
+    /** User label for a saved protocol path (without its scan-number prefix). */
+    protocolUserLabelFromPath(protocolPath) {
+        const n = this.parseProtocolScanNumber(protocolPath);
+        if (n == null) return this.protocolSeqStemFromPath(protocolPath).replace(/^prot_/, '');
+        const fromQueue = this._resolveScanUserLabel(n);
+        if (fromQueue) return fromQueue;
+        return this.protocolSeqStemFromPath(protocolPath).replace(/^prot_/, '');
+    }
+
+    /** Default scan name when deriving a new protocol from an existing numbered protocol (e.g. `3.gre`). */
+    protocolDerivedDefaultName(protocolPath) {
+        const parentScan = this.parseProtocolScanNumber(protocolPath);
+        if (parentScan == null) return null;
+        const label = this.protocolUserLabelFromPath(protocolPath);
+        return label ? `${parentScan}.${label}` : String(parentScan);
+    }
+
     /** Normalize a sequences key to a VFS-style path (user/prot/1_prot_gre.py). */
     _sequenceKeyToPath(key) {
         if (!key) return '';
@@ -1052,21 +1421,19 @@ plt.rcParams['font.size'] = 8`;
 
         const lines = [];
         const src = fileData.source || {};
-        const seqFunc = src.seq_func || '';
-        const seqFile = src.seq_func_file || '';
-        if (seqFunc || seqFile) {
-            const seqLabel = this.getProtocolDisplayNameFromSeqFuncFile(seqFile) || seqFunc || seqFile;
+        const anyfield = src.anyfield || this.extractAnyfieldJsonFromCode(code) || {};
+        const base = this.parseProtocolBase(src);
+        if (base.func || base.module) {
+            const seqLabel = this.getProtocolDisplayNameFromSeqFuncFile(base.module) || base.func || base.module;
             lines.push(`Sequence: ${seqLabel}`);
-            if (seqFile && seqFile !== seqLabel) lines.push(`  ${seqFile}`);
+            if (base.module && base.module !== seqLabel) lines.push(`  ${base.module}`);
         }
         lines.push(`Protocol: ${norm}`);
 
-        const tomlInner = this.extractTomlBlockFromCode(code);
-        let simReconLines = [];
-        if (tomlInner) {
-            const { simulation, recon } = this.parseSimulationReconFromTomlSync(tomlInner);
-            simReconLines = this.formatSimulationReconTooltipLines(simulation, recon);
-        }
+        const simReconLines = this.formatSimulationReconTooltipLines(
+            anyfield.simulation || {},
+            anyfield.recon || {},
+        );
         const pathLabel = this.protocolDisplayNameFromPath(norm);
         if (pathLabel) {
             lines.push(`Name: ${pathLabel}`);
@@ -1108,7 +1475,7 @@ plt.rcParams['font.size'] = 8`;
      * over source.path (package only e.g. mrseq.scripts) so we show "radial_flash" not "scripts".
      */
     getPathForDisplayName(fileName, source) {
-        const base = source?.seq_func_file || source?.path || fileName || '';
+        const base = this.parseProtocolBase(source).module || source?.path || fileName || '';
         if (fileName && base && typeof base === 'string' && base.includes('.') && !base.includes('/') &&
             fileName.startsWith(base) && fileName.length > base.length) {
             return fileName;
@@ -1223,13 +1590,74 @@ result
     }
 
     /** Default initial selection when ?init_prot= is absent (built-in GRE). */
-    static DEFAULT_INIT_PROT = 'builtin/gre_seq:seq_gre';
+    static DEFAULT_INIT_PROT = 'anyseq/gre_seq:seq_gre';
 
     /**
      * Parse init_prot token: namespace/file_stem:function_name
      * @param {string} token
      * @returns {{ namespace: string, fileStem: string, functionName: string } | null}
      */
+    sanitizeSourceKey(name) {
+        return String(name || 'folder').replace(/[^a-zA-Z0-9_.-]/g, '_').replace(/^_+|_+$/g, '') || 'folder';
+    }
+
+    /** URL / init_prot namespace for a configured source (folder name or module first segment). */
+    getSourceInitNamespace(source) {
+        if (!source) return '';
+        if (source.type === 'folder') return this.sanitizeSourceKey(source.name || source.path);
+        if (source.type === 'module' || source.type === 'pyodide_module') {
+            const path = String(source.path || source.name || '');
+            return path.split('.')[0] || this.sanitizeSourceKey(source.name);
+        }
+        return '';
+    }
+
+    getInitProtNamespaces() {
+        const out = new Set();
+        for (const s of this.config.sources || []) {
+            const ns = this.getSourceInitNamespace(s);
+            if (ns) out.add(ns.toLowerCase());
+        }
+        return [...out];
+    }
+
+    findConfiguredSourceByNamespace(namespace) {
+        const ns = String(namespace || '').toLowerCase();
+        return (this.config.sources || []).find((s) => this.getSourceInitNamespace(s).toLowerCase() === ns) || null;
+    }
+
+    /** Python package prefix for a folder source: sources.toml name → e.g. anyseq, pypulseq_examples. */
+    getFolderPackagePrefix(source) {
+        return this.sanitizeSourceKey(source?.name || source?.path || 'folder');
+    }
+
+    /** Strip PEP 723, notebook guard, and AnyField metadata blocks from upstream script text. */
+    stripAnyfieldFileWrappers(code) {
+        return String(code || '')
+            .replace(/^#.*coding[:=].*\n/i, '')
+            .replace(/^# \/\/\/ script[\s\S]*?^# \/\/\/\s*\n*/m, '')
+            .replace(/^# --- Notebook setup[\s\S]*?# --- Notebook setup end[^\n]*\n*/m, '')
+            .replace(/^# --- AnyField metadata begin ---[\s\S]*?# --- AnyField metadata end ---\s*\n*/m, '')
+            .trim();
+    }
+
+    /**
+     * Replace upstream wrappers with registry PEP install headers from sources.toml.
+     * Used for all folder [[sources]] loads (loadFolder).
+     * @param {string} rawCode
+     * @param {object} registrySource folder [[sources]] entry
+     * @param {string} [fileName] optional file name for preamble generation
+     */
+    materializeFolderScript(rawCode, registrySource, fileName = '') {
+        const body = this.stripAnyfieldFileWrappers(rawCode);
+        const installSource = {
+            dependencies: Array.isArray(registrySource?.dependencies) ? registrySource.dependencies.slice() : [],
+            micropip_no_deps: Array.isArray(registrySource?.micropip_no_deps) ? registrySource.micropip_no_deps.slice() : [],
+        };
+        const { prefix } = this.buildInstallableFileShell(installSource);
+        return (prefix + (body ? `${body}\n` : '')).trimEnd() + '\n';
+    }
+
     parseInitProt(token) {
         const t = String(token || '').trim();
         const colon = t.lastIndexOf(':');
@@ -1241,92 +1669,31 @@ result
         const namespace = left.slice(0, slash).trim().toLowerCase();
         const fileStem = left.slice(slash + 1).trim();
         if (!namespace || !fileStem || !functionName) return null;
-        const allowed = ['builtin', 'mrseq', 'pypulseq'];
+        const allowed = this.getInitProtNamespaces();
         if (!allowed.includes(namespace)) {
-            console.warn('init_prot: unsupported namespace:', namespace);
+            console.warn('init_prot: unsupported namespace:', namespace, '(configured:', allowed.join(', '), ')');
             return null;
         }
         return { namespace, fileStem, functionName };
     }
 
     /**
-     * Package prefix for GitHub folder sources (same rule as loadFolder: folderKey + '_examples').
-     * Uses the folder source named "pypulseq" from config when present.
-     * @returns {string}
-     */
-    getPypulseqExamplesPackagePrefix() {
-        for (const s of this.config.sources || []) {
-            if (s.type === 'folder' && s.name) {
-                const folderKey = (s.name || 'folder').replace(/[^a-zA-Z0-9_.-]/g, '_').replace(/^_+|_+$/g, '') || 'folder';
-                if (String(s.name).toLowerCase() === 'pypulseq' || folderKey === 'pypulseq') {
-                    return `${folderKey}_examples`;
-                }
-            }
-        }
-        return 'pypulseq_examples';
-    }
-
-    /**
      * Map init_prot namespace + file stem to this.sequences key.
+     * Folder sources: <name>.scripts.<stem>. Module sources: <path>.<stem>.
      * @param {string} namespace
      * @param {string} fileStem
      * @returns {string|null}
      */
     resolveInitProtToSequenceKey(namespace, fileStem) {
-        const ns = String(namespace).toLowerCase();
-        if (ns === 'builtin') {
-            const norm = (k) => String(k || '').replace(/\\/g, '/');
-            const key = `built_in_seq/${fileStem}.py`;
-            if (this.sequences[key]) return key;
-            const keys = Object.keys(this.sequences);
-            const byExactStem = keys.find((k) => norm(k) === norm(key));
-            if (byExactStem) return byExactStem;
-            const byStemSuffix = keys.find((k) => norm(k).endsWith(`/${fileStem}.py`));
-            if (byStemSuffix) return byStemSuffix;
-            const fuzzy = keys.find((k) => norm(k).includes(`${fileStem}.py`) && norm(k).includes('built_in'));
-            if (fuzzy) return fuzzy;
-            return null;
-        }
-        if (ns === 'mrseq') {
-            const norm = (k) => String(k || '').replace(/\\/g, '/');
-            const key = `mrseq.scripts.${fileStem}.py`;
-            if (this.sequences[key]) return key;
-            const keys = Object.keys(this.sequences);
-            const found = keys.find((k) => {
-                const n = norm(k);
-                return (
-                    n === norm(key) ||
-                    n.replace(/\.py$/i, '') === `mrseq.scripts.${fileStem}` ||
-                    (n.includes('mrseq.scripts') && n.endsWith(`.${fileStem}.py`)) ||
-                    (n === `${fileStem}.py` && String(this.sequences[k]?.source?.fullModulePath || this.sequences[k]?.source?.path || '').includes('mrseq'))
-                );
-            });
-            if (!found) {
-                const mrseqKeys = keys.filter((k) => {
-                    const n = norm(k);
-                    if (n.includes('mrseq.scripts')) return true;
-                    const src = this.sequences[k]?.source;
-                    return String(src?.fullModulePath || src?.path || '').includes('mrseq');
-                });
-                const stems = mrseqKeys.map((k) => {
-                    const m = norm(k).match(/mrseq\.scripts\.(.+?)(?:\.py)?$/i);
-                    return m ? m[1] : norm(k).replace(/\.py$/i, '');
-                });
-                console.warn(
-                    '[init_prot] mrseq: no module mrseq.scripts.' + fileStem + ' — use file stem from the tree (e.g. radial_flash, not radial_gre). Loaded stems sample:',
-                    stems.slice(0, 20)
-                );
-            }
-            return found || null;
-        }
-        if (ns === 'pypulseq') {
-            const pkg = this.getPypulseqExamplesPackagePrefix();
-            const norm = (k) => String(k || '').replace(/\\/g, '/');
+        const source = this.findConfiguredSourceByNamespace(namespace);
+        if (!source) return null;
+        const norm = (k) => String(k || '').replace(/\\/g, '/');
+        if (source.type === 'folder') {
+            const pkg = this.getFolderPackagePrefix(source);
             const key = `${pkg}.scripts.${fileStem}`;
             if (this.sequences[key]) return key;
             const suffix = `.scripts.${fileStem}`;
-            const keys = Object.keys(this.sequences);
-            const found = keys.find((k) => {
+            return Object.keys(this.sequences).find((k) => {
                 const n = norm(k);
                 return (
                     n === norm(key) ||
@@ -1334,7 +1701,38 @@ result
                     n.endsWith(`${suffix}.py`) ||
                     (n.includes('.scripts.') && n.split('.scripts.').pop()?.replace(/\.py$/i, '') === fileStem)
                 );
+            }) || null;
+        }
+        if (source.type === 'module' || source.type === 'pyodide_module') {
+            const modPath = String(source.path || source.name || '').replace(/\.py$/i, '');
+            const key = `${modPath}.${fileStem}`;
+            if (this.sequences[key]) return key;
+            const keys = Object.keys(this.sequences);
+            const found = keys.find((k) => {
+                const n = norm(k);
+                return (
+                    n === norm(key) ||
+                    n.replace(/\.py$/i, '') === key ||
+                    (n.includes(modPath) && n.endsWith(`.${fileStem}.py`)) ||
+                    (n === `${fileStem}.py` && String(this.sequences[k]?.source?.fullModulePath || this.sequences[k]?.source?.path || '').includes(modPath))
+                );
             });
+            if (!found) {
+                const modKeys = keys.filter((k) => {
+                    const n = norm(k);
+                    if (n.includes(modPath)) return true;
+                    const src = this.sequences[k]?.source;
+                    return String(src?.fullModulePath || src?.path || '').includes(modPath);
+                });
+                const stems = modKeys.map((k) => {
+                    const m = norm(k).match(new RegExp(`${modPath.replace(/\./g, '\\.')}\\.(.+?)(?:\\.py)?$`, 'i'));
+                    return m ? m[1] : norm(k).replace(/\.py$/i, '');
+                });
+                console.warn(
+                    `[init_prot] ${namespace}: no module ${modPath}.${fileStem} — loaded stems sample:`,
+                    stems.slice(0, 20)
+                );
+            }
             return found || null;
         }
         return null;
@@ -1386,6 +1784,13 @@ result
      * After loadSequences: apply ?init_prot= or default built-in GRE; fallback to first item.
      */
     async selectInitialSequence() {
+        if (this._sharedProtocolSelection?.fileName && this._sharedProtocolSelection?.functionName) {
+            const { fileName, functionName } = this._sharedProtocolSelection;
+            if (await this.selectSequenceByFileAndFunction(fileName, functionName)) {
+                console.log('[share] selected imported protocol', this._sharedProtocolSelection);
+                return;
+            }
+        }
         const raw = this.config.initialProt;
         const useExplicit = raw != null && String(raw).trim() !== '';
         const token = useExplicit ? String(raw).trim() : SequenceExplorer.DEFAULT_INIT_PROT;
@@ -1478,6 +1883,26 @@ result
         }
     }
     
+    /**
+     * Normalize a source's declared dependencies into installDependencies() input.
+     * PEP 508 strings pass through; any package whose name is listed in the source's
+     * `micropip_no_deps` is wrapped as { name: spec, deps: false } so micropip installs
+     * it without resolving its dependencies (keeps the version pin). Legacy dict deps
+     * pass through unchanged.
+     * @param {{dependencies?: Array, micropip_no_deps?: string[]}} source
+     * @returns {Array<string|{name:string,deps:false}>}
+     */
+    normalizeSourceDeps(source) {
+        const deps = (source && source.dependencies) || [];
+        const noDeps = new Set(((source && source.micropip_no_deps) || []).map((n) => String(n).trim()));
+        return deps.map((d) => {
+            if (d && typeof d === 'object') return d;
+            const spec = String(d);
+            const name = spec.split(/[>=<!~]/)[0].trim();
+            return noDeps.has(name) ? { name: spec, deps: false } : spec;
+        });
+    }
+
     async installDependencies(dependencies) {
         if (!this.config.pyodide) {
             console.warn('Pyodide not available, cannot install dependencies');
@@ -1604,6 +2029,21 @@ await micropip.install('${pkgSpec}', deps=False)
     }
     
     async loadLocalFile(source) {
+        const path = this.normalizeUserArtifactPath(source.path || source.name || '');
+        if (this.isUserArtifactPath(path)) {
+            const code = await this.getUserArtifactCode(path);
+            if (!code) {
+                throw new Error(`User artifact not found in browser storage: ${path}`);
+            }
+            const fullModulePath = source.fullModulePath || path.replace(/\.py$/i, '').replace(/\//g, '.');
+            const sourceWithModule = { ...source, path, fullModulePath, isUserEdited: true };
+            if (this.config.pyodide && path.endsWith('.py')) {
+                await this.mirrorLocalPythonModuleToPyodide(path, code);
+            }
+            await this.parseFile(path, code, sourceWithModule);
+            return;
+        }
+
         // Check if this is a user-edited file stored in Python memory
         if (source.isUserEdited && this.config.pyodide) {
             try {
@@ -1613,18 +2053,17 @@ import json
 
 if hasattr(sys.modules['__main__'], '_user_edited_files'):
     files = sys.modules['__main__']._user_edited_files
-    code = files.get('${source.path}', '')
+    code = files.get(${JSON.stringify(path)}, '')
     json.dumps(code)
 else:
     json.dumps('')
 `);
                 const fileCode = JSON.parse(code);
                 if (fileCode) {
-                    const path = source.path || source.name;
                     let sourceWithModule = source;
-                    if (path && (path.startsWith('user/seq/') || path.startsWith('user/prot/'))) {
+                    if (path && path.endsWith('.py')) {
                         const fullModulePath = path.replace(/\.py$/i, '').replace(/\//g, '.');
-                        sourceWithModule = { ...source, fullModulePath };
+                        sourceWithModule = { ...source, path, fullModulePath };
                     }
                     if (this.config.pyodide && path && path.endsWith('.py')) {
                         await this.mirrorLocalPythonModuleToPyodide(path, fileCode);
@@ -1642,11 +2081,10 @@ else:
         if (!response.ok) throw new Error(`Failed to fetch ${source.path}`);
         const code = await response.text();
         // Mirror local Python files into Pyodide FS so module import works for parameter extraction/execution.
-        if (this.config.pyodide && source.path && source.path.endsWith('.py')) {
-            await this.mirrorLocalPythonModuleToPyodide(source.path, code);
-            await this.mirrorRelativeLocalImports(source.path, code, new Set([source.path]));
+        if (this.config.pyodide && path && path.endsWith('.py')) {
+            await this.mirrorLocalPythonModuleToPyodide(path, code);
+            await this.mirrorRelativeLocalImports(path, code, new Set([path]));
         }
-        const path = source.path || source.name;
         let sourceToPass = source;
         if (path && path.endsWith('.py')) {
             const fullModulePath = path.replace(/\.py$/i, '').replace(/\//g, '.');
@@ -1862,8 +2300,7 @@ with open(${JSON.stringify(vfsPath)}, 'w', encoding='utf-8') as f:
         }
         const files = await response.json();
         
-        const folderKey = (source.name || source.path || 'folder').replace(/[^a-zA-Z0-9_.-]/g, '_').replace(/^_+|_+$/g, '') || 'folder';
-        const modulePackageName = folderKey + '_examples';
+        const modulePackageName = this.getFolderPackagePrefix(source);
         const moduleScriptsDir = `/${modulePackageName}/scripts`;
         if (this.config.pyodide) {
             await this.config.pyodide.runPythonAsync(`
@@ -1904,7 +2341,8 @@ for d in ('/${modulePackageName}', '${moduleScriptsDir}'):
             const entries = fetched.map(({ file, code }) => {
                 const fullModulePath = `${modulePackageName}.scripts.${file.name.replace(/\.py$/i, '')}`;
                 const vfsPath = `${moduleScriptsDir}/${file.name}`;
-                return { file, code, fullModulePath, vfsPath };
+                const materialized = this.materializeFolderScript(code, source, file.name);
+                return { file, code: materialized, fullModulePath, vfsPath };
             });
 
             if (this.config.pyodide) {
@@ -1918,7 +2356,7 @@ for d in ('/${modulePackageName}', '${moduleScriptsDir}'):
                 await this.ensureSourceManager();
                 const batchResult = await this.config.pyodide.runPythonAsync(`
 import json, os
-from seq_source_manager import SourceManager
+from seq_source_manager import SourceManager, parse_script_metadata
 
 _code_map = ${JSON.stringify(codeMap)}
 _vfs_map  = ${JSON.stringify(vfsPathMap)}
@@ -1931,30 +2369,65 @@ for _mod, _vp in _vfs_map.items():
 _manager = SourceManager()
 _results = {}
 for _mod, _code in _code_map.items():
-    _results[_mod] = _manager.parse_file_functions(_code, filter_seq_prefix=False)
+    _results[_mod] = {
+        'functions': _manager.parse_file_functions(_code, filter_seq_prefix=False),
+        'metadata': json.loads(parse_script_metadata(_code)),
+    }
 json.dumps(_results)
 `);
                 const allParsed = JSON.parse(batchResult);
+                const folderDeps = [];
                 for (const { file, code, fullModulePath } of entries) {
-                    const functions = allParsed[fullModulePath] || [];
+                    const parsed = allParsed[fullModulePath] || {};
+                    const functions = parsed.functions || [];
+                    const fileSource = {
+                        ...source,
+                        path: fullModulePath,
+                        filePath: file.path,
+                        fullModulePath,
+                        origin: file.html_url || file.download_url || file.path,
+                        downloadUrl: file.download_url || '',
+                        dependencies: [...(source.dependencies || [])],
+                        micropip_no_deps: [...(source.micropip_no_deps || [])],
+                        anyfield: {},
+                    };
+                    for (const d of this.normalizeSourceDeps(fileSource)) folderDeps.push(d);
                     if (!this.sequences[fullModulePath]) {
                         this.sequences[fullModulePath] = {
                             functions: [],
-                            source: { ...source, path: fullModulePath, filePath: file.path, fullModulePath },
+                            source: fileSource,
                             code,
                         };
                     } else {
+                        this.sequences[fullModulePath].functions = [];
                         this.sequences[fullModulePath].code = code;
+                        this.sequences[fullModulePath].source = fileSource;
                     }
                     for (const func of functions) {
                         this.sequences[fullModulePath].functions.push({
                             name: func.name,
                             doc: func.doc || '',
-                            source: { ...source, path: fullModulePath, filePath: file.path, fullModulePath },
+                            source: fileSource,
                         });
                     }
                     console.log(`Parsed ${functions.length} functions from ${fullModulePath}`);
                     loadedCount++;
+                }
+                // Install per-file deps from registry (folder sources materialize PEP from sources.toml).
+                if (folderDeps.length > 0) {
+                    const seenDep = new Set();
+                    const uniqFolderDeps = folderDeps.filter((d) => {
+                        const spec = typeof d === 'string' ? d : (d.name || '');
+                        const nm = String(spec).split(/[>=<!~]/)[0].trim();
+                        if (seenDep.has(nm)) return false;
+                        seenDep.add(nm);
+                        return true;
+                    });
+                    try {
+                        await this.installDependencies(uniqFolderDeps);
+                    } catch (e) {
+                        console.warn(`Failed installing deps for folder "${source.name || source.path}":`, e);
+                    }
                 }
             } else {
                 // No pyodide: fall back to JS-side parsing is unavailable; just register stubs
@@ -1962,7 +2435,7 @@ json.dumps(_results)
                     if (!this.sequences[fullModulePath]) {
                         this.sequences[fullModulePath] = {
                             functions: [],
-                            source: { ...source, path: fullModulePath, filePath: file.path, fullModulePath },
+                            source: { ...source, path: fullModulePath, filePath: file.path, fullModulePath, origin: file.html_url || file.download_url || file.path, downloadUrl: file.download_url || '' },
                             code,
                         };
                     }
@@ -2022,6 +2495,9 @@ json.dumps(all_functions)
                 
                 if (!this.sequences[fileName]) {
                     this.sequences[fileName] = { functions: [], source: { ...source, path: fullModulePath, moduleName: moduleName, fullModulePath: fullModulePath } };
+                } else {
+                    this.sequences[fileName].functions = [];
+                    this.sequences[fileName].source = { ...source, path: fullModulePath, moduleName: moduleName, fullModulePath: fullModulePath };
                 }
                 
                 for (const func of functions) {
@@ -2081,6 +2557,9 @@ get_functions_from_module('${modulePath}', '${folderPath}')
             const fileName = source.name || source.path || modulePath;
             if (!this.sequences[fileName]) {
                 this.sequences[fileName] = { functions: [], source: source };
+            } else {
+                this.sequences[fileName].functions = [];
+                this.sequences[fileName].source = source;
             }
             
             for (const func of functions) {
@@ -2124,26 +2603,37 @@ json.dumps(functions)
             throw new Error(`Failed to parse ${fileName}: ${err.message}`);
         }
         const functions = JSON.parse(result);
-        // For protocol files, enrich source with base sequence (seq_func_file, seq_func) from TOML
-        // so that scanning the protocol again creates a new protocol that calls the same base (e.g. built-in)
         let sourceToStore = source;
-        if (fileName.startsWith('user/prot/') && typeof code === 'string') {
-            const tomlMatch = code.match(/_source_config_toml = """([\s\S]*?)"""/);
-            if (tomlMatch) {
-                try {
-                    const tomlConfig = await this.parseTOMLConfig(tomlMatch[1]);
-                    const meta = tomlConfig.metadata || {};
-                    if (meta.kind === 'protocol' && (meta.seq_func_file || meta.seq_func)) {
-                        sourceToStore = { ...source, seq_func_file: meta.seq_func_file || source?.seq_func_file, seq_func: meta.seq_func || source?.seq_func };
-                    }
-                    const displayName = source?.displayName
-                        || this.protocolDisplayNameFromPath(fileName);
-                    if (displayName) {
-                        sourceToStore = { ...sourceToStore, displayName };
-                    }
-                } catch (e) {
-                    // ignore TOML parse errors
+        const isProtocolPath = String(fileName).replace(/\\/g, '/').startsWith('user/prot/');
+        if (isProtocolPath && typeof code === 'string') {
+            const parsedConfig = await this.parseScriptMetadata(code);
+            if (!parsedConfig.anyfield?.prot_func) {
+                console.warn(`Protocol ${fileName} is missing marked _anyfield_json with prot_func`);
+            }
+            sourceToStore = {
+                ...source,
+                itemKind: 'protocol',
+                anyfield: parsedConfig.anyfield || {},
+                dependencies: parsedConfig.dependencies || source?.dependencies || [],
+                micropip_no_deps: parsedConfig.micropip_no_deps || source?.micropip_no_deps || [],
+            };
+            const displayName = source?.displayName || this.protocolDisplayNameFromPath(fileName);
+            if (displayName) {
+                sourceToStore = { ...sourceToStore, displayName };
+            }
+        } else if (typeof code === 'string') {
+            try {
+                const parsedConfig = await this.parseScriptMetadata(code);
+                if (parsedConfig.anyfield && Object.keys(parsedConfig.anyfield).length) {
+                    sourceToStore = {
+                        ...source,
+                        anyfield: parsedConfig.anyfield,
+                        dependencies: parsedConfig.dependencies || source?.dependencies || [],
+                        micropip_no_deps: parsedConfig.micropip_no_deps || source?.micropip_no_deps || [],
+                    };
                 }
+            } catch (e) {
+                // optional metadata for non-protocol files
             }
         }
         if (!this.sequences[fileName]) {
@@ -2153,11 +2643,19 @@ json.dumps(functions)
             this.sequences[fileName].code = code;
             this.sequences[fileName].source = sourceToStore;
         }
-        for (const func of functions) {
+        let functionsToStore = functions;
+        if (isProtocolPath) {
+            const protocolFunc = this.getProtocolProtFunc(sourceToStore);
+            const filtered = protocolFunc
+                ? functions.filter((f) => f.name === protocolFunc)
+                : functions.filter((f) => String(f.name || '').startsWith('prot_'));
+            if (filtered.length) functionsToStore = filtered;
+        }
+        for (const func of functionsToStore) {
             this.sequences[fileName].functions.push({
                 name: func.name,
                 doc: func.doc || '',
-                source: source
+                source: sourceToStore
             });
         }
         console.log(`Parsed ${this.sequences[fileName].functions.length} functions from ${fileName}`);
@@ -2207,12 +2705,18 @@ json.dumps(functions)
             }
             
             // Apply filter: if filter is enabled, only show seq_ or main functions
+            const seenFunctions = new Set();
             const functions = fileData.functions.filter(f => {
                 if (!this.filterSeqPrefix) {
                     return true;
                 } else {
                     return f.name.startsWith('seq_') || f.name.startsWith('prot_') || f.name === 'main';
                 }
+            }).filter((f) => {
+                const key = String(f.name || '');
+                if (!key || seenFunctions.has(key)) return false;
+                seenFunctions.add(key);
+                return true;
             });
             
             if (functions.length > 0) {
@@ -2278,10 +2782,11 @@ json.dumps(functions)
             html += `
                 <div class="seq-source-group">
                     <div class="seq-source-header ${collapsedClass}" data-source="${sourceName}">
-                        <div style="display: flex; align-items: center; gap: 0.5rem; flex: 1;">
+                        <div style="display: flex; align-items: center; gap: 0.5rem; flex: 1; min-width: 0;">
                             <span style="font-weight: 600;">${sourceName}</span>
                             ${typeInfo ? `<span style="font-size: 0.7rem; color: var(--muted); font-style: italic;">${typeInfo}</span>` : ''}
                         </div>
+                        ${sourceName === 'User Protocols' ? `<button type="button" class="seq-source-download-btn" data-action="download-protocols" title="Download all user protocols as .py files" aria-label="Download all user protocols"><i class="bi bi-download" aria-hidden="true"></i></button>` : ''}
                     </div>
                     <div class="seq-source-items ${collapsedClass}" data-source="${sourceName}">
                         ${files.map(({ fileName, functions, source }) => {
@@ -2302,7 +2807,7 @@ json.dumps(functions)
                                         shortFileName = shortFileName.substring(lastDotBeforePy + 1);
                                     }
                                 }
-                                // If key is a full module path (e.g. pypulseq_examples.scripts.foo), show only last segment (file:func)
+                                // If key is a full module path (e.g. pypulseq.scripts.foo), show only last segment (file:func)
                                 // Strip .py first so we don't get "py" as the segment
                                 if (shortFileName.includes('.') && !shortFileName.includes('/') && !shortFileName.includes('\\')) {
                                     const withoutPy = shortFileName.replace(/\.py$/i, '');
@@ -2349,7 +2854,8 @@ json.dumps(functions)
         
         // Event listeners for source headers (collapse/expand)
         treeEl.querySelectorAll('.seq-source-header').forEach(header => {
-            header.addEventListener('click', () => {
+            header.addEventListener('click', (e) => {
+                if (e.target.closest('.seq-source-download-btn')) return;
                 const sourceName = header.dataset.source;
                 const itemsEl = treeEl.querySelector(`.seq-source-items[data-source="${sourceName}"]`);
                 const isCollapsed = header.classList.contains('collapsed');
@@ -2362,6 +2868,13 @@ json.dumps(functions)
                 const collapseStateKey = `seq-tree-collapse-${sourceName}`;
                 const newIsCollapsed = header.classList.contains('collapsed');
                 localStorage.setItem(collapseStateKey, newIsCollapsed ? 'collapsed' : 'expanded');
+            });
+        });
+
+        treeEl.querySelectorAll('.seq-source-download-btn[data-action="download-protocols"]').forEach(btn => {
+            btn.addEventListener('click', (e) => {
+                e.stopPropagation();
+                void this.downloadUserProtocols();
             });
         });
         
@@ -2415,9 +2928,11 @@ json.dumps(functions)
             console.log('Loading parameters for:', { fileName, functionName, sourceType: source.type, source, hasDoc: !!doc, docLength: doc?.length });
             
             // Install only missing dependencies (e.g. for sources added after initial load)
-            if (source.dependencies && source.dependencies.length > 0) {
-                const missing = source.dependencies.filter((pkg) => {
-                    const pkgName = typeof pkg === 'string' ? pkg.split(/[>=<!=]/)[0].trim() : (pkg.name || pkg);
+            const normDeps = this.normalizeSourceDeps(source);
+            if (normDeps.length > 0) {
+                const missing = normDeps.filter((pkg) => {
+                    const spec = typeof pkg === 'string' ? pkg : (pkg.name || '');
+                    const pkgName = String(spec).split(/[>=<!~]/)[0].trim();
                     return !this.installedPackages.has(pkgName);
                 });
                 if (missing.length > 0) {
@@ -2611,6 +3126,15 @@ json.dumps(_result)
         return displayFileName;
     }
 
+    updateShareButtonVisibility() {
+        const root = this.paramsTarget || this.container;
+        if (!root) return;
+        const lightBtn = root.querySelector('#seq-light-share-btn');
+        if (lightBtn) {
+            lightBtn.style.display = this.getLightShareTarget() ? '' : 'none';
+        }
+    }
+
     updateSequenceNameDisplay() {
         const root = this.paramsTarget || this.container;
         const nameElement = root.querySelector('#seq-current-name');
@@ -2619,6 +3143,7 @@ json.dumps(_result)
         if (!this.selectedSequence) {
             nameElement.textContent = '';
             nameElement.title = '';
+            this.updateShareButtonVisibility();
             return;
         }
         
@@ -2645,6 +3170,7 @@ json.dumps(_result)
         funcEl.className = 'seq-file-function-name';
         funcEl.textContent = funcLine;
         nameElement.append(pathEl, funcEl);
+        this.updateShareButtonVisibility();
     }
     
     extractParameterDocs(docstring) {
@@ -3017,14 +3543,6 @@ json.dumps(_result)
         
         paramsControls.appendChild(table);
         this.updateSequenceNameDisplay();
-        
-        // Edit button click handler (hover handled by CSS)
-        const editBtn = root.querySelector('#seq-edit-btn');
-        if (editBtn) {
-            editBtn.onclick = () => this.showCodeEditor();
-            // Remove any existing hover classes to use unified CSS hover
-            editBtn.classList.remove('edit-btn-hover', 'edit-btn-normal');
-        }
     }
     
     async executeFunction(silent = false, protocolName = null) {
@@ -3152,9 +3670,10 @@ json.dumps(_result)
             console.log('Arguments built:', argsDict);
             
             // Install dependencies first if specified
-            if (source.dependencies && source.dependencies.length > 0) {
+            const execDeps = this.normalizeSourceDeps(source);
+            if (execDeps.length > 0) {
                 this.showStatus('Installing dependencies...', 'info');
-                await this.installDependencies(source.dependencies);
+                await this.installDependencies(execDeps);
             }
             
             await this.ensureSourceManager();
@@ -3688,29 +4207,25 @@ plt.rcParams['font.size'] = 8`;
         `;
         
         // Load current sources config
-        // Priority: 1) Current in-memory sources (most up-to-date), 2) sources_config.py file, 3) Default template
+        // Priority: 1) Current in-memory sources (most up-to-date), 2) sources.toml file, 3) Default template
         let currentConfig = '';
-        
-        // First, try to convert current in-memory sources to Python (most current)
-        if (this.config.sources.length > 0) {
-            // Remove 'code' property from sources before serializing (code is stored separately)
-            const sourcesWithoutCode = this.config.sources.map(source => {
-                const { code, ...sourceWithoutCode } = source;
-                return sourceWithoutCode;
-            });
-            const sourcesJson = JSON.stringify(sourcesWithoutCode, null, 2);
-            currentConfig = `# Sources configuration for sequence explorer
-# Define sources as a list of dictionaries
 
-sources = ${sourcesJson.replace(/"([^"]+)":/g, "'$1':").replace(/true/g, 'True').replace(/false/g, 'False').replace(/null/g, 'None')}`;
+        // First, convert current in-memory registry sources to TOML (most current)
+        if (this.config.sources.length > 0) {
+            // Strip runtime-only fields; keep registry shape only.
+            const registrySources = this.config.sources.map((source) => {
+                const { code, fullModulePath, filePath, anyfield, simulation, recon, isUserEdited, ...rest } = source;
+                return rest;
+            });
+            currentConfig = this.sourcesToToml(registrySources);
             console.log('Loaded current in-memory sources into editor');
         } else {
             // If no sources in memory, try to load from file
             try {
-                const response = await fetch(this.resolvePath('sources_config.py?') + Date.now()); // Add cache bust
+                const response = await fetch(this.resolvePath('sources.toml?') + Date.now()); // Add cache bust
                 if (response.ok) {
                     currentConfig = await response.text();
-                    console.log('Loaded sources_config.py from file');
+                    console.log('Loaded sources.toml from file');
                 } else {
                     // File doesn't exist, use default template
                     currentConfig = await this.getDefaultSourcesConfig();
@@ -3746,7 +4261,7 @@ sources = ${sourcesJson.replace(/"([^"]+)":/g, "'$1':").replace(/true/g, 'True')
         const info = document.createElement('div');
         info.innerHTML = `
             <p style="margin: 0 0 1rem 0; color: var(--text-secondary, #aaa); font-size: 0.875rem;">
-                Define sources as a Python list. Each source should have: <code>type</code> ("file" | "folder" | "module"), <code>path</code>, optional <code>name</code> (tree label), <code>seq_func</code> (entry point), <code>dependencies</code>.
+                Define sources as a TOML <code>[[sources]]</code> array. Each source should have: <code>type</code> ("file" | "folder" | "module"), <code>path</code>, optional <code>name</code> (tree label), <code>dependencies</code> (PEP 508 strings), <code>micropip_no_deps</code>.
             </p>
         `;
         
@@ -3842,7 +4357,7 @@ sources = ${sourcesJson.replace(/"([^"]+)":/g, "'$1':").replace(/true/g, 'True')
              try {
                  await this.loadSourcesFromConfig(configCode);
                  modal.remove();
-                 this.showStatus('Sources loaded successfully. Note: To persist, save sources_config.py manually.', 'success');
+                 this.showStatus('Sources loaded successfully. Note: To persist, save sources.toml manually.', 'success');
              } catch (error) {
                  // Show detailed error message
                  const errorMsg = error.message || String(error);
@@ -3992,33 +4507,60 @@ _result if _result else json.dumps({'error': 'No result returned from Python cod
         
         // loadSequences() already renders the tree and runs selectInitialSequence(); do not render again here or the tree is rebuilt and initial selection is lost.
         await this.loadSequences();
-        await this.restorePersistedUserArtifacts();
+        this.clearLegacyUserArtifactStorage();
     }
     
     async getDefaultSourcesConfig() {
-        // Try to load from sources_config.py file
+        // Try to load from sources.toml file
         try {
-            const response = await fetch(this.resolvePath('sources_config.py'));
+            const response = await fetch(this.resolvePath('sources.toml'));
             if (response.ok) {
                 return await response.text();
             }
         } catch (e) {
-            console.warn('Could not load sources_config.py:', e);
+            console.warn('Could not load sources.toml:', e);
         }
-        
-        // Fallback template if file doesn't exist
-        return `# Sources configuration for sequence explorer
-# Each source: type ("file" | "folder" | "module"), path, optional name (tree label), seq_func (entry point), dependencies.
 
-sources = [
-    {
-        'type': 'file',
-        'name': 'Built-in',
-        'path': 'built_in_seq/mr0_rare_2d_seq.py',
-        'seq_func': 'seq_RARE_2D',
-        'dependencies': ['pypulseq']
+        // Fallback template if file doesn't exist
+        return `# Sources configuration for the sequence explorer.
+# Each [[sources]] entry sets: type ("file" | "folder" | "module"), path, optional
+# name, dependencies (PEP 508 strings) and micropip_no_deps.
+
+[[sources]]
+type = "folder"
+name = "anyseq"
+path = "https://github.com/mrx-org/anyfield/tree/main/pypulseq/anyseq"
+`;
     }
-]`;
+
+    /**
+     * Serialize registry sources to sources.toml text ([[sources]] array of tables).
+     * @param {Array<object>} sources
+     * @returns {string}
+     */
+    sourcesToToml(sources) {
+        const esc = (s) => String(s).replace(/\\/g, '\\\\').replace(/"/g, '\\"');
+        const arr = (a) => '[' + a.map((x) => `"${esc(x)}"`).join(', ') + ']';
+        const lines = ['# Sources configuration for the sequence explorer.', ''];
+        for (const s of sources || []) {
+            lines.push('[[sources]]');
+            if (s.type) lines.push(`type = "${esc(s.type)}"`);
+            if (s.name) lines.push(`name = "${esc(s.name)}"`);
+            const p = s.path || s.url;
+            if (p) lines.push(`path = "${esc(p)}"`);
+            if (s.seq_func) lines.push(`seq_func = "${esc(s.seq_func)}"`);
+            if (Array.isArray(s.dependencies) && s.dependencies.length) {
+                const deps = s.dependencies
+                    .map((d) => (typeof d === 'string' ? d : (d && d.name) || ''))
+                    .filter(Boolean);
+                if (deps.length) lines.push(`dependencies = ${arr(deps)}`);
+            }
+            if (Array.isArray(s.micropip_no_deps) && s.micropip_no_deps.length) {
+                lines.push(`micropip_no_deps = ${arr(s.micropip_no_deps)}`);
+            }
+            lines.push('');
+        }
+        return lines.join('\n');
     }
     
     /**
@@ -4045,6 +4587,18 @@ sources = [
      * For protocols, source.seq_func_file / source.seq_func are the base we call.
      */
     getSequenceMetadata(fileName, source, functionName) {
+        const normPath = String(source?.path || fileName || '').replace(/\\/g, '/');
+        const isProtocol = source?.itemKind === 'protocol' || normPath.startsWith('user/prot/');
+        if (isProtocol && source?.anyfield?.seq_func) {
+            const base = this.parseProtocolBase(source);
+            const modulePath = String(base.module || '').replace(/\.py$/i, '');
+            const isModule = modulePath.includes('.') && !modulePath.includes('/');
+            return {
+                seq_func_file: modulePath,
+                seq_func: base.func || functionName,
+                type: isModule ? 'module' : 'file',
+            };
+        }
         const pathOrModule = source?.path || fileName;
         const isModule = !!(
             source?.fullModulePath ||
@@ -4055,11 +4609,14 @@ sources = [
         );
         if (isModule) {
             const seqFuncFile = (source?.fullModulePath || source?.module || pathOrModule || '').replace(/\.py$/i, '');
-            const func = source?.seq_func ?? functionName ?? 'main';
+            const entryFunc = source?.anyfield?.seq_func
+                ? this.parseEntrySpec(source.anyfield.seq_func).func
+                : null;
+            const func = entryFunc || functionName || 'main';
             return { seq_func_file: seqFuncFile, seq_func: func, type: 'module' };
         }
-        const seqFuncFile = source?.seq_func_file ?? source?.path ?? fileName;
-        const func = source?.seq_func ?? functionName ?? 'main';
+        const seqFuncFile = source?.path ?? fileName;
+        const func = functionName ?? 'main';
         return { seq_func_file: seqFuncFile, seq_func: func, type: 'file' };
     }
 
@@ -4070,19 +4627,176 @@ sources = [
      */
     buildImportStatement(meta) {
         if (meta.type === 'module') {
-            return `from ${meta.seq_func_file} import ${meta.seq_func}`;
+            // Folder/module sources import via their loader-assigned dotted module path.
+            return `from ${String(meta.seq_func_file).replace(/\.py$/i, '')} import ${meta.seq_func}`;
         }
         const normPath = String(meta.seq_func_file).replace(/^\//, '');
         const slash = normPath.lastIndexOf('/');
         const importDir = slash >= 0 ? normPath.slice(0, slash) : '';
         const moduleName = (slash >= 0 ? normPath.slice(slash + 1) : normPath).replace(/\.py$/i, '');
-        if (importDir === 'built_in_seq') {
-            return `from built_in_seq.${moduleName} import ${meta.seq_func}`;
-        }
         if (importDir) {
             return `import sys\nif '${importDir}' not in sys.path:\n    sys.path.insert(0, '${importDir}')\nfrom ${moduleName} import ${meta.seq_func}`;
         }
         return `from ${moduleName} import ${meta.seq_func}`;
+    }
+
+    parseEntrySpec(entry) {
+        const s = String(entry || '');
+        const idx = s.lastIndexOf(':');
+        if (idx < 0) return { module: '', func: s };
+        return { module: s.slice(0, idx), func: s.slice(idx + 1) };
+    }
+
+    isPackageBackedProtocolBase(source) {
+        if (source?.anyfield?.seq_definition) return source.anyfield.seq_definition === 'package';
+        return source?.type === 'module' || source?.type === 'pyodide_module';
+    }
+
+    _stripTopLevelMainBlock(code) {
+        const lines = String(code || '').split('\n');
+        const start = lines.findIndex((line) => /^if\s+__name__\s*==\s*['"]__main__['"]\s*:/.test(line));
+        if (start < 0) return lines.join('\n');
+        let end = lines.length;
+        for (let i = start + 1; i < lines.length; i++) {
+            const line = lines[i];
+            if (!line.trim()) continue;
+            if (/^\S/.test(line)) {
+                end = i;
+                break;
+            }
+        }
+        return lines.slice(0, start).concat(lines.slice(end)).join('\n');
+    }
+
+    getProtocolShellImportLines() {
+        return ['import numpy as np', 'import pypulseq as pp'];
+    }
+
+    /** Remove imports the protocol shell already provides so inline origin embedding stays clean. */
+    _stripShellImportsFromOriginatingBody(body, shellImportLines = this.getProtocolShellImportLines()) {
+        let out = String(body || '');
+        for (const line of shellImportLines) {
+            const escaped = String(line).replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+            out = out.replace(new RegExp(`^${escaped}\\s*\\n?`, 'gm'), '');
+        }
+        return out.replace(/\n{3,}/g, '\n\n').trim();
+    }
+
+    buildInlineCapsuleBody(code, source, callTargetFile) {
+        let body = this.stripAnyfieldFileWrappers(code);
+        body = this._stripTopLevelMainBlock(body).trim();
+        body = this._stripShellImportsFromOriginatingBody(body);
+        const origin = source?.origin || source?.htmlUrl || source?.downloadUrl || source?.filePath || callTargetFile || 'unknown origin';
+        return [
+            `# --- inline defined sequence adapted from: ${origin} ---`,
+            body,
+            '# --- end inline defined sequence ---',
+        ].join('\n');
+    }
+
+    async getInlineBaseCode(callTargetFile, fallbackFileName, fallbackSource) {
+        const targetKey = this.resolveSequenceKey(callTargetFile);
+        const targetCode = targetKey ? this.sequences[targetKey]?.code : null;
+        if (targetCode) return targetCode;
+        const fallbackIsProtocol = fallbackSource?.itemKind === 'protocol'
+            || String(fallbackFileName || '').replace(/\\/g, '/').startsWith('user/prot/');
+        const targetNorm = String(callTargetFile || '').replace(/\\/g, '/').replace(/\.py$/i, '');
+        const fallbackNorm = String(fallbackFileName || '').replace(/\\/g, '/').replace(/\.py$/i, '');
+        if (fallbackIsProtocol && targetNorm && targetNorm !== fallbackNorm) {
+            throw new Error(`Could not resolve inline base source ${callTargetFile}; refusing to embed protocol ${fallbackFileName}`);
+        }
+        const fallbackKey = this.resolveSequenceKey(fallbackFileName) || fallbackFileName;
+        const fallbackCode = this.sequences[fallbackKey]?.code || this.sequences[fallbackFileName]?.code;
+        if (fallbackCode) return fallbackCode;
+        return await this.getOriginalCode(fallbackFileName, fallbackSource);
+    }
+
+    resolveProtocolBaseEntry(fileName, source, callTargetFile, callTargetFunc) {
+        let baseFile = callTargetFile;
+        let baseFunc = callTargetFunc;
+        let baseMode = source?.anyfield?.seq_definition || 'inline';
+        let origin = source?.origin || source?.htmlUrl || source?.downloadUrl || source?.filePath || source?.anyfield?.seq_origin || null;
+        const seen = new Set();
+        for (let depth = 0; depth < 10; depth++) {
+            const norm = String(baseFile || '').replace(/\\/g, '/').replace(/\.py$/i, '');
+            if (!norm.startsWith('user/prot/')) break;
+            if (seen.has(norm)) {
+                throw new Error(`Protocol base cycle detected at ${norm}`);
+            }
+            seen.add(norm);
+            const key = this.resolveSequenceKey(baseFile) || this.resolveSequenceKey(`${norm}.py`) || this.resolveSequenceKey(norm);
+            const fileData = key ? this.sequences[key] : null;
+            const anyfield = fileData?.source?.anyfield
+                || (fileData?.code ? this.extractAnyfieldJsonFromCode(fileData.code) : null);
+            if (!anyfield) {
+                throw new Error(`Could not resolve previous protocol base ${baseFile}`);
+            }
+            const next = this.parseEntrySpec(anyfield.seq_func || '');
+            if (!next.module || !next.func) {
+                throw new Error(`Protocol ${baseFile} has no underlying seq_func metadata`);
+            }
+            baseFile = next.module;
+            baseFunc = next.func;
+            baseMode = anyfield.seq_definition || baseMode;
+            origin = anyfield.seq_origin || origin;
+        }
+        return { callTargetFile: baseFile, callTargetFunc: baseFunc, baseMode, origin };
+    }
+
+    async pinBarePackageDependencies(deps) {
+        if (!this.config?.pyodide || !Array.isArray(deps) || !deps.length) return deps || [];
+        const bare = deps
+            .filter((d) => typeof d === 'string' && /^[A-Za-z0-9_.-]+(\[[^\]]+\])?$/.test(d.trim()))
+            .map((d) => d.trim());
+        if (!bare.length) return deps;
+        this.config.pyodide.globals.set('_anyfield_pin_names', bare);
+        let versions = {};
+        try {
+            const result = await this.config.pyodide.runPythonAsync(`
+import json
+try:
+    from importlib.metadata import version
+except Exception:
+    from importlib_metadata import version
+_out = {}
+for _name in list(_anyfield_pin_names):
+    _pkg = _name.split('[', 1)[0]
+    try:
+        _out[_name] = version(_pkg)
+    except Exception:
+        pass
+json.dumps(_out)
+`);
+            versions = JSON.parse(result || '{}');
+        } catch (e) {
+            console.warn('Could not pin package dependency versions:', e);
+        }
+        return deps.map((dep) => {
+            if (typeof dep !== 'string') return dep;
+            const name = dep.trim();
+            return versions[name] ? `${name}==${versions[name]}` : dep;
+        });
+    }
+
+    /**
+     * Build the portable Colab/Jupyter pip-install guard for a generated file body.
+     * No-op as a plain script; installs deps when run in an IPython kernel.
+     * @param {Array<string|{name:string}>} deps
+     * @returns {string} guard block (empty string if no deps)
+     */
+    buildNotebookInstallGuard(deps) {
+        const names = (deps || [])
+            .map((d) => (typeof d === 'string' ? d : (d && d.name) || ''))
+            .filter(Boolean);
+        if (!names.length) return '';
+        return [
+            '# --- Notebook setup (Colab / Jupyter / JupyterLab / VS Code) ---',
+            "_ipython = globals().get('get_ipython', lambda: None)()  # detect nb",
+            'if _ipython is not None:',
+            `    _ipython.run_line_magic('pip', 'install -q ${names.join(' ')}')`,
+            '# --- Notebook setup end ---',
+            '',
+        ].join('\n');
     }
 
     /**
@@ -4108,122 +4822,159 @@ sources = [
     }
 
     /**
-     * Build inner TOML for _source_config_toml (dependencies, metadata, optional simulation/recon).
-     * @param {object} sections
+     * Build the inner TOML body of a PEP 723 script block (uncommented).
+     * This block is install metadata only: requires-python, dependencies, and
+     * `[tool.anyfield] micropip_no_deps` install hints. Scanner metadata is stored
+     * separately in `_anyfield_json`.
+     * @param {object} config
      * @returns {string}
      */
-    buildSourceConfigToml(sections = {}) {
-        const lines = [];
-        const deps = sections.dependencies || {};
-        const depKeys = Object.keys(deps);
-        if (depKeys.length) {
-            lines.push('[dependencies]');
-            for (const key of depKeys) {
-                const val = deps[key];
-                lines.push(`${key} = ${this._formatTomlValue(val)}`);
-            }
-            lines.push('');
+    buildSourceConfigToml(config = {}) {
+        const lines = ['requires-python = ">=3.9"'];
+
+        // Dependencies as a PEP 508 array.
+        let deps = config.dependencies || [];
+        if (!Array.isArray(deps)) {
+            deps = Object.entries(deps).map(([n, v]) =>
+                (v && v !== '*') ? `${n}${/^[<>=!~]/.test(String(v)) ? v : '==' + v}` : n);
         }
-        const meta = sections.metadata || {};
-        if (Object.keys(meta).length) {
-            lines.push('[metadata]');
-            for (const [key, val] of Object.entries(meta)) {
-                if (val == null || val === '') continue;
-                lines.push(`${key} = ${this._formatTomlValue(val)}`);
-            }
-            lines.push('');
-        }
-        const simulation = sections.simulation || null;
-        if (simulation && Object.keys(simulation).length) {
-            lines.push('[simulation]');
-            for (const [key, val] of Object.entries(simulation)) {
-                if (val == null) continue;
-                lines.push(`${key} = ${this._formatTomlValue(val)}`);
-            }
-            lines.push('');
-        }
-        const recon = sections.recon || null;
-        if (recon && Object.keys(recon).length) {
-            lines.push('[recon]');
-            for (const [key, val] of Object.entries(recon)) {
-                if (val == null) continue;
-                lines.push(`${key} = ${this._formatTomlValue(val)}`);
-            }
-            lines.push('');
+        lines.push(`dependencies = ${this._formatTomlValue(deps)}`);
+
+        // [tool.anyfield] is only used for installer/runtime hints that belong
+        // next to dependencies. Scanner metadata lives in `_anyfield_json`.
+        const af = config.anyfield || {};
+        const noDeps = config.micropip_no_deps || af.micropip_no_deps || [];
+        if (Array.isArray(noDeps) && noDeps.length) {
+            lines.push('', '[tool.anyfield]');
+            lines.push(`micropip_no_deps = ${this._formatTomlValue(noDeps)}`);
         }
         return lines.join('\n').trimEnd();
     }
 
+    /** Comment the inner TOML and wrap it as a PEP 723 `# /// script … # ///` block. */
     wrapTomlPreamble(tomlInner) {
-        return `# Source configuration (TOML format)
-_source_config_toml = """
-${tomlInner}
-"""
-
-# Parse and use when needed:
-# import tomli
-# config = tomli.loads(_source_config_toml)
-# deps = list(config['dependencies'].keys())
-
-`;
+        const commented = String(tomlInner)
+            .split('\n')
+            .map((l) => (l.length ? `# ${l}` : '#'))
+            .join('\n');
+        return `# /// script\n${commented}\n# ///\n\n`;
     }
 
+    /** Extract and de-comment the inner TOML of the PEP 723 script block, or null. */
     extractTomlBlockFromCode(code) {
         if (!code || typeof code !== 'string') return null;
-        const match = code.match(/_source_config_toml = """([\s\S]*?)"""/);
-        return match ? match[1] : null;
+        const match = code.match(/^# \/\/\/ script\s*$([\s\S]*?)^# \/\/\/\s*$/m);
+        if (!match) return null;
+        return match[1]
+            .split('\n')
+            .filter((l) => l.startsWith('#'))
+            .map((l) => (l.startsWith('# ') ? l.slice(2) : l.slice(1)))
+            .join('\n')
+            .trim();
     }
 
-    /**
-     * Sync parse of [simulation] and [recon] from TOML text (tooltip use).
-     * @param {string} tomlString
-     * @returns {{ simulation: object, recon: object }}
-     */
-    parseSimulationReconFromTomlSync(tomlString) {
-        const out = { metadata: {}, simulation: {}, recon: {} };
-        if (!tomlString) return out;
-        const sectionRe = /^\[([^\]]+)\]\s*$/gm;
-        const sections = [];
-        let m;
-        while ((m = sectionRe.exec(tomlString)) !== null) {
-            sections.push({ name: m[1].trim(), start: m.index + m[0].length });
+    extractAnyfieldJsonFromCode(code) {
+        if (!code || typeof code !== 'string') return null;
+        const marked = code.match(/# --- AnyField metadata begin ---([\s\S]*?)# --- AnyField metadata end ---/m);
+        if (!marked) return null;
+        const match = marked[1].match(/_anyfield_json\s*=\s*r'''([\s\S]*?)'''/m);
+        if (!match) return null;
+        return JSON.parse(match[1].trim());
+    }
+
+    formatAnyfieldJson(value) {
+        return this._stringifyAnyfieldJson(value, 0);
+    }
+
+    _stringifyAnyfieldJson(value, depth) {
+        const indent = '  '.repeat(depth);
+        const inner = '  '.repeat(depth + 1);
+        if (value === null || typeof value !== 'object') {
+            return JSON.stringify(value);
         }
-        for (let i = 0; i < sections.length; i++) {
-            const sec = sections[i];
-            const end = i + 1 < sections.length ? sections[i + 1].index : tomlString.length;
-            const body = tomlString.slice(sec.start, end);
-            const target = sec.name === 'metadata' ? out.metadata
-                : sec.name === 'simulation' ? out.simulation
-                    : sec.name === 'recon' ? out.recon
-                        : null;
-            if (!target) continue;
-            for (const line of body.split('\n')) {
-                const trimmed = line.trim();
-                if (!trimmed || trimmed.startsWith('#') || trimmed.startsWith('[')) continue;
-                const kv = trimmed.match(/^([A-Za-z0-9_]+)\s*=\s*(.+)$/);
-                if (!kv) continue;
-                const key = kv[1];
-                let raw = kv[2].trim();
-                if (raw.startsWith('"') && raw.endsWith('"')) {
-                    target[key] = raw.slice(1, -1).replace(/\\"/g, '"').replace(/\\\\/g, '\\');
-                } else if (raw.startsWith('[') && raw.endsWith(']')) {
-                    const arrMatch = raw.match(/^\[(.*)\]$/);
-                    if (arrMatch) {
-                        target[key] = arrMatch[1].split(',').map((s) => {
-                            const t = s.trim().replace(/^"|"$/g, '');
-                            const n = Number(t);
-                            return Number.isFinite(n) ? n : t;
-                        });
-                    }
-                } else if (raw === 'true' || raw === 'false') {
-                    target[key] = raw === 'true';
-                } else {
-                    const n = Number(raw);
-                    target[key] = Number.isFinite(n) ? n : raw;
-                }
+        if (Array.isArray(value)) {
+            if (!value.length) return '[]';
+            const allPrimitive = value.every((v) => v === null || typeof v !== 'object');
+            if (allPrimitive) {
+                return `[${value.map((v) => JSON.stringify(v)).join(', ')}]`;
             }
+            const items = value.map((v) => `${inner}${this._stringifyAnyfieldJson(v, depth + 1)}`);
+            return `[\n${items.join(',\n')}\n${indent}]`;
         }
-        return out;
+        const keys = Object.keys(value);
+        if (!keys.length) return '{}';
+        const lines = keys.map((k) => {
+            const serialized = this._stringifyAnyfieldJson(value[k], depth + 1);
+            return `${inner}${JSON.stringify(k)}: ${serialized}`;
+        });
+        return `{\n${lines.join(',\n')}\n${indent}}`;
+    }
+
+    buildAnyfieldJsonBlock(anyfield = {}) {
+        const json = this.formatAnyfieldJson(anyfield);
+        return `# --- AnyField metadata begin ---\n` +
+            `_anyfield_json = r'''\n${json}\n'''\n` +
+            `# --- AnyField metadata end ---\n\n`;
+    }
+
+    replaceAnyfieldJsonInCode(code, anyfield) {
+        const block = this.buildAnyfieldJsonBlock(anyfield).trimEnd();
+        const markedRe = /# --- AnyField metadata begin ---[\s\S]*?# --- AnyField metadata end ---/m;
+        if (!markedRe.test(code)) {
+            throw new Error('Protocol file is missing marked AnyField metadata block');
+        }
+        return code.replace(markedRe, block);
+    }
+
+    parseProtocolBase(source) {
+        return this.parseEntrySpec(source?.anyfield?.seq_func || '');
+    }
+
+    getProtocolProtFunc(source) {
+        return source?.anyfield?.prot_func || null;
+    }
+
+    isPackageProtocol(source) {
+        return source?.anyfield?.seq_definition === 'package';
+    }
+
+    async parseScriptMetadata(code) {
+        if (!this.config?.pyodide) {
+            throw new Error('Pyodide required to parse script metadata');
+        }
+        await this.ensureSourceManager();
+        this.config.pyodide.globals.set('_meta_code', code);
+        const result = await this.config.pyodide.runPythonAsync(`
+from seq_source_manager import parse_script_metadata
+parse_script_metadata(_meta_code)
+`);
+        const parsed = JSON.parse(result);
+        return {
+            dependencies: parsed.dependencies || [],
+            micropip_no_deps: parsed.micropip_no_deps || parsed.anyfield?.micropip_no_deps || [],
+            anyfield: parsed.anyfield || {},
+        };
+    }
+
+    async parseCodeMetadata(code) {
+        return this.parseScriptMetadata(code);
+    }
+
+    async parsePepInstallConfig(tomlString) {
+        const pyodide = this.config?.pyodide;
+        if (!pyodide) {
+            throw new Error('Pyodide required to parse TOML');
+        }
+        pyodide.globals.set('_toml_payload', tomlString);
+        const result = await pyodide.runPythonAsync(`
+from seq_source_manager import parse_metadata_toml
+parse_metadata_toml(_toml_payload)
+`);
+        const parsed = JSON.parse(result);
+        return {
+            dependencies: parsed.dependencies || [],
+            micropip_no_deps: parsed.micropip_no_deps || [],
+        };
     }
 
     formatSimulationReconTooltipLines(simulation, recon) {
@@ -4267,75 +5018,62 @@ ${tomlInner}
             console.warn('patchProtocolTomlSections: no code for', norm);
             return false;
         }
-        const tomlInner = this.extractTomlBlockFromCode(code);
-        if (!tomlInner) {
-            console.warn('patchProtocolTomlSections: no TOML block in', norm);
+        const anyfieldJson = fileData?.source?.anyfield || this.extractAnyfieldJsonFromCode(code);
+        if (!anyfieldJson) {
+            console.warn('patchProtocolTomlSections: no AnyField metadata in', norm);
             return false;
         }
-        let parsed;
-        try {
-            parsed = await this.parseTOMLConfig(tomlInner);
-        } catch (e) {
-            console.warn('patchProtocolTomlSections: parse failed', e);
-            return false;
-        }
-        if (simulation) parsed.simulation = { ...(parsed.simulation || {}), ...simulation };
-        if (recon) parsed.recon = { ...(parsed.recon || {}), ...recon };
-        const newInner = this.buildSourceConfigToml(parsed);
-        const newPreamble = this.wrapTomlPreamble(newInner);
-        const newCode = code.replace(
-            /# Source configuration \(TOML format\)\n_source_config_toml = """[\s\S]*?"""\n\n(?:#.*\n)*\n*/,
-            newPreamble,
-        );
+        const patched = { ...anyfieldJson };
+        if (simulation) patched.simulation = { ...(patched.simulation || {}), ...simulation };
+        if (recon) patched.recon = { ...(patched.recon || {}), ...recon };
+        const newCode = this.replaceAnyfieldJsonInCode(code, patched);
         await this.storeUserFile(norm, newCode);
-        if (fileData) fileData.code = newCode;
+        if (fileData) {
+            fileData.code = newCode;
+            if (fileData.source) fileData.source.anyfield = patched;
+        }
         await this.mirrorLocalPythonModuleToPyodide(norm, newCode);
-        this.persistUserArtifacts();
         return true;
     }
 
     /**
-     * TOML preamble for sequence/protocol files.
-     * @param {object} [options] - kind, seq_func_file, seq_func, simulation, recon
+     * TOML preamble for sequence/protocol files (PEP 723 install metadata only).
      */
     generateTOMLPreamble(fileName, source, functionName, options = {}) {
         const deps = source?.dependencies || [];
-        const meta = this.getSequenceMetadata(fileName, source, functionName);
-        const path = source?.path || '';
-        const kind = options.kind ?? (path.startsWith('user/prot/') ? 'protocol' : 'sequence');
-        const seqFuncFile = (kind === 'protocol' && options.seq_func_file != null) ? options.seq_func_file : meta.seq_func_file;
-        const seqFunc = (kind === 'protocol' && options.seq_func != null) ? options.seq_func : meta.seq_func;
-
-        const dependencies = {};
+        const depStrings = [];
+        const noDeps = [];
         for (const dep of deps) {
             if (typeof dep === 'string') {
-                if (dep.includes('>=') || dep.includes('==') || dep.includes('!=') || dep.includes('~=')) {
-                    const parts = dep.match(/^([^>=!~]+)(.*)$/);
-                    if (parts) {
-                        dependencies[parts[1].trim()] = parts[2].trim();
-                        continue;
-                    }
-                }
-                dependencies[dep.split(/[>=<!=]/)[0].trim()] = '*';
-            } else if (typeof dep === 'object' && dep.name) {
-                dependencies[dep.name] = dep.version || '*';
+                depStrings.push(dep);
+            } else if (dep && typeof dep === 'object' && dep.name) {
+                depStrings.push(dep.version ? `${dep.name}${dep.version}` : dep.name);
+                if (dep.deps === false) noDeps.push(String(dep.name).split(/[>=<!~]/)[0].trim());
             }
         }
-
-        const metadata = {
-            kind,
-            seq_func_file: seqFuncFile,
-            seq_func: seqFunc,
-            type: meta.type,
-        };
+        for (const n of (source?.micropip_no_deps || [])) {
+            const nm = String(n).split(/[>=<!~]/)[0].trim();
+            if (!noDeps.includes(nm)) noDeps.push(nm);
+        }
 
         const tomlInner = this.buildSourceConfigToml({
-            dependencies,
-            metadata,
-            simulation: options.simulation || null,
-            recon: options.recon || null,
+            dependencies: depStrings,
+            micropip_no_deps: noDeps,
         });
         return this.wrapTomlPreamble(tomlInner);
+    }
+
+    /**
+     * PEP 723 preamble + notebook `%pip install` guard from install metadata.
+     * Used when materializing folder scripts, saving protocols, and lazy editor prepend.
+     * @param {{dependencies?: Array, micropip_no_deps?: string[]}} installSource
+     * @returns {{ preamble: string, guard: string, prefix: string }}
+     */
+    buildInstallableFileShell(installSource = {}) {
+        const preamble = this.generateTOMLPreamble('', installSource, 'main');
+        const guard = this.buildNotebookInstallGuard(this.normalizeSourceDeps(installSource));
+        const prefix = preamble + (guard ? `${guard}\n` : '');
+        return { preamble, guard, prefix };
     }
     
     async getOriginalCode(fileName, source) {
@@ -4400,42 +5138,21 @@ json.dumps(_result)
         
         return originalCode;
     }
-    
-    /**
-     * Parse TOML preamble string via Python (tomllib/tomli). Requires Pyodide.
-     * Expected TOML format: [dependencies] and [metadata] sections; metadata: kind, seq_func_file,
-     * seq_func (call target), type; optional description (used for save and Save As default name).
-     * @param {string} tomlString - Raw TOML string (e.g. from _source_config_toml in code)
-     * @returns {Promise<{ dependencies: Object, metadata: Object }>}
-     */
-    async parseTOMLConfig(tomlString) {
-        const pyodide = this.config?.pyodide;
-        if (!pyodide) {
-            throw new Error('Pyodide required to parse TOML');
-        }
-        // Pass TOML via globals to avoid embedding in code (backslashes/quotes would break json.loads)
-        pyodide.globals.set('_toml_payload', tomlString);
-        const result = await pyodide.runPythonAsync(`
-from seq_source_manager import parse_toml_config
-parse_toml_config(_toml_payload)
-`);
-        return JSON.parse(result);
-    }
-
     async storeUserFile(path, code) {
         if (!this.config.pyodide) {
             throw new Error('Pyodide not available');
         }
-        const normPath = String(path).replace(/\\/g, '/').replace(/^\/+/, '');
+        const normPath = this.normalizeUserArtifactPath(path);
+        const codeToStore = code;
         if (this.isUserArtifactPath(normPath)) {
-            await this.mirrorLocalPythonModuleToPyodide(normPath, code);
+            await this.mirrorLocalPythonModuleToPyodide(normPath, codeToStore);
             await this.config.pyodide.runPythonAsync(`
 import sys
 if not hasattr(sys.modules['__main__'], '_user_edited_files'):
     sys.modules['__main__']._user_edited_files = {}
-sys.modules['__main__']._user_edited_files[${JSON.stringify(normPath)}] = ${JSON.stringify(code)}
+sys.modules['__main__']._user_edited_files[${JSON.stringify(normPath)}] = ${JSON.stringify(codeToStore)}
 `);
-            this.persistUserArtifacts();
+            if (this.sequences[normPath]) this.sequences[normPath].code = codeToStore;
         }
     }
     
@@ -4475,49 +5192,88 @@ sys.modules['__main__']._user_edited_files[${JSON.stringify(normPath)}] = ${JSON
             });
         }
 
-        // 2. Resolve call target (seq_func_file / seq_func = what we call; for protocols always the base)
+        // 2. Resolve call target from anyfield.seq_func for protocols
         const { fileName, functionName: functionFromExplorer, source } = this.selectedSequence;
         const meta = this.getSequenceMetadata(fileName, source, functionFromExplorer);
         const isProtocol = source?.itemKind === 'protocol' || (source?.path && source.path.startsWith('user/prot/'));
-        // For protocols, always use the base (source.seq_func_file / source.seq_func); otherwise meta can
-        // point to the protocol itself (fullModulePath) and we'd generate invalid imports (e.g. from user.prot.1_prot_gre)
-        const callTargetFile = isProtocol
-            ? (source?.seq_func_file || meta.seq_func_file || source?.path || fileName)
-            : (meta.seq_func_file || source?.seq_func_file || source?.path || fileName);
-        const callTargetFunc = isProtocol
-            ? (source?.seq_func || meta.seq_func || functionFromExplorer || 'main')
-            : (meta.seq_func || source?.seq_func || functionFromExplorer || 'main');
-        const callMeta = { seq_func_file: callTargetFile, seq_func: callTargetFunc, type: meta.type };
-        const importStmt = this.buildImportStatement(callMeta);
+        let callTargetFile;
+        let callTargetFunc;
+        if (isProtocol) {
+            const base = this.parseProtocolBase(source);
+            callTargetFile = base.module || meta.seq_func_file;
+            callTargetFunc = base.func || meta.seq_func;
+        } else {
+            callTargetFile = meta.seq_func_file || source?.path || fileName;
+            callTargetFunc = meta.seq_func || functionFromExplorer || 'main';
+        }
+        if (String(callTargetFunc).startsWith('prot_')) {
+            const entryFunc = this.parseEntrySpec(source?.anyfield?.seq_func || '').func;
+            if (entryFunc && entryFunc !== callTargetFunc) callTargetFunc = entryFunc;
+        }
+        const resolvedBase = isProtocol
+            ? this.resolveProtocolBaseEntry(fileName, source, callTargetFile, callTargetFunc)
+            : {
+                callTargetFile,
+                callTargetFunc,
+                baseMode: this.isPackageBackedProtocolBase(source) ? 'package' : 'inline',
+                origin: source?.origin || source?.htmlUrl || source?.downloadUrl || source?.filePath,
+            };
+        callTargetFile = resolvedBase.callTargetFile;
+        callTargetFunc = resolvedBase.callTargetFunc;
+        const capsuleMode = resolvedBase.baseMode === 'package' ? 'package' : 'inline';
 
         const paramStrs = Object.entries(params).map(([k, v]) => `${k}=${v}`);
         const signature = paramStrs.join(',\n    ');
 
-        const shortName = callTargetFunc.startsWith('seq_')
-            ? 'prot_' + callTargetFunc.slice(4)
-            : (callTargetFunc.startsWith('prot_') ? callTargetFunc : 'prot_' + callTargetFunc);
+        const pendingMeta = this._pendingProtocolMeta || {};
+        const sourcePath = String(source?.path || fileName || '').replace(/\\/g, '/');
+        // Base sequence stem (fallback when no user scan name is provided).
+        const baseStem = callTargetFunc.startsWith('seq_')
+            ? callTargetFunc.slice(4)
+            : (callTargetFunc.startsWith('prot_') ? callTargetFunc.slice(5) : callTargetFunc);
+        // Prefer scan-module draft name; for protocol-of-protocol keep parent scan in the stem (e.g. 3.gre).
+        let scanLabel = String(pendingMeta.name || '').replace(/^\s*\d+\.\s*/, '').trim();
+        if (!scanLabel && isProtocol && sourcePath.startsWith('user/prot/')) {
+            scanLabel = this.protocolDerivedDefaultName(sourcePath) || scanLabel;
+        }
+        let stemSafe = scanLabel
+            ? scanLabel.replace(/[^A-Za-z0-9]+/g, '_').replace(/^_+|_+$/g, '').toLowerCase()
+            : '';
+        if (!stemSafe) stemSafe = baseStem;
+        const shortName = 'prot_' + stemSafe;
         const filePrefix = (protocolName != null && protocolName !== true && String(protocolName).match(/^\d+$/))
             ? protocolName + '_'
             : '';
         const finalFileName = `user/prot/${filePrefix}${shortName}.py`;
         const safeFunctionName = shortName;
-
-        const pendingMeta = this._pendingProtocolMeta || {};
-        const preamble = this.generateTOMLPreamble(fileName, source, functionFromExplorer, {
+        const protocolDeps = capsuleMode === 'package'
+            ? await this.pinBarePackageDependencies(source?.dependencies || [])
+            : (source?.dependencies || []);
+        const protocolSource = { ...source, dependencies: protocolDeps };
+        const baseEntry = `${String(callTargetFile).replace(/\.py$/i, '')}:${callTargetFunc}`;
+        const anyfieldMeta = {
             kind: 'protocol',
-            seq_func_file: callTargetFile,
-            seq_func: callTargetFunc,
-        });
-        const code = preamble + `
-import numpy as np
-import pypulseq as pp
-${importStmt}
+            prot_func: safeFunctionName,
+            seq_definition: capsuleMode,
+            seq_func: baseEntry,
+        };
+        const baseOrigin = resolvedBase.origin || source?.origin || source?.htmlUrl || source?.downloadUrl || source?.filePath;
+        if (baseOrigin) anyfieldMeta.seq_origin = baseOrigin;
+        const { prefix: installShell } = this.buildInstallableFileShell(protocolSource);
+        const anyfieldBlock = this.buildAnyfieldJsonBlock(anyfieldMeta);
+        const baseBinding = capsuleMode === 'package'
+            ? `${this.buildImportStatement({ seq_func_file: callTargetFile, seq_func: callTargetFunc, type: meta.type })}\n_anyfield_base_callable = ${callTargetFunc}`
+            : `${this.buildInlineCapsuleBody(await this.getInlineBaseCode(callTargetFile, fileName, source), { ...source, origin: baseOrigin }, callTargetFile)}\n\n_anyfield_base_callable = ${callTargetFunc}`;
+        const shellImports = this.getProtocolShellImportLines().join('\n');
+        const code = installShell + anyfieldBlock + `
+${shellImports}
+${baseBinding}
 
 def ${safeFunctionName}(
     ${signature}
 ):
     kwargs = locals().copy()
-    return ${callTargetFunc}(**kwargs)
+    return _anyfield_base_callable(**kwargs)
 `.trim();
 
         // 3. Save silently
@@ -4525,19 +5281,22 @@ def ${safeFunctionName}(
         try {
             await this.storeUserFile(finalFileName, code);
 
-            const displayName = this.protocolDisplayNameFromPath(finalFileName, pendingMeta.name);
+            const displayName = this.protocolDisplayNameFromPath(finalFileName, scanLabel || pendingMeta.name);
             const fullModulePath = finalFileName.replace(/\.py$/i, '').replace(/\//g, '.');
             const newSource = {
                 name: 'User Protocols',
                 itemKind: 'protocol',
-                seq_func_file: callTargetFile,
-                seq_func: callTargetFunc,
+                anyfield: { ...anyfieldMeta },
                 type: 'file',
                 path: finalFileName,
                 fullModulePath: fullModulePath,
                 description: 'Protocol Snapshot',
                 isUserEdited: true,
                 displayName,
+                // Carry the base's deps forward so re-deriving a protocol from this protocol
+                // (and the saved file's own notebook guard) keeps the install lines.
+                dependencies: protocolDeps,
+                micropip_no_deps: source?.micropip_no_deps || [],
             };
             
             // Update config
@@ -4550,7 +5309,6 @@ def ${safeFunctionName}(
             
             // Parse and refresh
             await this.parseFile(finalFileName, code, newSource);
-            this.persistUserArtifacts();
             this.renderTree();
             console.log('Protocol snapshot saved:', shortName);
             return finalFileName;
@@ -4567,6 +5325,8 @@ def ${safeFunctionName}(
             this.showStatus('Please select a function first', 'error');
             return;
         }
+
+        document.querySelectorAll('.seq-editor-modal[data-editor="code"]').forEach((el) => el.remove());
         
         const { fileName, functionName } = this.selectedSequence;
         const source = this.selectedSequence.source;
@@ -4574,18 +5334,19 @@ def ${safeFunctionName}(
         // Get FULL original code file (not just the function)
         const originalCode = await this.getOriginalCode(fileName, source);
         
-        // Check if code already has TOML preamble (from previous edit)
-        const hasTOML = originalCode.includes('_source_config_toml = """');
+        // Check if code already has a PEP 723 preamble (from previous edit)
+        const hasTOML = !!this.extractTomlBlockFromCode(originalCode);
         
         let fullCode = originalCode;
         if (!hasTOML) {
-            const preamble = this.generateTOMLPreamble(fileName, source, functionName);
-            fullCode = preamble + originalCode;
+            const { prefix } = this.buildInstallableFileShell(source);
+            fullCode = prefix + originalCode;
         }
         
         // Create modal
         const modal = document.createElement('div');
         modal.className = 'seq-editor-modal';
+        modal.dataset.editor = 'code';
         
         const modalContent = document.createElement('div');
         modalContent.className = 'seq-editor-container';
@@ -4601,7 +5362,7 @@ def ${safeFunctionName}(
         buttonContainer.style.cssText = 'display: flex; gap: 0.5rem; flex-wrap: wrap;';
         
         const isProtocol = source?.itemKind === 'protocol' || (source?.path && source.path.startsWith('user/prot/'));
-        const seqFuncFile = source?.seq_func_file;
+        const seqFuncFile = isProtocol ? this.parseProtocolBase(source).module : null;
         if (isProtocol && seqFuncFile) {
             const editUnderlyingBtn = document.createElement('button');
             editUnderlyingBtn.className = 'btn btn-secondary btn-md';
@@ -4613,7 +5374,9 @@ def ${safeFunctionName}(
                     this.showStatus(`Could not resolve source for ${seqFuncFile}`, 'error');
                     return;
                 }
-                const funcName = (underlyingSource?.seq_func ?? this.getSourceBaseSequence(underlyingSource)) || 'main';
+                const funcName = this.parseProtocolBase(source).func
+                    || this.getSourceBaseSequence(underlyingSource)
+                    || 'main';
                 const fileData = key ? this.sequences[key] : null;
                 const func = fileData?.functions?.find(f => f.name === funcName) || fileData?.functions?.[0] || {};
                 const displayName = this.getProtocolDisplayNameFromSeqFuncFile(this.getPathForDisplayName(key || seqFuncFile, underlyingSource)) || (underlyingSource?.path || seqFuncFile).split('/').pop().replace(/\.py$/, '');
@@ -4630,6 +5393,24 @@ def ${safeFunctionName}(
         loadOriginalBtn.onclick = () => {
             if (editor) editor.setValue(fullCode);
         };
+
+        const downloadPyBtn = document.createElement('button');
+        downloadPyBtn.className = 'btn btn-secondary btn-md';
+        downloadPyBtn.textContent = 'Download py';
+        downloadPyBtn.onclick = () => {
+            const code = editor.getValue();
+            let downloadName = String(fileName || 'sequence').split('/').pop();
+            if (!downloadName.endsWith('.py')) downloadName += '.py';
+            const blob = new Blob([code], { type: 'text/x-python;charset=utf-8' });
+            const url = URL.createObjectURL(blob);
+            const a = document.createElement('a');
+            a.href = url;
+            a.download = downloadName;
+            document.body.appendChild(a);
+            a.click();
+            a.remove();
+            URL.revokeObjectURL(url);
+        };
         
         const saveAsBtn = document.createElement('button');
         saveAsBtn.className = 'btn btn-secondary btn-md';
@@ -4641,6 +5422,7 @@ def ${safeFunctionName}(
         cancelBtn.onclick = () => modal.remove();
         
         buttonContainer.appendChild(loadOriginalBtn);
+        buttonContainer.appendChild(downloadPyBtn);
         buttonContainer.appendChild(saveAsBtn);
         buttonContainer.appendChild(cancelBtn);
         header.appendChild(buttonContainer);
@@ -4662,7 +5444,7 @@ def ${safeFunctionName}(
                 indentWithTabs: false,
                 lineWrapping: true,
                 styleActiveLine: true,
-                matchBrackets: true
+                matchBrackets: true,
             });
             editor.setSize('100%', '100%');
         } else {
@@ -4708,27 +5490,23 @@ def ${safeFunctionName}(
                 return false;
             }
             
-            // Extract TOML config from code
-            const tomlMatch = code.match(/_source_config_toml = """([\s\S]*?)"""/);
-            if (!tomlMatch) {
-                this.showStatus('TOML configuration not found in code', 'error');
+            // Extract PEP 723 config from code
+            const tomlInner = this.extractTomlBlockFromCode(code);
+            if (!tomlInner) {
+                this.showStatus('PEP 723 configuration not found in code', 'error');
                 return false;
             }
             
-            const tomlConfig = await this.parseTOMLConfig(tomlMatch[1]);
-            const metadata = tomlConfig.metadata;
-            const seqFunc = metadata.seq_func ?? functionName;
-            const seqFuncFileFromMeta = metadata.seq_func_file ?? '';
-            const deps = Object.keys(tomlConfig.dependencies).map(key => {
-                const val = tomlConfig.dependencies[key];
-                if (val === '*') return key;
-                return `${key}${val}`;
-            });
+            const parsedMeta = await this.parseScriptMetadata(code);
+            const anyfield = parsedMeta.anyfield || source?.anyfield || {};
+            const deps = Array.isArray(parsedMeta.dependencies) ? parsedMeta.dependencies.slice() : [];
+            const noDeps = Array.isArray(parsedMeta.micropip_no_deps) ? parsedMeta.micropip_no_deps.slice() : [];
+            const baseEntry = savingProtocol ? this.parseProtocolBase({ anyfield }) : { module: '', func: functionName };
+            const seqFunc = savingProtocol ? (anyfield.prot_func || functionName) : functionName;
+            const seqFuncFileFromMeta = savingProtocol ? baseEntry.module : '';
 
-            const displayName = savingProtocol
-                ? (this.protocolDisplayNameFromPath(finalFileName) || targetName || seqFuncFileFromMeta || `${fileName}_edited`)
-                : (targetName || seqFuncFileFromMeta || `${fileName}_edited`);
-            const sanitizedName = sanitizeFileName(displayName);
+            const nameForFile = targetName || seqFuncFileFromMeta || `${fileName}_edited`;
+            const sanitizedName = sanitizeFileName(nameForFile);
             if (/^\d+_/.test(sanitizedName)) {
                 this.showReservedPrefixDialog();
                 return false;
@@ -4737,30 +5515,30 @@ def ${safeFunctionName}(
             const userDir = savingProtocol ? 'user/prot' : 'user/seq';
             const finalFileName = `${userDir}/${baseFileName}`;
 
-            const saveSource = { path: finalFileName, dependencies: deps };
-            const preambleOptions = savingProtocol
-                ? { kind: 'protocol', seq_func_file: seqFuncFileFromMeta || source?.seq_func_file, seq_func: metadata.seq_func ?? source?.seq_func }
-                : { kind: 'sequence' };
-            const preamble = this.generateTOMLPreamble(finalFileName, saveSource, seqFunc, preambleOptions);
-            const tomlBlockRegex = /# Source configuration \(TOML format\)\n_source_config_toml = """[\s\S]*?"""\n\n(?:#.*\n)*\n*/;
+            const displayName = savingProtocol
+                ? (this.protocolDisplayNameFromPath(finalFileName) || targetName || seqFuncFileFromMeta || `${fileName}_edited`)
+                : (targetName || seqFuncFileFromMeta || `${fileName}_edited`);
+
+            const saveSource = { path: finalFileName, dependencies: deps, micropip_no_deps: noDeps };
+            const { preamble } = this.buildInstallableFileShell(saveSource);
+            const tomlBlockRegex = /^# \/\/\/ script[\s\S]*?^# \/\/\/\s*\n+/m;
             code = code.replace(tomlBlockRegex, preamble);
 
-            const callTargetFile = savingProtocol ? (seqFuncFileFromMeta || source?.seq_func_file) : finalFileName;
-            const callTargetFunc = savingProtocol ? (metadata.seq_func ?? source?.seq_func ?? seqFunc) : seqFunc;
             const fullModulePath = finalFileName.replace(/\.py$/i, '').replace(/\//g, '.');
             const newSource = {
                 name: savingProtocol ? 'User Protocols' : 'User Refined Sequences',
                 itemKind: savingProtocol ? 'protocol' : 'sequence',
                 path: finalFileName,
-                seq_func_file: callTargetFile,
-                seq_func: callTargetFunc,
+                anyfield: savingProtocol ? anyfield : (Object.keys(anyfield).length ? anyfield : undefined),
                 type: 'file',
                 fullModulePath,
-                description: metadata.description || (savingProtocol ? 'User edited protocol' : 'User edited sequence'),
+                description: savingProtocol ? 'User edited protocol' : 'User edited sequence',
                 dependencies: deps,
+                micropip_no_deps: noDeps,
                 isUserEdited: true,
                 displayName: displayName
             };
+            if (newSource.anyfield === undefined) delete newSource.anyfield;
             
             if (this.config.pyodide) {
                 try {
@@ -4822,14 +5600,12 @@ def ${safeFunctionName}(
             const savingProtocolForDialog = source?.itemKind === 'protocol' || (source?.path && source.path.startsWith('user/prot/'));
             try {
                 const code = editor.getValue();
-                const tomlMatch = code.match(/_source_config_toml = """([\s\S]*?)"""/);
-                if (tomlMatch) {
-                    const tomlConfig = await this.parseTOMLConfig(tomlMatch[1]);
-                    if (savingProtocolForDialog) {
-                        defaultName = this.protocolSeqStemFromPath(fileName) || defaultName;
-                    } else if (tomlConfig.metadata.seq_func_file) {
-                        defaultName = tomlConfig.metadata.seq_func_file;
-                    }
+                if (savingProtocolForDialog) {
+                    defaultName = this.protocolSeqStemFromPath(fileName) || defaultName;
+                } else {
+                    const parsedMeta = await this.parseScriptMetadata(code);
+                    const baseModule = this.parseProtocolBase({ anyfield: parsedMeta.anyfield || {} }).module;
+                    if (baseModule) defaultName = baseModule;
                 }
             } catch (e) {
                 // Use fileName as fallback
@@ -5070,11 +5846,8 @@ def ${safeFunctionName}(
         modalContent.appendChild(editorContainer);
         modal.appendChild(modalContent);
         
-        modal.onclick = (e) => {
-            if (e.target === modal) modal.remove();
-        };
-        
         document.body.appendChild(modal);
+        bindCodeEditorSelectAll(editor, modal);
         
         // Focus editor
         setTimeout(() => {
@@ -5083,6 +5856,98 @@ def ${safeFunctionName}(
         }, 100);
     }
     
+    async collectUserProtocolFiles() {
+        const byPath = new Map();
+
+        for (const [path, fileData] of Object.entries(this.sequences)) {
+            const norm = String(path).replace(/\\/g, '/');
+            if (norm.startsWith('user/prot/') && fileData?.code) {
+                byPath.set(norm, fileData.code);
+            }
+        }
+
+        if (this.config.pyodide) {
+            try {
+                const result = await this.config.pyodide.runPythonAsync(`
+import sys
+import json
+
+files = {}
+if hasattr(sys.modules['__main__'], '_user_edited_files'):
+    for path, code in sys.modules['__main__']._user_edited_files.items():
+        if path.startswith('user/prot/'):
+            files[path] = code
+json.dumps(files)
+`);
+                const pyFiles = JSON.parse(result);
+                for (const [path, code] of Object.entries(pyFiles)) {
+                    if (code && !byPath.has(path)) byPath.set(path, code);
+                }
+            } catch (e) {
+                console.warn('Could not read user protocols from Pyodide memory:', e);
+            }
+        }
+
+        return [...byPath.entries()]
+            .sort((a, b) => a[0].localeCompare(b[0]))
+            .map(([path, code]) => ({
+                path,
+                name: path.split('/').pop(),
+                code,
+            }));
+    }
+
+    _downloadTextFile(name, text) {
+        const blob = new Blob([text], { type: 'text/x-python;charset=utf-8' });
+        const url = URL.createObjectURL(blob);
+        const a = document.createElement('a');
+        a.href = url;
+        a.download = name;
+        document.body.appendChild(a);
+        a.click();
+        a.remove();
+        URL.revokeObjectURL(url);
+    }
+
+    async downloadUserProtocols() {
+        const files = await this.collectUserProtocolFiles();
+        if (!files.length) {
+            this.showStatus('No user protocols to download', 'error');
+            return;
+        }
+
+        if (files.length === 1) {
+            this._downloadTextFile(files[0].name, files[0].code);
+            this.showStatus(`Downloaded ${files[0].name}`, 'success');
+            return;
+        }
+
+        try {
+            const JSZip = (await import('https://esm.run/jszip@3.10.1')).default;
+            const zip = new JSZip();
+            const folder = zip.folder('user_protocols') || zip;
+            for (const { name, code } of files) {
+                folder.file(name, code);
+            }
+            const blob = await zip.generateAsync({ type: 'blob' });
+            const url = URL.createObjectURL(blob);
+            const a = document.createElement('a');
+            a.href = url;
+            a.download = 'user_protocols.zip';
+            document.body.appendChild(a);
+            a.click();
+            a.remove();
+            URL.revokeObjectURL(url);
+            this.showStatus(`Downloaded ${files.length} protocols`, 'success');
+        } catch (e) {
+            console.error('Protocol zip download failed, falling back to individual files:', e);
+            for (const { name, code } of files) {
+                this._downloadTextFile(name, code);
+            }
+            this.showStatus(`Downloaded ${files.length} protocols`, 'success');
+        }
+    }
+
     async getUserFiles() {
         // Get all user-edited files from Python memory only
         const files = [];
@@ -5151,8 +6016,6 @@ if hasattr(sys.modules['__main__'], '_user_edited_files'):
             delete this.sequences[filePath];
         }
 
-        this.persistUserArtifacts();
-        
         // Re-render tree
         this.renderTree();
         

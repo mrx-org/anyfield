@@ -45,10 +45,9 @@ A modular, flexible widget for exploring sequences/protocols organized by file, 
             onlySeqPrefix: false,
             sources: [
                 {
-                    'name': 'RARE 2D',
-                    'type': 'local_file',
-                    'path': 'mr0_rare_2d_seq.py',
-                    'dependencies': ['pypulseq']
+                    name: 'anyseq',
+                    type: 'folder',
+                    path: 'https://github.com/mrx-org/anyfield/tree/main/pypulseq/anyseq'
                 }
             ],
             onSequenceSelect: (sequence) => {
@@ -79,74 +78,42 @@ A modular, flexible widget for exploring sequences/protocols organized by file, 
 
 ### Source Types
 
-#### 1. Local File
+The current registry shape matches `pypulseq/sources.toml`:
+
+#### 1. File
 ```javascript
 {
-    'name': 'Display Name',
-    'type': 'local_file',
-    'path': 'path/to/file.py',
-    'dependencies': ['pypulseq']
-}
-// or
-{
-    type: 'local_file',
-    path: 'path/to/file.py',
     name: 'Display Name',
-    dependencies: ['pypulseq']  // Optional: packages to install via pip
+    type: 'file',
+    path: 'https://raw.githubusercontent.com/user/repo/main/file.py',
+    dependencies: ['numpy', 'pypulseq==1.4.2.post2'],
+    micropip_no_deps: ['pypulseq']
 }
 ```
 
-#### 2. GitHub Raw File
+#### 2. Folder
 ```javascript
 {
-    'name': 'Display Name',
-    'type': 'github_raw',
-    'url': 'https://raw.githubusercontent.com/user/repo/main/file.py',
-    'dependencies': ['numpy', 'mrseq']
-}
-// or
-{
-    type: 'github_raw',
-    url: 'https://raw.githubusercontent.com/user/repo/main/file.py',
-    name: 'Display Name',
-    dependencies: ['numpy>=2.0.0', { name: 'mrseq', deps: false }, 'ismrmrd==1.14.2']  // Optional
+    name: 'pypulseq_examples',
+    type: 'folder',
+    path: 'https://github.com/imr-framework/pypulseq/tree/master/examples/scripts',
+    dependencies: ['pypulseq==1.4.2.post2'],
+    micropip_no_deps: ['pypulseq']
 }
 ```
 
-#### 3. GitHub Folder
-```javascript
-                {
-                    'name': 'mrseq',
-                    'type': 'pyodide_module',
-                    'module': 'mrseq.scripts',
-                    'dependencies': ['numpy>=2.0.0', 'pypulseq', {'name': 'mrseq', 'deps': False}, 'ismrmrd==1.14.2']
-                },
-                {
-                    'name': 'pypulseq_examples',
-                    'type': 'github_folder',
-                    'url': 'https://github.com/imr-framework/pypulseq/tree/master/examples/scripts',
-                    'dependencies': ['pypulseq']
-                }
-// or
-{
-    type: 'github_folder',
-    url: 'https://github.com/user/repo/tree/main/folder',
-    fileFilter: (file) => file.name.endsWith('.py'),  // Optional
-    dependencies: ['package1', 'package2']  // Optional: packages to install
-}
-```
-
-#### 4. Pyodide Module
+#### 3. Module
 ```javascript
 {
-    type: 'pyodide_module',
-    module: 'module.name',
-    folder: '/path/to/module',  // Optional
-    name: 'Display Name'
+    name: 'mrseq.scripts',
+    type: 'module',
+    path: 'mrseq.scripts',
+    dependencies: ['numpy>=2.0.0', 'pypulseq==1.4.2.post2', 'mrseq', 'ismrmrd==1.14.2'],
+    micropip_no_deps: ['pypulseq', 'mrseq']
 }
 ```
 
-#### 5. Custom Loader
+#### 4. Custom Loader
 ```javascript
 {
     type: 'custom',
@@ -164,8 +131,8 @@ Each source can specify `dependencies` that will be automatically installed via 
 
 ```javascript
 {
-    type: 'github_raw',
-    url: '...',
+    type: 'file',
+    path: 'https://raw.githubusercontent.com/user/repo/main/file.py',
     dependencies: [
         'numpy>=2.0.0',           // Version specification
         { name: 'mrseq', deps: false },  // Install without dependency checks
@@ -182,14 +149,13 @@ Each source can specify `dependencies` that will be automatically installed via 
 
 ## Source Configuration
 
-All sources are defined in `sources_config.py` as Python dictionaries. The widget automatically loads from this file on startup. You can edit sources using the "Add Sources" button in the UI.
+Default sources are defined in `pypulseq/sources.toml` as a `[[sources]]` array. The "Add Sources" button edits the same TOML shape. Each entry uses the current source types below and may provide registry-level fallback `dependencies` / `micropip_no_deps`.
 
 ### Source Types
 
-- `local_file` - Load from a local Python file
-- `github_raw` - Load a single file from GitHub (raw URL)
-- `github_folder` - Load all Python files from a GitHub folder
-- `pyodide_module` - Load from an installed Python package module
+- `file` - Load a single local/raw Python file or notebook-converted source.
+- `folder` - Load all Python files from a GitHub folder source into `<name>_examples.scripts`.
+- `module` - Load functions from an installed Python package module (e.g. `mrseq.scripts`).
 
 ## API
 
@@ -224,28 +190,18 @@ const explorer = new SequenceExplorer('explorer', {
     pyodide: pyodide,     // Required for dependency installation
     sources: [
         {
-            'name': 'RARE 2D',
-            'type': 'local_file',
-            'path': 'mr0_rare_2d_seq.py',
-            'dependencies': ['pypulseq']
+            name: 'mrseq.scripts',
+            type: 'module',
+            path: 'mrseq.scripts',
+            dependencies: ['numpy>=2.0.0', 'pypulseq==1.4.2.post2', 'mrseq', 'ismrmrd==1.14.2'],
+            micropip_no_deps: ['pypulseq', 'mrseq']
         },
         {
-            'name': 'mrseq',
-            'type': 'pyodide_module',
-            'module': 'mrseq.scripts',
-            'dependencies': ['numpy>=2.0.0', 'pypulseq', {'name': 'mrseq', 'deps': False}, 'ismrmrd==1.14.2']
-        },
-        {
-            'name': 'pypulseq_examples',
-            'type': 'github_folder',
-            'url': 'https://github.com/imr-framework/pypulseq/tree/master/examples/scripts',
-            'dependencies': ['pypulseq']
-        }
-        {
-            type: 'github_raw',
-            url: 'https://raw.githubusercontent.com/user/repo/main/custom_seq.py',
-            name: 'Custom Sequence',
-            dependencies: ['numpy', 'scipy']  // Will install before loading
+            name: 'pypulseq_examples',
+            type: 'folder',
+            path: 'https://github.com/imr-framework/pypulseq/tree/master/examples/scripts',
+            dependencies: ['pypulseq==1.4.2.post2'],
+            micropip_no_deps: ['pypulseq']
         }
     ],
     onSequenceSelect: (sequence) => {

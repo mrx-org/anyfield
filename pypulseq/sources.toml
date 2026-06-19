@@ -1,0 +1,52 @@
+# Sources configuration for the sequence explorer.
+#
+# Each [[sources]] entry must set:
+#   type  = "file" | "folder" | "module"
+#   path  = local path, GitHub tree URL (folder), raw URL (file), or dotted module path
+# and optionally:
+#   name             = tree label, share-link category (s_category), and VFS import prefix
+#   dependencies     = PEP 508 install strings (required for folder and module sources).
+#                      Folder loads strip upstream PEP/Colab/AnyField wrappers and
+#                      re-materialize install headers from this entry.
+#   micropip_no_deps = package names installed with micropip deps=False
+#
+# First-party protocols (user/prot, fixtures) carry scanner metadata in _anyfield_json.
+# Registry folder sources own install deps only; upstream scripts stay plain on GitHub.
+#
+# Built-in sequences are no longer local: they live in pypulseq/anyseq/ and are
+# loaded from GitHub as the "anyseq" folder source below.
+
+[[sources]]
+type = "folder"
+name = "anyseq"
+path = "https://github.com/mrx-org/anyfield/tree/main/pypulseq/anyseq"
+dependencies = ["numpy", "matplotlib", "pypulseq==1.4.2.post2"]
+micropip_no_deps = ["pypulseq"]
+
+[[sources]]
+type = "folder"
+name = "builtin"
+path = "https://github.com/mrx-org/anyfield/tree/main/pypulseq/built_in_seq"
+dependencies = ["numpy", "matplotlib", "pypulseq==1.4.2.post2"]
+micropip_no_deps = ["pypulseq"]
+
+[[sources]]
+type = "module"
+name = "mrseq.scripts"
+path = "mrseq.scripts"
+dependencies = ["numpy>=2.0.0", "pypulseq==1.4.2.post2", "mrseq", "ismrmrd==1.14.2"]
+micropip_no_deps = ["pypulseq", "mrseq"]
+
+[[sources]]
+type = "folder"
+name = "pypulseq_examples"
+path = "https://github.com/imr-framework/pypulseq/tree/master/examples/scripts"
+dependencies = ["numpy", "pypulseq==1.4.2.post2"]
+micropip_no_deps = ["pypulseq"]
+
+[[sources]]
+type = "file"
+name = "MRzero"
+path = "https://raw.githubusercontent.com/MRsources/MRzero-Core/refs/heads/main/documentation/playground_mr0/mr0_EPI_2D_seq.ipynb"
+dependencies = ["pypulseq==1.4.2.post2"]
+micropip_no_deps = ["pypulseq"]
