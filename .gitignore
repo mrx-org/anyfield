@@ -13,3 +13,5 @@ niivue_/
 node_modules/
 .cursor/
 terminals/
+tests/prot_uv_colab_conform_tests/_colab_notebooks/
+tests/prot_uv_colab_conform_tests/.colab_conform_*

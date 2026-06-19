@@ -1,6 +1,6 @@
 # Niivue minimal app (zero-install)
 
-**Version:** `v1.2.1`
+**Version:** `v1.3.0`
 
 This is a **minimal Niivue viewer** implemented as a single `viewer.html` file.
 
@@ -21,43 +21,64 @@ http://localhost:8000/?s_category=<ns>&s_file=<stem>&s_func=<name>
 
 Example: pypulseq `write_epi` / `main`:
 
-`http://localhost:8000/?s_category=pypulseq&s_file=write_epi&s_func=main`
+`http://localhost:8000/?s_category=pypulseq_examples&s_file=write_epi&s_func=main`
 
 Use the real file stem (no `.py`) and the exact Python function name. Namespaces:
 
 | Namespace (`s_category`) | Meaning |
 |--------------------------|---------|
-| `builtin`  | `pypulseq/built_in_seq/<stem>.py` |
+| `anyseq`   | `anyseq.scripts.<stem>` from the `anyseq` folder source in `sources.toml` |
 | `mrseq`    | `mrseq.scripts.<stem>` — `<stem>` is the **module name** (e.g. `radial_flash` from `radial_flash.py` in [mrseq/scripts](https://github.com/PTB-MR/mrseq/tree/main/src/mrseq/scripts)) |
-| `pypulseq` | `pypulseq_examples.scripts.<stem>` from the GitHub examples source in `sources_config.py` |
+| `pypulseq_examples` | `pypulseq_examples.scripts.<stem>` from the pypulseq examples folder in `sources.toml` |
+
+Each `s_category` matches the `name` of a `type = "folder"` or `type = "module"` entry in `sources.toml` (folder sources mount as `<name>.scripts.*`).
 
 If **all three** of `s_category`, `s_file`, and `s_func` are present and non-empty, they are combined as `namespace/file_stem:function_name` for startup. Otherwise **`init_prot`** is used if set (legacy, single encoded token).
+
+**Shared protocol capsules:** The Sequence Explorer **share** button creates a hash link:
+
+`http://localhost:8000/#protocol_gz=<base64url-gzip-json>`
+
+This imports a complete saved protocol into `user/prot/`, then selects it. It is different from `init_prot`: `init_prot` selects an existing configured source, while `protocol_gz` brings the protocol code with the URL. Shared protocols are not auto-run.
+
+The dashed share icon creates a light source link (`?s_category=...&s_file=...&s_func=...`) and is only shown for sequences that come from configured `sources.toml` sources (`anyseq`, `mrseq`, `pypulseq_examples`). It appends changed parameters as `sp_<name>=...` overrides. The solid share icon first snapshots the current parameter pane, then creates the full `#protocol_gz` capsule link.
 
 **Legacy `init_prot`:** `?init_prot=<token>` with `token` = `namespace/file_stem:function_name`. Encode the whole token with `encodeURIComponent` if you build it in code:
 
 ```js
-const token = 'pypulseq/write_epi:main';
+const token = 'pypulseq_examples/write_epi:main';
 const url = `http://localhost:8000/?init_prot=${encodeURIComponent(token)}`;
 ```
 
 **More examples (readable params; local server on port 8000):**
 
 1. Pulseq interpreter  
-   `http://localhost:8000/?s_category=builtin&s_file=seq_pulseq_interpreter&s_func=seq_pulseq_interpreter`
+   `http://localhost:8000/?s_category=anyseq&s_file=seq_pulseq_interpreter&s_func=seq_pulseq_interpreter`
 
 2. TSE asymmetric protocol  
-   `http://localhost:8000/?s_category=builtin&s_file=mr0_tse_2d_seq&s_func=prot_TSE_2D_asym_ex`
+   `http://localhost:8000/?s_category=anyseq&s_file=mr0_tse_2d_seq&s_func=prot_TSE_2D_asym_ex`
 
 3. Built-in GRE  
-   `http://localhost:8000/?s_category=builtin&s_file=gre_seq&s_func=seq_gre`
+   `http://localhost:8000/?s_category=anyseq&s_file=gre_seq&s_func=seq_gre`
 
 4. mrseq `radial_flash` / `main`  
    `http://localhost:8000/?s_category=mrseq&s_file=radial_flash&s_func=main`
 
 5. pypulseq `write_radial_gre` / `main`  
-   `http://localhost:8000/?s_category=pypulseq&s_file=write_radial_gre&s_func=main`
+   `http://localhost:8000/?s_category=pypulseq_examples&s_file=write_radial_gre&s_func=main`
 
-If no deep link is given, the app starts with the built-in **GRE** (`builtin/gre_seq:seq_gre`).
+If no deep link is given, the app starts with the default **GRE** (`anyseq/gre_seq:seq_gre`).
+
+### Protocol file format
+
+Generated protocol capsules use three separate sections:
+
+- **PEP 723** comment block for `uv` and Pyodide package installs (`dependencies`, plus `[tool.anyfield] micropip_no_deps` install hints).
+- **Notebook setup** guard for Colab/Jupyter (`%pip install` with the same dependencies).
+- **marked `_anyfield_json` block** runtime metadata for AnyField (`prot_func`, `seq_definition`, `seq_func`, `simulation`, `recon`, optional `seq_origin`):
+  `# --- AnyField metadata begin ---` ... `# --- AnyField metadata end ---`
+
+Install metadata is intentionally not duplicated in `_anyfield_json`.
 
 ### Remote `.seq` file (`seq_url`)
 
@@ -73,17 +94,20 @@ e.g.
 http://localhost:8000/?seq_url=https://raw.githubusercontent.com/pulseq-frame/test-seqs/refs/heads/main/spiral-TSE/ssTSE.seq
 ```
 
-`seq_url` alone selects **builtin / seq_pulseq_interpreter / seq_pulseq_interpreter** automatically.
+`seq_url` alone selects **anyseq / seq_pulseq_interpreter / seq_pulseq_interpreter** automatically.
 
 Combine with an explicit protocol deep link:
 
 ```text
-http://localhost:8000/?s_category=builtin&s_file=seq_pulseq_interpreter&s_func=seq_pulseq_interpreter&seq_url=<encoded-url>
+http://localhost:8000/?s_category=anyseq&s_file=seq_pulseq_interpreter&s_func=seq_pulseq_interpreter&seq_url=<encoded-url>
 ```
 
 For more insights see insights SPEC_no_field.md. 
 
 ## Release notes
+
+**v1.3.0**
+- added cancel buttons
 
 **v1.2.1**
 - **SIM pipeline overlap**: After seq prep + FOV snapshot, **`conseq` runs in parallel** with Pyodide footprint resample and phantom conversion; **`trajex` and sim (MR0/Rapisim) run in parallel** once both are ready. Recon still waits for trajectory + signal.
@@ -98,6 +122,7 @@ For more insights see insights SPEC_no_field.md.
 
 **v1.1.0**
 - **Scan queue draft row**: A preparing row at the top of the scan queue mirrors the protocol being edited — editable name, then **SCAN** — without starting the pipeline until you click run.
+- **User protocols (session-only)**: SIM snapshots under `user/prot/` last for the current session only; reload clears them. Use **Download** or `#protocol_gz` share to keep a protocol.
 - **Clean scan naming**: Display titles use `N. name` (e.g. `1. gre_seq`) everywhere — SCANS list, preview **B**, and compare **C**. Output files are `scan_<n>_<name>.nii.gz` / `.seq` (no timestamp suffixes or backend tags like `_sim_mr0`).
 - **Protocol TOML**: Saved protocols embed `[simulation]` (backend, phantom, FOV affine/matrix) and `[recon]` (matrix, method) in the `.py` preamble; pulse params stay in the Python body. Scan number and user label are **not** duplicated in TOML — they come from `user/prot/<n>_*.py` and `scan_<n>_*.nii.gz`.
 - **Sim backend metadata**: MR0 vs Rapisim tracked via `[simulation].backend` in TOML instead of filename suffixes.
