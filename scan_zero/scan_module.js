@@ -247,6 +247,14 @@ export class ScanModule {
             };
         });
 
+        list.querySelectorAll('.cancel-sim-btn').forEach(btn => {
+            btn.onclick = (e) => {
+                e.stopPropagation();
+                const jobId = btn.closest('.queue-item').dataset.id;
+                this.cancelSim(jobId);
+            };
+        });
+
         list.querySelectorAll('.remove-job-btn').forEach(btn => {
             btn.onclick = (e) => {
                 e.stopPropagation();
@@ -534,7 +542,7 @@ export class ScanModule {
 
     async _ensureToolApi() {
         if (this._toolApiCall) return this._toolApiCall;
-        const { default: init, call } = await import('https://unpkg.com/toolapi-wasm@0.4.5/toolapi_wasm.js');
+        const { default: init, call } = await import('https://unpkg.com/toolapi@0.5.2/toolapi.js');
         await init();
         this._toolApiCall = call;
         return call;
@@ -559,6 +567,22 @@ export class ScanModule {
             console.log(`${tag} [${ch}]`, msg);
             return true;
         };
+    }
+
+    /** Progress callback for mr0sim/rapisim; return false to abort the server sim. */
+    _simOnMessage(job, channel) {
+        const tag = this._jobSimLogTag(job);
+        const ch = channel || 'sim';
+        return (msg) => {
+            if (job.abortSim) return false;
+            console.log(`${tag} [${ch}]`, msg);
+            return true;
+        };
+    }
+
+    /** mr0sim/rapisim call; abort via onMessage returning false when job.abortSim is set. */
+    async _callToolSim(url, input, channel, job) {
+        return await this._callTool(url, input, channel, this._simOnMessage(job, channel));
     }
 
     async _acquireToolSlot() {
@@ -615,14 +639,15 @@ export class ScanModule {
 
     /**
      * One toolapi-wasm request = one WebSocket to `url` (slot-limited globally).
+     * @param {Function|null} [onMessage] — optional progress callback; default logs only.
      */
-    async _callTool(url, input, channel) {
+    async _callTool(url, input, channel, onMessage = null) {
         await this._acquireToolSlot();
         const call = await this._ensureToolApi();
         const label = channel || this._toolChannelFromUrl(url);
         console.log(`${this._simPipelineJob ? this._jobSimLogTag(this._simPipelineJob) : 'SIM'} [${label}] ws open → ${url}`);
         try {
-            return await call(url, input, this._toolOnMessageFor(label));
+            return await call(url, input, onMessage || this._toolOnMessageFor(label));
         } finally {
             console.log(`${this._simPipelineJob ? this._jobSimLogTag(this._simPipelineJob) : 'SIM'} [${label}] ws closed`);
             this._releaseToolSlot();
@@ -841,6 +866,7 @@ export class ScanModule {
     _jobMetaLine(job) {
         const parts = [job.timestamp];
         if (job.simulation?.backendLabel) parts.push(job.simulation.backendLabel);
+        if (job.status === 'error' && job.error) parts.push(job.error);
         return parts.join(' · ');
     }
 
@@ -1244,8 +1270,10 @@ if os.path.exists(_p):
         const simToolUrl = job.simulation?.toolUrl || TOOL_RAPISIM;
         const simLogTag = this._jobSimLogTag(job);
         this._simPipelineJob = job;
+        job.abortSim = false;
         job.status = 'scanning';
         job.pipelineStage = 0;
+        job.error = null;
         this.updateQueueUI();
         const _tPipeline = performance.now();
         try {
@@ -1338,12 +1366,14 @@ if os.path.exists(_p):
                     { Dict: { sequence: events, t1: { Float: 1.0 }, t2: { Float: 0.1 }, min_mag: { Float: 0.001 } } },
                     'trajex',
                 ),
-                this._callTool(
+                this._callToolSim(
                     simToolUrl,
                     { Dict: { sequence: seq, phantom: phantomForSim } },
                     simChannel,
+                    job,
                 ),
             ]);
+            if (job.abortSim) throw new Error('user stopped');
             const simLegs = [
                 { label: 'trajex', settled: trajSettled },
                 { label: simChannel, settled: simSettled },
@@ -1352,6 +1382,7 @@ if os.path.exists(_p):
                 leg.settled.status === 'rejected' || this._toolErrorMessage(leg.settled.value),
             );
             if (simFail.length) {
+                if (job.abortSim) throw new Error('user stopped');
                 throw new Error(this._parallelStageError('Simulate (trajex ∥ sim)', simLegs));
             }
             const trajResult = trajSettled.value;
@@ -1366,6 +1397,7 @@ if os.path.exists(_p):
             if (!signal?.length) {
                 throw new Error(`${simLogTag}: ${simChannel} returned no signal.`);
             }
+            if (job.abortSim) throw new Error('user stopped');
             this._setPipelineStage(job, 3);
 
             // 5) PyNUFFT recon: reconRef was built up-front from the same frozen fovSnapshot as
@@ -1443,6 +1475,8 @@ _recon.run_sim_recon(
             console.log(`[SIM] ${useRecon ? 'PyNUFFT recon' : 'k-space log'}: ${(performance.now()-_t6).toFixed(0)}ms`);
             this._setPipelineStage(job, 4);
 
+            if (job.abortSim) throw new Error('user stopped');
+
             // 7) show in Niivue (scan-like naming/path)
             job.niftiUrl = URL.createObjectURL(new Blob([recoBytes], { type: "application/octet-stream" }));
             job.seqUrl = URL.createObjectURL(new Blob([seqText], { type: "text/plain" }));
@@ -1452,11 +1486,17 @@ _recon.run_sim_recon(
             // for the next scan. Explicit VIEW SCAN clicks still sync (default `syncFov=true`).
             this.loadJob(job.id, false);
         } catch (e) {
-            console.error(`[${simLogTag}] failed:`, e);
-            job.status = 'error';
-            job.error = typeof nvMod?.formatPyodideError === "function"
-                ? nvMod.formatPyodideError(e)
-                : (e.message || String(e));
+            if (job.abortSim) {
+                console.warn(`[${simLogTag}] stopped by user`);
+                job.status = 'error';
+                job.error = 'user stopped';
+            } else {
+                console.error(`[${simLogTag}] failed:`, e);
+                job.status = 'error';
+                job.error = typeof nvMod?.formatPyodideError === "function"
+                    ? nvMod.formatPyodideError(e)
+                    : (e.message || String(e));
+            }
         } finally {
             this._simPipelineJob = null;
         }
@@ -1466,8 +1506,14 @@ _recon.run_sim_recon(
     /** 0=⅛ queued; stages 1–4 advance when conseq/trajex/sim/recon each finish */
     _setPipelineStage(job, stage) {
         if (!job) return;
+        const prev = job.pipelineStage ?? 0;
         const s = Math.max(0, Math.min(4, Number(stage) || 0));
         job.pipelineStage = s;
+        if (s === 2 || prev === 2) {
+            this.updateQueueUI();
+            if (job.status === 'scanning') this._syncMobileScanControls();
+            return;
+        }
         const el = this.container?.querySelector(`.queue-item[data-id="${job.id}"] .scan-pipeline-progress`);
         if (el) {
             el.style.setProperty('--stage', s);
@@ -1512,9 +1558,14 @@ _recon.run_sim_recon(
                     <div class="item-meta">${this._escapeHtml(this._jobMetaLine(job))}</div>
                 </div>
                 <div class="item-actions">
-                    ${job.status === 'scanning'
-                        ? this._pipelineProgressHtml(job.pipelineStage ?? 0, !!job.cropOnly)
-                        : ''}
+                    ${job.status === 'scanning' ? `
+                        <div class="action-row small-btns">
+                            ${!job.cropOnly && (job.pipelineStage ?? 0) === 2 ? `
+                                <button type="button" class="cancel-sim-btn" title="Stop simulation" aria-label="Stop simulation"><i class="bi bi-stop-fill" aria-hidden="true"></i></button>
+                            ` : ''}
+                            ${this._pipelineProgressHtml(job.pipelineStage ?? 0, !!job.cropOnly)}
+                        </div>
+                    ` : ''}
                     ${job.status === 'done' ? `
                         <div class="action-row">
                             <button class="view-btn" title="View on main + preview (B). Ctrl+click: compare pane (C).">VIEW SCAN</button>
@@ -1526,8 +1577,11 @@ _recon.run_sim_recon(
                         </div>
                     ` : ''}
                     ${job.status === 'error' ? `
-                        <div class="action-row small-btns">
-                            <span class="error-icon" title="${job.error}">⚠</span>
+                        <div class="action-row${!job.cropOnly && job.vfsSeqPath ? '' : ' small-btns'}">
+                            ${!job.cropOnly && job.vfsSeqPath ? `
+                                <button class="view-seq-btn">VIEW SEQ</button>
+                            ` : ''}
+                            <span class="error-icon" title="${this._escapeHtml(job.error || 'error')}">⚠</span>
                             <button class="remove-job-btn" title="Remove scan"><i class="bi bi-x-lg" aria-hidden="true"></i></button>
                         </div>
                     ` : ''}
@@ -1550,6 +1604,17 @@ _recon.run_sim_recon(
         }
 
         this._bindQueueItemActions(list);
+        this._syncMobileScanControls();
+    }
+
+    cancelSim(jobId) {
+        const job = this.queue.find((j) => j.id === jobId);
+        if (!job || job.cropOnly || (job.pipelineStage ?? 0) !== 2) return;
+        if (job.status !== 'scanning' && !(job.status === 'error' && job.abortSim)) return;
+        job.abortSim = true;
+        job.status = 'error';
+        job.error = 'user stopped';
+        this.updateQueueUI();
         this._syncMobileScanControls();
     }
 
@@ -1714,7 +1779,7 @@ data
 
     viewSeq(jobId) {
         const job = this.queue.find(j => j.id === jobId);
-        if (!job || job.status !== 'done') return;
+        if (!job || (job.status !== 'done' && job.status !== 'error')) return;
 
         if (!job.vfsSeqPath) {
             alert("No pulse sequence file was saved for this scan. (Ensure you 'plot seq' before scanning)");

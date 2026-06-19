@@ -237,6 +237,10 @@ html.pro-user #seq-mobile-crop {
     to { transform: rotate(360deg); }
 }
 
+.queue-item.status-error .item-meta {
+    color: rgba(252, 165, 165, 0.95);
+}
+
 .error-icon {
     color: var(--error, #ef4444);
     font-weight: var(--font-weight-bold, 700);
