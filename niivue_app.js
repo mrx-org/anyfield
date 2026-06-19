@@ -1,7 +1,7 @@
 import { Niivue, NVMesh, NVImage, SLICE_TYPE, MULTIPLANAR_TYPE, DRAG_MODE, SHOW_RENDER } from "https://unpkg.com/@niivue/niivue@0.65.0/dist/index.js";
 import { eventHub } from "./event_hub.js";
 import { formatScanDisplayTitle } from "./scan_zero/scan_module.js";
-import { volumeIs4D, syncVolumeClimsToCurrent4DFrame, installFrameAwareContrastDrag } from "./hist_panel/histogram-clim-panel.js";
+import { volumeIs4D, syncVolumeClimsToCurrent4DFrame, installFrameAwareContrastDrag, installFrameAwareBriConReset } from "./hist_panel/histogram-clim-panel.js";
 
 /**
  * Remote base URL for the bundled default nifti_phantom (JSON + NIfTIs), served from GitHub `raw`.
@@ -3649,6 +3649,16 @@ function getPreviewPeerNv(sourceNv) {
   return null;
 }
 
+export function syncPreviewViewerClims() {
+  for (const mod of [window.scanPreview, window.scanCompare?.module]) {
+    const nv = mod?.nv;
+    const vol = nv?.volumes?.[0];
+    if (!nv || !vol?.img) continue;
+    if (volumeIs4D(vol)) syncVolumeClimsToCurrent4DFrame(vol, nv);
+  }
+  window.jointHist?.refresh?.();
+}
+
 /** Step 4D frame on preview B and synced compare C (Niivue default needs cursor-in-bounds). */
 function stepPreviewPanesFrame4D(sourceNv, delta) {
   if (!sourceNv?.volumes?.length) return false;
@@ -3743,6 +3753,7 @@ export function installPreviewSyncHooks(nv) {
   if (!nv || nv._previewSyncHooksInstalled) return;
   nv._previewSyncHooksInstalled = true;
   installFrameAwareContrastDrag(nv);
+  installFrameAwareBriConReset(nv);
   const prevLoc = nv.onLocationChange;
   nv.onLocationChange = (data) => {
     if (typeof prevLoc === 'function') prevLoc(data);
@@ -3903,16 +3914,18 @@ export class ScanPreviewModule {
       window.jointHist?.installPreviewHooks?.();
       this.canvas.addEventListener("keydown", (e) => this._onPreviewViewKey(e), true);
 
-      // Double-click: compare pane Ctrl+dbl-click closes and frees GPU; else maximize
+      // Capture phase: block Niivue dblclick → resetBriCon (robust frame-0 window).
       this.canvas.addEventListener("dblclick", (e) => {
         if (this.role === 'compare' && (e.ctrlKey || e.metaKey)) {
           e.preventDefault();
-          e.stopPropagation();
+          e.stopImmediatePropagation();
           window.scanCompare?.deactivate?.();
           return;
         }
+        e.preventDefault();
+        e.stopImmediatePropagation();
         this.toggleMaximize();
-      });
+      }, true);
       
       // Double-tap detection for touch
       let lastTapTime = 0;

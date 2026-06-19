@@ -351,7 +351,7 @@
 
     <script type="module" src="paper_plot/launch.js?v=11"></script>
     <script type="module">
-        import { NiivueModule, ScanPreviewModule, ComparePane } from './niivue_app.js';
+        import { NiivueModule, ScanPreviewModule, ComparePane, syncPreviewViewerClims } from './niivue_app.js';
         import { MainHistogramController, PreviewJointHistogramController } from './hist_panel/histogram-clim-panel.js';
         import { SequenceExplorer, patchSequencePlotFromCode } from './pypulseq/seq_explorer.js';
         import { ScanModule } from './scan_zero/scan_module.js?v=10';
@@ -586,7 +586,7 @@
                     if (cmpNv && compare?.style.display !== 'none') {
                         cmpNv.resizeListener();
                     }
-                    window.jointHist?.refresh?.();
+                    syncPreviewViewerClims();
                     window.mainHist?.scheduleRefresh?.();
                 }, 50);
             }
