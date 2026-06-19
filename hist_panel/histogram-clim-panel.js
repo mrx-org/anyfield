@@ -213,6 +213,24 @@ export function installFrameAwareContrastDrag(nv) {
   };
 }
 
+/**
+ * Niivue double-click / long-press calls `resetBriCon` → robust_min/max (frame 0).
+ * For 4D recon (mag | phase), recompute window for the active frame instead.
+ */
+export function installFrameAwareBriConReset(nv) {
+  if (!nv || nv._frameAwareBriConHook || typeof nv.resetBriCon !== "function") return;
+  nv._frameAwareBriConHook = true;
+  const orig = nv.resetBriCon.bind(nv);
+  nv.resetBriCon = (msg = null) => {
+    const vol = nv.volumes?.[0];
+    if (vol?.img && volumeIs4D(vol)) {
+      syncVolumeClimsToCurrent4DFrame(vol, nv);
+      return;
+    }
+    return orig(msg);
+  };
+}
+
 export function computeLogHistogramBins(vol, voxelView, S, BINS, gMin, gMax, barHOut) {
   const gRange = gMax - gMin || 1;
   const invBin = BINS / gRange;
