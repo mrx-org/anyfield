@@ -3632,8 +3632,9 @@ const PREVIEW_PANE_SYNC_OPTS = {
   crosshair: true,
   sliceType: true,
   zoomPan: true,
-  cal_min: true,
-  cal_max: true,
+  // Clims are recomputed per 4D frame (mag vs phase); avoid broadcast overwriting them.
+  cal_min: false,
+  cal_max: false,
   gamma: true,
 };
 
@@ -3676,11 +3677,15 @@ function stepPreviewPanesFrame4D(sourceNv, delta) {
         vol.frame4D = next;
         nv.updateGLVolume?.();
       }
+    }
+    for (const nv of targets) {
+      const vol = nv.volumes[0];
+      if (!vol || !volumeIs4D(vol)) continue;
       syncVolumeClimsToCurrent4DFrame(vol, nv, next);
       nv.drawScene?.();
       refreshCrosshairIntensityForNv(nv);
     }
-    window.jointHist?.syncFromVolumes?.();
+    window.jointHist?.refresh?.();
   } finally {
     _previewPeerSyncGuard = false;
   }
@@ -3709,7 +3714,7 @@ export function pushPreviewStateFrom(sourceNv) {
     peer.opts.crosshairWidth = w;
     peer.setCrosshairWidth(w);
     peer.drawScene();
-    if (typeof window !== "undefined") window.jointHist?.syncFromVolumes?.();
+    if (typeof window !== "undefined") window.jointHist?.refresh?.();
   } finally {
     _previewPeerSyncGuard = false;
   }
@@ -3763,6 +3768,17 @@ export function installPreviewSyncHooks(nv) {
     if (!_previewPeerSyncGuard && getPreviewPeerNv(nv)) pushPreviewStateFrom(nv);
     if (!window.jointHist?.panel?.isApplyingFromPanel?.()) {
       window.jointHist?.syncFromVolumes?.();
+    }
+  };
+  const prevFrameChange = nv.onFrameChange;
+  nv.onFrameChange = (changedVol, frameIdx) => {
+    if (typeof prevFrameChange === "function") prevFrameChange(changedVol, frameIdx);
+    const vol = nv.volumes?.[0];
+    if (!vol || changedVol !== vol || !volumeIs4D(vol)) return;
+    const fi = Number.isFinite(frameIdx) ? frameIdx : (vol.frame4D ?? 0);
+    syncVolumeClimsToCurrent4DFrame(vol, nv, fi);
+    if (!window.jointHist?.panel?.isApplyingFromPanel?.()) {
+      window.jointHist?.refresh?.();
     }
   };
 }
@@ -3993,8 +4009,13 @@ export class ScanPreviewModule {
         url, 
         name: name ?? "scan", 
         colormap: "gray", 
-        opacity: 1.0 
+        opacity: 1.0,
+        trustCalMinMax: false,
+        percentileFrac: 0.02,
       }]);
+
+      const vol = this.nv.volumes[0];
+      if (vol) syncVolumeClimsToCurrent4DFrame(vol, this.nv);
       
       this.currentScanName = name;
       this.nv.drawScene();

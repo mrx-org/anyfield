@@ -81,6 +81,8 @@ export function voxelBufferForDisplayedLayer(volume) {
   if (!img) throw new Error("volume has no img buffer");
   const nVox = getNVox3D(volume);
   if (!nVox) return img;
+  // Already pointing at a single 3D slab (e.g. temporary contrast-drag hook).
+  if (img.length === nVox) return img;
   const nFr =
     volume.nFrame4D ??
     (img.length >= nVox ? Math.max(1, Math.floor(img.length / nVox)) : 1);
@@ -144,29 +146,37 @@ export function computeSlabRobustClims(vol, lowPct = 0.02, highPct = 0.98) {
     samples[Math.min(samples.length - 1, Math.floor(samples.length * highPct))] ??
     samples[samples.length - 1];
   if (!Number.isFinite(lo) || !Number.isFinite(hi) || lo >= hi) {
+    const mn = samples[0];
+    const mx = samples[samples.length - 1];
+    if (Number.isFinite(mn) && Number.isFinite(mx) && mn < mx) {
+      return { calMin: mn, calMax: mx };
+    }
     return { calMin: vol.cal_min, calMax: vol.cal_max };
   }
   return { calMin: lo, calMax: hi };
 }
 
+/** Niivue default: `percentileFrac` 0.02 → 2nd..98th percentile robust window. */
+export const NIIVUE_DEFAULT_PERCENTILE_FRAC = 0.02;
+
 export function syncVolumeClimsToCurrent4DFrame(vol, nv, frameIdxOverride = null) {
   if (!vol?.img) return { calMin: vol?.cal_min ?? 0, calMax: vol?.cal_max ?? 1 };
-  const hasOverride = Number.isFinite(frameIdxOverride);
-  const targetFrame = hasOverride ? Math.max(0, Math.floor(frameIdxOverride)) : (vol.frame4D ?? 0);
-  if (volumeIs4D(vol)) {
-    // Deterministic per-frame clims: avoid depending on Niivue internals that can
-    // keep frame-0 style clims on some 4D datasets.
-    vol.frame4D = targetFrame;
-    const frameRange = computeSlabDataRange(vol, false);
-    if (Number.isFinite(frameRange.lo) && Number.isFinite(frameRange.hi) && frameRange.lo < frameRange.hi) {
-      vol.cal_min = frameRange.lo;
-      vol.cal_max = frameRange.hi;
-    } else {
-      const r = computeSlabRobustClims(vol);
-      vol.cal_min = r.calMin;
-      vol.cal_max = r.calMax;
-    }
+  if (Number.isFinite(frameIdxOverride) && volumeIs4D(vol)) {
+    vol.frame4D = Math.max(0, Math.floor(frameIdxOverride));
   }
+
+  const pct = Number.isFinite(vol.percentileFrac) ? vol.percentileFrac : NIIVUE_DEFAULT_PERCENTILE_FRAC;
+
+  // Niivue `percentileFrac` (default 2nd..98th) on the active 4D frame slab.
+  // Avoid `calMinMax(..., true)` — that samples only the volume center and clips most tissue.
+  const r = computeSlabRobustClims(vol, pct, 1 - pct);
+  vol.cal_min = r.calMin;
+  vol.cal_max = r.calMax;
+
+  if (Number.isFinite(vol.cal_min) && Number.isFinite(vol.cal_max) && vol.cal_min >= vol.cal_max) {
+    vol.cal_max = vol.cal_min + (Math.abs(vol.cal_min) * 1e-6 + 1e-9);
+  }
+
   nv?.updateGLVolume?.();
   nv?.drawScene?.();
   return { calMin: vol.cal_min, calMax: vol.cal_max };
@@ -687,6 +697,10 @@ export function attachNiivueHistogramPanel(config) {
     scheduleGpuAndRedraw();
   }
 
+  if (syncClimsOn4DFrame) {
+    ({ calMin, calMax } = syncVolumeClimsToCurrent4DFrame(vol, nv));
+  }
+
   recomputeHistogramBars();
   updateHistogramRowVisibility(vol, histogramModeRow, histogramModeSelect);
   if (histogramModeSelect) histogramModeSelect.value = histogramMode;
@@ -1008,6 +1022,7 @@ export function attachDualNiivueHistogramPanel(config) {
     syncClimFromVolumes() {
       if (applyingFromPanel) return;
       readClimFromVolumes();
+      recomputeAxisAndBars();
       syncInputs();
       if (frameId) cancelAnimationFrame(frameId);
       frameId = 0;
