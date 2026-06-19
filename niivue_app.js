@@ -354,7 +354,7 @@ export class NiivueModule {
         <div id="panel-phantoms-${this.instanceId}" class="panel-flat" style="display: flex; flex-direction: column; height: 100%; box-sizing: border-box; overflow: hidden;">
           <div class="row" style="display: flex; flex-direction: column; gap: 4px; flex-shrink: 0;">
             <div style="display: flex; gap: 4px; flex-wrap: wrap;">
-              <button id="btn-add-folder-${this.instanceId}" class="btn btn-secondary btn-sm btn-flex" title="Select folder with JSON + NIfTIs">Add (json/nii)</button>
+              <button id="btn-add-folder-${this.instanceId}" class="btn btn-secondary btn-sm btn-flex" title="Select folder with JSON + NIfTIs">Add BIfTI</button>
               <button id="load-demo-${this.instanceId}" class="btn btn-secondary btn-sm btn-flex" title="Reload bundled brain default phantom">Default phantom</button>
               <input id="dir-${this.instanceId}" type="file" webkitdirectory directory multiple style="display: none;" />
             </div>
@@ -1771,6 +1771,10 @@ os.makedirs('/phantom/averaged', exist_ok=True)
 
   /** Re-fire location callback after volume list changes (keeps intensity overlay in sync). */
   refreshCrosshairIntensityOverlay() {
+    if (!this.nv?.volumes?.length) {
+      if (this.crosshairIntensityEl) this.crosshairIntensityEl.textContent = "—";
+      return;
+    }
     const ax = typeof this.currentAxCorSag === "number" && Number.isFinite(this.currentAxCorSag)
       ? this.currentAxCorSag
       : NaN;
@@ -3614,13 +3618,17 @@ export function updateCrosshairIntensityOverlay(el, nv, data, preferVol = null) 
 }
 
 export function refreshCrosshairIntensityForNv(nv, axCorSag = NaN) {
-  if (!nv?.createOnLocationChange) return;
+  if (!nv?.createOnLocationChange || !nv.volumes?.length) return;
   const ax = Number.isFinite(axCorSag)
     ? axCorSag
     : (typeof nv.opts?.sliceType === "number" && nv.opts.sliceType < SLICE_TYPE.RENDER
       ? nv.opts.sliceType
       : 0);
-  nv.createOnLocationChange(ax);
+  try {
+    nv.createOnLocationChange(ax);
+  } catch (e) {
+    console.warn("refreshCrosshairIntensityForNv failed", e);
+  }
 }
 
 /** Sync options for scan preview (B) ↔ compare (C) panes */
@@ -3871,6 +3879,10 @@ export class ScanPreviewModule {
   }
 
   refreshCrosshairIntensityOverlay() {
+    if (!this.nv?.volumes?.length) {
+      if (this.crosshairIntensityEl) this.crosshairIntensityEl.textContent = "—";
+      return;
+    }
     refreshCrosshairIntensityForNv(this.nv);
   }
 
