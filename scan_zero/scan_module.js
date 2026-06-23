@@ -6,12 +6,94 @@ export const TOOL_CONSEQ = 'wss://tool-conseq.fly.dev/tool';
 export const TOOL_TRAJEX = 'wss://tool-trajex.fly.dev/tool';
 export const TOOL_RAPISIM = 'wss://tool-rapisim.fly.dev/tool';
 export const TOOL_MR0SIM = 'wss://tool-mr0sim.fly.dev/tool';
+export const TOOL_MR0SIM_T4 = 'wss://mzaiss--tool-mr0sim-modal-serve-t4.modal.run/tool';
 
 const TOOL_FLY_HOSTS = [TOOL_CONSEQ, TOOL_TRAJEX, TOOL_RAPISIM, TOOL_MR0SIM].map(
     (url) => new URL(url).hostname,
 );
 
 const PIPELINE_STAGES = ['prep', 'conseq', 'trajex', 'sim', 'recon'];
+
+/** Ring fill angles (deg): stages 1+2 → 60; sim 60–315; recon 315–330 */
+const PIPELINE_DEG = {
+    prep: 15,
+    conseq: 30,
+    trajex: 60,
+    simStart: 60,
+    simSpan: 255,
+    reconEnd: 330,
+};
+
+/** Map pipeline stage + optional sim fraction to ring fill angle. */
+function pipelineProgressDeg(stage, simProgress = 0, reconDone = false) {
+    const s = Math.max(0, Math.min(4, Number(stage) || 0));
+    const sim = Math.max(0, Math.min(1, Number(simProgress) || 0));
+    if (s >= 4) {
+        return reconDone
+            ? PIPELINE_DEG.reconEnd
+            : PIPELINE_DEG.simStart + PIPELINE_DEG.simSpan;
+    }
+    if (s >= 3) return PIPELINE_DEG.simStart + sim * PIPELINE_DEG.simSpan;
+    if (s >= 2) return PIPELINE_DEG.trajex;
+    if (s >= 1) return PIPELINE_DEG.conseq;
+    return PIPELINE_DEG.prep;
+}
+
+/** Weight bands within the sim arc (fraction 0–1 of 60°–315°). */
+const SIM_PROGRESS_BANDS = {
+    scan: [0.0, 0.15],
+    build: [0.15, 0.42],
+    phantom: [0.42, 0.52],
+    exec: [0.52, 0.98],
+};
+
+function simBandFrac(band, local) {
+    const [lo, hi] = SIM_PROGRESS_BANDS[band] || [0, 1];
+    const t = Math.max(0, Math.min(1, Number(local) || 0));
+    return lo + t * (hi - lo);
+}
+
+/**
+ * Map mr0sim progress strings to [0, 1] over the sim arc.
+ * Handles batched "scanned N/M events", "built N/M repetitions", etc.
+ */
+function parseMr0SimProgressMessage(msg) {
+    const s = String(msg || '').trim();
+    if (!s) return null;
+
+    let m = s.match(/scanned\s+(\d+)\s*\/\s*(\d+)\s+events/i);
+    if (m) {
+        const den = parseInt(m[2], 10);
+        if (den > 0) return simBandFrac('scan', parseInt(m[1], 10) / den);
+    }
+
+    m = s.match(/built\s+(\d+)\s*\/\s*(\d+)\s+repetitions/i);
+    if (m) {
+        const den = parseInt(m[2], 10);
+        if (den > 0) return simBandFrac('build', parseInt(m[1], 10) / den);
+    }
+
+    if (/building\s+\d+\s+repetitions/i.test(s)) return simBandFrac('build', 0);
+
+    if (/convert seq:\s*done/i.test(s)) return simBandFrac('build', 1);
+
+    if (/Converting Phantom|convert phantom/i.test(s)) return simBandFrac('phantom', 0);
+    if (/pd\s*=\s*torch\.Size/i.test(s)) return simBandFrac('phantom', 0.6);
+
+    if (/Simulating signal/i.test(s)) return { frac: simBandFrac('exec', 0), indeterminate: true };
+    if (/execute_graph/i.test(s)) return { frac: simBandFrac('exec', 0.85), indeterminate: false };
+
+    m = s.match(/(\d+(?:\.\d+)?)\s*%/);
+    if (m) return Math.min(1, Math.max(0, parseFloat(m[1]) / 100));
+
+    m = s.match(/(\d+)\s*\/\s*(\d+)/);
+    if (m) {
+        const den = parseInt(m[2], 10);
+        if (den > 0) return simBandFrac('exec', parseInt(m[1], 10) / den);
+    }
+
+    return null;
+}
 
 /** Max concurrent toolapi WebSocket calls (global across queued SCAN jobs). */
 const MAX_CONCURRENT_TOOL_WS = 2;
@@ -44,9 +126,10 @@ export const SIM_BACKENDS = {
     },
     rapisim: {
         id: 'rapisim',
-        label: 'Rapisim',
-        toolUrl: TOOL_RAPISIM,
-        reconBackend: 'rapisim',
+        label: 'mr0 GPU',
+        toolUrl: TOOL_MR0SIM_T4,
+        reconBackend: 'mr0',
+        useGpu: true,
         proOnly: true,
     },
 };
@@ -294,7 +377,7 @@ export class ScanModule {
                         SCAN<span class="icon">▶</span> 
                     </button>
                     ${isProUser() ? `
-                    <button id="btn-start-sim-fast" class="scan-btn" title="Rapisim (tool-rapisim)">
+                    <button id="btn-start-sim-fast" class="scan-btn" title="GPU T4 (Modal mr0sim)">
                          SCAN<span class="icon">▶▶</span>
                     </button>
                     ` : ''}
@@ -351,20 +434,12 @@ export class ScanModule {
         }
         statusSlot.hidden = false;
         statusSlot.setAttribute('aria-hidden', 'false');
-        const s = active.pipelineStage ?? 0;
-        const crop = !!active.cropOnly;
         let ring = statusSlot.querySelector('.scan-pipeline-progress');
         if (!ring) {
-            statusSlot.innerHTML = this._pipelineProgressHtml(s, crop);
-            return;
+            statusSlot.innerHTML = this._pipelineProgressHtml(active);
+            ring = statusSlot.querySelector('.scan-pipeline-progress');
         }
-        ring.style.setProperty('--stage', s);
-        ring.dataset.stage = String(s);
-        ring.classList.toggle('is-crop', crop);
-        const label = crop ? 'crop' : PIPELINE_STAGES[s];
-        ring.title = label;
-        ring.setAttribute('aria-valuenow', String(s));
-        ring.setAttribute('aria-label', label);
+        if (ring) this._applyPipelineRing(ring, active);
     }
 
     async startCrop() {
@@ -422,6 +497,7 @@ export class ScanModule {
                 backendLabel: backend.label,
                 toolUrl: backend.toolUrl,
                 reconBackend: backend.reconBackend,
+                useGpu: backend.useGpu === true,
             },
             status: 'pending',
             timestamp: `${pad(now.getHours())}:${pad(now.getMinutes())}:${pad(now.getSeconds())}`,
@@ -587,8 +663,119 @@ export class ScanModule {
         return (msg) => {
             if (job.abortSim) return false;
             console.log(`${tag} [${ch}]`, msg);
+            if ((job.pipelineStage ?? 0) < 3) return true;
+
+            const parsed = parseMr0SimProgressMessage(msg);
+            if (parsed == null) return true;
+
+            const frac = typeof parsed === 'object' ? parsed.frac : parsed;
+            const indeterminate = typeof parsed === 'object' && parsed.indeterminate;
+            if (indeterminate) job._simIndeterminate = true;
+            if (indeterminate === false) job._simIndeterminate = false;
+
+            job.simProgressTarget = Math.max(job.simProgressTarget ?? 0, frac);
+            job.simProgress = job.simProgressTarget;
+            this._ensureSimProgressAnimator(job);
             return true;
         };
+    }
+
+    _simProgressForDisplay(job) {
+        return job?.simDisplayProgress ?? job?.simProgressTarget ?? job?.simProgress ?? 0;
+    }
+
+    _stopSimProgressAnimator(job) {
+        if (!job) return;
+        if (job._simProgressAnimId) {
+            cancelAnimationFrame(job._simProgressAnimId);
+            job._simProgressAnimId = null;
+        }
+        job._simIndeterminate = false;
+    }
+
+    _ensureSimProgressAnimator(job) {
+        if (!job || job._simProgressAnimId) return;
+        job.simDisplayProgress = job.simDisplayProgress ?? 0;
+        job.simProgressTarget = job.simProgressTarget ?? 0;
+
+        const tick = () => {
+            job._simProgressAnimId = null;
+            if ((job.pipelineStage ?? 0) !== 3 || job.status !== 'scanning') {
+                return;
+            }
+
+            let target = job.simProgressTarget ?? 0;
+            if (job._simIndeterminate && target < SIM_PROGRESS_BANDS.exec[1] - 0.02) {
+                target = Math.min(SIM_PROGRESS_BANDS.exec[1] - 0.02, target + 0.0012);
+                job.simProgressTarget = target;
+            }
+
+            let display = job.simDisplayProgress ?? 0;
+            const delta = target - display;
+            if (Math.abs(delta) > 0.00005) {
+                const step = Math.sign(delta) * Math.min(Math.abs(delta), 0.018);
+                display = Math.max(0, Math.min(1, display + step));
+                job.simDisplayProgress = display;
+                job.simProgress = display;
+                for (const el of this._pipelineRingElements(job)) {
+                    this._applyPipelineRing(el, job);
+                }
+            }
+
+            if (Math.abs((job.simProgressTarget ?? 0) - display) > 0.00005 || job._simIndeterminate) {
+                job._simProgressAnimId = requestAnimationFrame(tick);
+            }
+        };
+        job._simProgressAnimId = requestAnimationFrame(tick);
+    }
+
+    _pipelineRingLabel(job) {
+        if (job?.cropOnly) return 'crop';
+        const s = job?.pipelineStage ?? 0;
+        if (s >= 3 && s < 4) {
+            const pct = Math.round(this._simProgressForDisplay(job) * 100);
+            return pct > 0 && pct < 100 ? `sim ${pct}%` : PIPELINE_STAGES[s];
+        }
+        return PIPELINE_STAGES[s] || 'prep';
+    }
+
+    _applyPipelineRing(el, job) {
+        if (!el || !job) return;
+        const s = job.pipelineStage ?? 0;
+        const simFrac = s >= 3 && s < 4 ? this._simProgressForDisplay(job) : (job.simProgress ?? 0);
+        const deg = pipelineProgressDeg(s, simFrac, !!job.reconDone);
+        const crop = !!job.cropOnly;
+        const label = this._pipelineRingLabel(job);
+        el.style.setProperty('--progress-deg', `${deg}deg`);
+        el.dataset.stage = String(s);
+        el.dataset.simProgress = String(simFrac);
+        el.classList.toggle('is-crop', crop);
+        el.classList.toggle('is-sim-running', s === 3 && job.status === 'scanning');
+        el.title = label;
+        el.setAttribute('aria-valuenow', String(Math.round(deg)));
+        el.setAttribute('aria-valuemax', '330');
+        el.setAttribute('aria-label', label);
+    }
+
+    _pipelineRingElements(job) {
+        if (!job?.id) return [];
+        const els = [];
+        const queueEl = this.container?.querySelector(
+            `.queue-item[data-id="${job.id}"] .scan-pipeline-progress`,
+        );
+        if (queueEl) els.push(queueEl);
+        const mobileEl = document.querySelector('#seq-mobile-pipeline-status .scan-pipeline-progress');
+        const active = this._getActiveScanJob();
+        if (active?.id === job.id && mobileEl) els.push(mobileEl);
+        return els;
+    }
+
+    _schedulePipelineRingUpdate(job) {
+        if (!job) return;
+        for (const el of this._pipelineRingElements(job)) {
+            this._applyPipelineRing(el, job);
+        }
+        if (job.status === 'scanning') this._syncMobileScanControls();
     }
 
     /** mr0sim/rapisim call; abort via onMessage returning false when job.abortSim is set. */
@@ -1278,7 +1465,7 @@ if os.path.exists(_p):
      */
     async runSimPipeline(job) {
         const nvMod = window.nvModule;
-        const simToolUrl = job.simulation?.toolUrl || TOOL_RAPISIM;
+        const simToolUrl = job.simulation?.toolUrl || TOOL_MR0SIM_T4;
         const simLogTag = this._jobSimLogTag(job);
         this._simPipelineJob = job;
         job.abortSim = false;
@@ -1370,7 +1557,17 @@ if os.path.exists(_p):
 
             // trajex ∥ sim (after conseq + phantom; recon needs both)
             this._setPipelineStage(job, 2);
+            job.simProgress = 0;
+            job.simProgressTarget = 0;
+            job.simDisplayProgress = 0;
+            job._simIndeterminate = false;
+            this._setPipelineStage(job, 3);
+            this._ensureSimProgressAnimator(job);
             const _tParallelSim = performance.now();
+            const simDict = { sequence: seq, phantom: phantomForSim };
+            if (job.simulation?.useGpu) {
+                simDict.use_gpu = { Bool: true };
+            }
             const [trajSettled, simSettled] = await Promise.allSettled([
                 this._callTool(
                     TOOL_TRAJEX,
@@ -1379,7 +1576,7 @@ if os.path.exists(_p):
                 ),
                 this._callToolSim(
                     simToolUrl,
-                    { Dict: { sequence: seq, phantom: phantomForSim } },
+                    { Dict: simDict },
                     simChannel,
                     job,
                 ),
@@ -1409,12 +1606,11 @@ if os.path.exists(_p):
                 throw new Error(`${simLogTag}: ${simChannel} returned no signal.`);
             }
             if (job.abortSim) throw new Error('user stopped');
+            this._stopSimProgressAnimator(job);
+            job.simProgressTarget = 1;
+            job.simDisplayProgress = 1;
+            job.simProgress = 1;
             this._setPipelineStage(job, 3);
-
-            // 5) PyNUFFT recon: reconRef was built up-front from the same frozen fovSnapshot as
-            // the phantom ref (step 2); no late re-read of the live FOV sliders here.
-
-            // 6) Recon or k-space debug (scan_zero/recon.py run_sim_recon)
             const useRecon = typeof nvMod.isScanReconEnabled === 'function'
                 ? nvMod.isScanReconEnabled()
                 : nvMod.scanRecon?.checked !== false;
@@ -1424,6 +1620,8 @@ if os.path.exists(_p):
             const recoOutPath = typeof nvMod.simReconOutPath === "function"
                 ? nvMod.simReconOutPath(job.id)
                 : "/tmp/__sim_pipeline_reco.nii";
+            job.reconDone = false;
+            this._setPipelineStage(job, 4);
             const recoBytes = await nvMod.enqueuePyodideTask(job.id, "sim-recon", async () => {
                 await nvMod.pyodide.loadPackage(["micropip"]);
                 await nvMod.pyodide.runPythonAsync(`
@@ -1484,6 +1682,7 @@ _recon.run_sim_recon(
                 return bytes;
             });
             console.log(`[SIM] ${useRecon ? 'PyNUFFT recon' : 'k-space log'}: ${(performance.now()-_t6).toFixed(0)}ms`);
+            job.reconDone = true;
             this._setPipelineStage(job, 4);
 
             if (job.abortSim) throw new Error('user stopped');
@@ -1509,40 +1708,50 @@ _recon.run_sim_recon(
                     : (e.message || String(e));
             }
         } finally {
+            this._stopSimProgressAnimator(job);
             this._simPipelineJob = null;
         }
         this.updateQueueUI();
     }
 
-    /** 0=⅛ queued; stages 1–4 advance when conseq/trajex/sim/recon each finish */
+    /** Update discrete pipeline stage; sim sub-progress uses _ensureSimProgressAnimator. */
     _setPipelineStage(job, stage) {
         if (!job) return;
         const prev = job.pipelineStage ?? 0;
         const s = Math.max(0, Math.min(4, Number(stage) || 0));
         job.pipelineStage = s;
-        if (s === 2 || prev === 2) {
+        if (s < 3) {
+            job.simProgress = 0;
+            job.simProgressTarget = 0;
+            job.simDisplayProgress = 0;
+            this._stopSimProgressAnimator(job);
+        }
+        if (prev === 3 && s !== 3) this._stopSimProgressAnimator(job);
+        if ((s === 3 && prev !== 3) || (prev === 3 && s !== 3)) {
             this.updateQueueUI();
             if (job.status === 'scanning') this._syncMobileScanControls();
             return;
         }
-        const el = this.container?.querySelector(`.queue-item[data-id="${job.id}"] .scan-pipeline-progress`);
-        if (el) {
-            el.style.setProperty('--stage', s);
-            el.dataset.stage = String(s);
-            const label = PIPELINE_STAGES[s];
-            el.title = label;
-            el.setAttribute('aria-valuenow', String(s));
-            el.setAttribute('aria-label', label);
+        const rings = this._pipelineRingElements(job);
+        if (rings.length) {
+            for (const el of rings) this._applyPipelineRing(el, job);
         } else {
             this.updateQueueUI();
         }
         if (job.status === 'scanning') this._syncMobileScanControls();
     }
 
-    _pipelineProgressHtml(stage = 0, crop = false) {
-        const s = Math.max(0, Math.min(4, Number(stage) || 0));
-        const label = crop ? 'crop' : PIPELINE_STAGES[s];
-        return `<div class="scan-pipeline-progress${crop ? ' is-crop' : ''}" style="--stage:${s}" data-stage="${s}" title="${label}" role="progressbar" aria-valuemin="0" aria-valuemax="4" aria-valuenow="${s}" aria-label="${label}"></div>`;
+    _pipelineProgressHtml(job, crop = false) {
+        const j = job && typeof job === 'object' ? job : { pipelineStage: job ?? 0, simProgress: 0, reconDone: false };
+        const s = Math.max(0, Math.min(4, Number(j.pipelineStage) || 0));
+        const simFrac = s >= 3 && s < 4
+            ? (j.simDisplayProgress ?? j.simProgressTarget ?? j.simProgress ?? 0)
+            : (j.simProgress ?? 0);
+        const deg = pipelineProgressDeg(s, simFrac, !!j.reconDone);
+        const isCrop = crop || !!j.cropOnly;
+        const label = isCrop ? 'crop' : PIPELINE_STAGES[s];
+        const simRunning = s === 3 && j.status === 'scanning';
+        return `<div class="scan-pipeline-progress${isCrop ? ' is-crop' : ''}${simRunning ? ' is-sim-running' : ''}" style="--progress-deg:${deg}deg" data-stage="${s}" data-sim-progress="${simFrac}" title="${label}" role="progressbar" aria-valuemin="0" aria-valuemax="330" aria-valuenow="${Math.round(deg)}" aria-label="${label}"></div>`;
     }
 
     updateQueueUI() {
@@ -1571,10 +1780,10 @@ _recon.run_sim_recon(
                 <div class="item-actions">
                     ${job.status === 'scanning' ? `
                         <div class="action-row small-btns">
-                            ${!job.cropOnly && (job.pipelineStage ?? 0) === 2 ? `
+                            ${!job.cropOnly && (job.pipelineStage ?? 0) === 3 ? `
                                 <button type="button" class="cancel-sim-btn" title="Stop simulation" aria-label="Stop simulation"><i class="bi bi-stop-fill" aria-hidden="true"></i></button>
                             ` : ''}
-                            ${this._pipelineProgressHtml(job.pipelineStage ?? 0, !!job.cropOnly)}
+                            ${this._pipelineProgressHtml(job, !!job.cropOnly)}
                         </div>
                     ` : ''}
                     ${job.status === 'done' ? `
@@ -1620,11 +1829,12 @@ _recon.run_sim_recon(
 
     cancelSim(jobId) {
         const job = this.queue.find((j) => j.id === jobId);
-        if (!job || job.cropOnly || (job.pipelineStage ?? 0) !== 2) return;
+        if (!job || job.cropOnly || (job.pipelineStage ?? 0) !== 3) return;
         if (job.status !== 'scanning' && !(job.status === 'error' && job.abortSim)) return;
         job.abortSim = true;
         job.status = 'error';
         job.error = 'user stopped';
+        this._stopSimProgressAnimator(job);
         this.updateQueueUI();
         this._syncMobileScanControls();
     }

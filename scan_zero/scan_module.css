@@ -213,21 +213,25 @@ html.pro-user #seq-mobile-crop {
 /* Button styles are unified in no_field.css (loads last) */
 /* No duplicate definitions needed here */
 
-/* Pipeline ring: ⅛ on scan; +¼ when each of conseq/trajex/sim/recon finishes */
+/* Pipeline ring: prep/conseq/trajex → 60°; sim 60°–315°; recon 315°–330° */
 .scan-pipeline-progress {
     flex-shrink: 0;
     width: 18px;
     height: 18px;
     border-radius: 50%;
-    --stage: 0;
+    --progress-deg: 0deg;
     background: conic-gradient(
-        var(--success, #22c55e) 0deg min(calc(45deg + var(--stage) * 90deg), 360deg),
+        var(--success, #22c55e) 0deg min(var(--progress-deg, 0deg), 360deg),
         rgba(255, 255, 255, 0.1) 0
     );
     -webkit-mask: radial-gradient(circle, transparent 52%, #000 53%);
     mask: radial-gradient(circle, transparent 52%, #000 53%);
     box-shadow: inset 0 0 0 0.75px rgba(255, 255, 255, 0.14);
     transition: background 0.25s ease;
+}
+
+.scan-pipeline-progress.is-sim-running {
+    transition: background 0.12s linear;
 }
 
 .scan-pipeline-progress.is-crop {
