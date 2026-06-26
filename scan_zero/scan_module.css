@@ -280,6 +280,13 @@ html.pro-user #seq-mobile-scan-settings {
 /* Button styles are unified in no_field.css (loads last) */
 /* No duplicate definitions needed here */
 
+/* Pyodide-busy gate: plot/Get-FOV/CROP disabled while a scan sim+recon is in flight
+   (they call Pyodide outside the task queue and would race the background recon). */
+button.is-pyodide-busy {
+    opacity: 0.5;
+    cursor: not-allowed;
+}
+
 /* Pipeline ring: prep/conseq/trajex → 60°; sim 60°–315°; recon 315°–330° */
 .scan-pipeline-progress {
     flex-shrink: 0;

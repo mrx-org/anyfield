@@ -123,6 +123,19 @@ function parseMr0SimProgressMessage(msg) {
 /** Max concurrent toolapi WebSocket calls (global across queued SCAN jobs). */
 const MAX_CONCURRENT_TOOL_WS = 2;
 
+/** HTTP (Modal) job reaper tuning — poll many in-flight jobs at once, retry transient failures. */
+const HTTP_POLL_MS = 2000;
+/** Consecutive poll failures tolerated before an in-flight HTTP job is marked failed. */
+const HTTP_POLL_MAX_FAILS = 6;
+/** Network retry attempts for submit / status / result fetches (handles Modal cold starts). */
+const HTTP_FETCH_RETRIES = 4;
+/** Per-request timeouts (ms). Submit carries the .seq upload; status is tiny; result is the NPZ. */
+const HTTP_SUBMIT_TIMEOUT_MS = 90000;
+const HTTP_STATUS_TIMEOUT_MS = 20000;
+const HTTP_RESULT_TIMEOUT_MS = 120000;
+/** HTTP statuses worth retrying (transient gateway / overload / cold start). */
+const HTTP_RETRY_STATUSES = new Set([429, 500, 502, 503, 504]);
+
 /** Stable recon method tag stored in protocol TOML `[recon]`. */
 export const RECON_METHOD = 'anyfield-pynufft';
 
@@ -576,7 +589,30 @@ export class ScanModule {
         return this.queue.find((j) => j.status === 'scanning') || null;
     }
 
+    /**
+     * Disable buttons that call Pyodide *outside* the task queue (plot seq, Get FOV, CROP) while any
+     * scan is in flight. Their direct `executeFunction` / resample calls would otherwise race the
+     * background recon for the single-threaded Pyodide interpreter. SCAN stays enabled — its prep is
+     * routed through `enqueuePyodideTask`, so rapid scanning is safe.
+     */
+    _syncScanBusyUi() {
+        const busy = this.queue.some((j) => j.status === 'scanning');
+        const selectors = [
+            '#seq-execute-btn',
+            '#seq-get-fov-btn',
+            '#btn-start-crop',
+            '#seq-mobile-crop',
+        ];
+        for (const sel of selectors) {
+            document.querySelectorAll(sel).forEach((btn) => {
+                btn.disabled = busy;
+                btn.classList.toggle('is-pyodide-busy', busy);
+            });
+        }
+    }
+
     _syncMobileScanControls() {
+        this._syncScanBusyUi();
         const wrap = document.getElementById('seq-mobile-run-btns');
         if (!wrap) return;
         const statusSlot = wrap.querySelector('#seq-mobile-pipeline-status');
@@ -712,7 +748,11 @@ export class ScanModule {
         if (!userName) return;
         const job = this._enqueueSimJob({ backendId: resolvedId, userName });
         if (backend.transport === 'http') {
-            await this.runHttpSimPipeline(job);
+            // Phase 1 model: await only prep + submit (reads live UI in order, freezes per-job
+            // seq + FOV), then poll + recon run in the background so many scans overlap on the
+            // Modal worker pool. See runHttpSimPipeline → _httpPrepareAndSubmit + _pumpHttpReaper.
+            await this._httpPrepareAndSubmit(job);
+            void this._pumpHttpReaper();
         } else {
             await this.runSimPipeline(job);
         }
@@ -1679,20 +1719,60 @@ if os.path.exists(_p):
         console.log(`${logTag} [http]`, status.message || status.status);
     }
 
-    async _httpSubmitJob(baseUrl, seqBytes, seqFilename, options, fovReferenceBytes = null) {
-        const form = new FormData();
-        form.append('seq', new Blob([seqBytes], { type: 'application/octet-stream' }), seqFilename);
-        form.append('options', JSON.stringify(options));
-        if (fovReferenceBytes) {
-            form.append(
-                'fov_reference',
-                new Blob([fovReferenceBytes], { type: 'application/octet-stream' }),
-                'fov_reference.nii',
-            );
+    /**
+     * fetch() with timeout + bounded retry on network errors and transient 429/5xx.
+     * Non-retryable responses (e.g. 4xx) are returned as-is for the caller to inspect `.ok`.
+     * @param {string} url
+     * @param {RequestInit | (() => RequestInit)} optionsOrFactory — a factory is called per attempt
+     *   so a fresh body (e.g. FormData) is built for each retry.
+     */
+    async _httpFetchWithRetry(url, optionsOrFactory = {}, { tries = HTTP_FETCH_RETRIES, timeoutMs = 30000, label = 'request' } = {}) {
+        let lastErr = null;
+        for (let attempt = 1; attempt <= tries; attempt++) {
+            const options = typeof optionsOrFactory === 'function' ? optionsOrFactory() : optionsOrFactory;
+            const controller = new AbortController();
+            const timer = setTimeout(() => controller.abort(), timeoutMs);
+            try {
+                const resp = await fetch(url, { ...options, signal: controller.signal });
+                clearTimeout(timer);
+                if (resp.ok) return resp;
+                if (HTTP_RETRY_STATUSES.has(resp.status) && attempt < tries) {
+                    const detail = await resp.text().catch(() => '');
+                    lastErr = new Error(`${label} HTTP ${resp.status}: ${detail.slice(0, 200)}`);
+                } else {
+                    return resp; // non-retryable (e.g. 4xx) or last attempt → caller checks .ok
+                }
+            } catch (e) {
+                clearTimeout(timer);
+                lastErr = e;
+                if (attempt >= tries) break;
+            }
+            const backoff = Math.min(8000, 600 * 2 ** (attempt - 1)) + Math.floor(Math.random() * 300);
+            await new Promise((r) => setTimeout(r, backoff));
         }
-        const resp = await fetch(`${baseUrl}/v1/jobs`, { method: 'POST', body: form });
+        throw lastErr || new Error(`${label} failed after ${tries} attempts`);
+    }
+
+    async _httpSubmitJob(baseUrl, seqBytes, seqFilename, options, fovReferenceBytes = null) {
+        const buildInit = () => {
+            const form = new FormData();
+            form.append('seq', new Blob([seqBytes], { type: 'application/octet-stream' }), seqFilename);
+            form.append('options', JSON.stringify(options));
+            if (fovReferenceBytes) {
+                form.append(
+                    'fov_reference',
+                    new Blob([fovReferenceBytes], { type: 'application/octet-stream' }),
+                    'fov_reference.nii',
+                );
+            }
+            return { method: 'POST', body: form };
+        };
+        const resp = await this._httpFetchWithRetry(`${baseUrl}/v1/jobs`, buildInit, {
+            timeoutMs: HTTP_SUBMIT_TIMEOUT_MS,
+            label: 'job submit',
+        });
         if (!resp.ok) {
-            const detail = await resp.text();
+            const detail = await resp.text().catch(() => '');
             throw new Error(`HTTP job submit failed (${resp.status}): ${detail}`);
         }
         const data = await resp.json();
@@ -1700,31 +1780,27 @@ if os.path.exists(_p):
         return data.job_id;
     }
 
-    async _httpPollJob(baseUrl, jobId, job, logTag) {
-        const pollMs = 2000;
-        while (true) {
-            if (job.abortSim) throw new Error('user stopped');
-            const resp = await fetch(`${baseUrl}/v1/jobs/${jobId}`);
-            if (!resp.ok) {
-                const detail = await resp.text();
-                throw new Error(`HTTP job poll failed (${resp.status}): ${detail}`);
-            }
-            const status = await resp.json();
-            this._applyHttpJobProgress(job, status, logTag);
-            const st = status.status;
-            if (st === 'done') return status;
-            if (st === 'failed') {
-                throw new Error(status.error || status.message || 'HTTP simulation failed');
-            }
-            if (st === 'aborted') throw new Error('Job aborted');
-            await new Promise((r) => setTimeout(r, pollMs));
+    /** Single tolerant status poll. Throws only on a genuine HTTP/network error (caller counts these). */
+    async _httpGetStatus(baseUrl, jobId) {
+        const resp = await this._httpFetchWithRetry(`${baseUrl}/v1/jobs/${jobId}`, {}, {
+            tries: 2,
+            timeoutMs: HTTP_STATUS_TIMEOUT_MS,
+            label: 'job status',
+        });
+        if (!resp.ok) {
+            const detail = await resp.text().catch(() => '');
+            throw new Error(`HTTP job poll failed (${resp.status}): ${detail}`);
         }
+        return await resp.json();
     }
 
     async _httpFetchResultNpz(baseUrl, jobId) {
-        const resp = await fetch(`${baseUrl}/v1/jobs/${jobId}/result`);
+        const resp = await this._httpFetchWithRetry(`${baseUrl}/v1/jobs/${jobId}/result`, {}, {
+            timeoutMs: HTTP_RESULT_TIMEOUT_MS,
+            label: 'result fetch',
+        });
         if (!resp.ok) {
-            const detail = await resp.text();
+            const detail = await resp.text().catch(() => '');
             throw new Error(`HTTP result fetch failed (${resp.status}): ${detail}`);
         }
         return await resp.arrayBuffer();
@@ -1764,21 +1840,36 @@ for i in range(ktraj.shape[0]):
     }
 
     /**
-     * HTTP full pipeline: upload .seq → remote MRzeroCore sim → NPZ → local PyNUFFT recon.
+     * HTTP full pipeline (back-compat wrapper): prep + submit (awaited), then background poll + recon.
+     * Prefer calling `_httpPrepareAndSubmit` + `_pumpHttpReaper` directly (as `startScan` does).
      * @param {object} job — simulation.transport === 'http' (from _enqueueSimJob modal_http).
      */
     async runHttpSimPipeline(job) {
+        await this._httpPrepareAndSubmit(job);
+        void this._pumpHttpReaper();
+    }
+
+    /**
+     * Phase A + B: build the .seq from the *current* UI, freeze this job's FOV snapshot, then submit
+     * to the Modal gateway. Awaited by `startScan` so each rapid click materialises its own setup in
+     * order before the user can edit the next one. Poll + recon (phases C–F) run later in the reaper.
+     * @param {object} job
+     */
+    async _httpPrepareAndSubmit(job) {
         const nvMod = window.nvModule;
         const simLogTag = this._jobSimLogTag(job);
         const httpBase = this._getHttpSimBaseUrl(job);
         job.httpBaseUrl = httpBase;
-        this._simPipelineJob = job;
         job.abortSim = false;
         job.status = 'scanning';
         job.pipelineStage = 0;
         job.error = null;
+        job.reconDone = false;
+        job._reconStarted = false;
+        job._pollFails = 0;
+        job._tSubmittedAt = performance.now();
         this.updateQueueUI();
-        const _tPipeline = performance.now();
+        this._syncScanBusyUi();
         try {
             await nvMod.initPyodide();
             const activeGroup = typeof nvMod.getActivePhantomGroup === 'function'
@@ -1819,6 +1910,10 @@ for i in range(ktraj.shape[0]):
             const phantomReslice = nvMod.getResliceToFromFovSnapshot(phantomFovSnapshot, phantomMatrix);
             const phantomFovAffineFlat = this._flattenFovAffineForToml(phantomReslice.affine);
 
+            // Freeze everything the background reaper needs for phases C–F onto the job.
+            job.reconMatrix = reconMatrix;
+            job.seqText = seqText;
+
             const options = {
                 exact_trajectories: job.simulation?.exactTrajectories !== false,
                 phantom: {
@@ -1851,20 +1946,106 @@ for i in range(ktraj.shape[0]):
             job._simIndeterminate = false;
             this._ensureSimProgressAnimator(job);
 
+            if (job.abortSim) throw new Error('user stopped');
             const _tSubmit = performance.now();
-            const httpJobId = await this._httpSubmitJob(
-                httpBase,
-                seqBytes,
-                seqFilename,
-                options,
-            );
+            const httpJobId = await this._httpSubmitJob(httpBase, seqBytes, seqFilename, options);
             job.httpJobId = httpJobId;
             console.log(`[HTTP] submit ${httpJobId}: ${(performance.now() - _tSubmit).toFixed(0)}ms`);
+            // Job now in flight on Modal; _pumpHttpReaper drives polling + recon.
+        } catch (e) {
+            if (job.abortSim) {
+                job.status = 'error';
+                job.error = 'user stopped';
+            } else {
+                console.error('HTTP scan submit failed:', e);
+                job.status = 'error';
+                job.error = typeof nvMod?.formatPyodideError === 'function'
+                    ? nvMod.formatPyodideError(e)
+                    : (e.message || String(e));
+            }
+            this._stopSimProgressAnimator(job);
+        }
+        this.updateQueueUI();
+        this._syncScanBusyUi();
+    }
 
-            const _tPoll = performance.now();
-            await this._httpPollJob(httpBase, httpJobId, job, simLogTag);
-            console.log(`[HTTP] poll done: ${(performance.now() - _tPoll).toFixed(0)}ms`);
+    /**
+     * Background loop: poll every in-flight HTTP job concurrently and, as each finishes, kick its
+     * fetch + recon (which serialises through the Pyodide queue). Many sims run in parallel on the
+     * Modal worker pool while local recon stays single-threaded. Self-terminates when nothing is
+     * left to poll; `startScan` re-pumps it whenever a new job is submitted.
+     */
+    async _pumpHttpReaper() {
+        if (this._httpReaperRunning) return;
+        this._httpReaperRunning = true;
+        try {
+            while (true) {
+                const inflight = this.queue.filter((j) =>
+                    j.simulation?.transport === 'http'
+                    && j.httpJobId
+                    && !j.abortSim
+                    && !j._reconStarted
+                    && j.status === 'scanning'
+                    && (j.pipelineStage ?? 0) === 3);
+                if (!inflight.length) break;
+                await Promise.allSettled(inflight.map((j) => this._httpPollOnce(j)));
+                await new Promise((r) => setTimeout(r, HTTP_POLL_MS));
+            }
+        } finally {
+            this._httpReaperRunning = false;
+        }
+    }
 
+    /** One tolerant status poll for a single job; launches recon (detached) when the job is done. */
+    async _httpPollOnce(job) {
+        if (job.abortSim || job.status !== 'scanning' || job._reconStarted) return;
+        let status;
+        try {
+            status = await this._httpGetStatus(job.httpBaseUrl, job.httpJobId);
+        } catch (e) {
+            job._pollFails = (job._pollFails || 0) + 1;
+            if (job._pollFails >= HTTP_POLL_MAX_FAILS) {
+                this._failHttpJob(job, `Lost connection to simulation server: ${e?.message || e}`);
+            }
+            return;
+        }
+        job._pollFails = 0;
+        this._applyHttpJobProgress(job, status, this._jobSimLogTag(job));
+        const st = status.status;
+        if (st === 'failed') {
+            this._failHttpJob(job, status.error || status.message || 'HTTP simulation failed');
+            return;
+        }
+        if (st === 'aborted') {
+            this._failHttpJob(job, 'Job aborted');
+            return;
+        }
+        if (st === 'done') {
+            job._reconStarted = true;
+            void this._httpFinishJob(job); // detached: fetch + recon must not block other jobs' polls
+        }
+    }
+
+    /** Mark an in-flight HTTP job as failed (network give-up, server failure, or abort). */
+    _failHttpJob(job, message) {
+        if (job.status === 'done' || job.status === 'error') return;
+        job.status = 'error';
+        job.error = message;
+        this._stopSimProgressAnimator(job);
+        this.updateQueueUI();
+        this._syncScanBusyUi();
+    }
+
+    /**
+     * Phases D–F for one finished job: fetch NPZ → local PyNUFFT recon (Pyodide-serialised) → finalize.
+     * Runs detached from the poll loop; recon ordering is handled by `enqueuePyodideTask`.
+     * @param {object} job
+     */
+    async _httpFinishJob(job) {
+        const nvMod = window.nvModule;
+        const simLogTag = this._jobSimLogTag(job);
+        const _tFinish = performance.now();
+        try {
             if (job.abortSim) throw new Error('user stopped');
             this._stopSimProgressAnimator(job);
             job.simProgressTarget = 1;
@@ -1872,7 +2053,7 @@ for i in range(ktraj.shape[0]):
             job.simProgress = 1;
             this._setPipelineStage(job, 3);
 
-            const npzBytes = await this._httpFetchResultNpz(httpBase, httpJobId);
+            const npzBytes = await this._httpFetchResultNpz(job.httpBaseUrl, job.httpJobId);
             const { signalPairs, trajPoints } = await nvMod.enqueuePyodideTask(job.id, 'http-npz', () =>
                 this._parseHttpNpzForRecon(nvMod, npzBytes),
             );
@@ -1880,7 +2061,7 @@ for i in range(ktraj.shape[0]):
             if (!trajPoints?.length) throw new Error(`${simLogTag}: HTTP result has no trajectory.`);
             if (!signalPairs?.length) throw new Error(`${simLogTag}: HTTP result has no signal.`);
 
-            const reconRef = nvMod.generateFovMaskNiftiFromSnapshot(job.fovSnapshot, reconMatrix);
+            const reconRef = nvMod.generateFovMaskNiftiFromSnapshot(job.fovSnapshot, job.reconMatrix);
 
             const useRecon = typeof nvMod.isScanReconEnabled === 'function'
                 ? nvMod.isScanReconEnabled()
@@ -1957,9 +2138,11 @@ _recon.run_sim_recon(
             this._setPipelineStage(job, 4);
 
             job.niftiUrl = URL.createObjectURL(new Blob([recoBytes], { type: 'application/octet-stream' }));
-            job.seqUrl = URL.createObjectURL(new Blob([seqText], { type: 'text/plain' }));
+            job.seqUrl = URL.createObjectURL(new Blob([job.seqText || ''], { type: 'text/plain' }));
             job.status = 'done';
-            console.log(`[HTTP] *** TOTAL pipeline: ${(performance.now() - _tPipeline).toFixed(0)}ms ***`);
+            console.log(`[HTTP] *** TOTAL pipeline: ${(performance.now() - (job._tSubmittedAt ?? _tFinish)).toFixed(0)}ms ***`);
+            // Focus the latest finished scan: load every completed result into the viewer + SCANS
+            // list. syncFov=false keeps the user's in-progress FOV planning intact.
             this.loadJob(job.id, false);
         } catch (e) {
             if (job.abortSim) {
@@ -1974,9 +2157,9 @@ _recon.run_sim_recon(
             }
         } finally {
             this._stopSimProgressAnimator(job);
-            this._simPipelineJob = null;
         }
         this.updateQueueUI();
+        this._syncScanBusyUi();
     }
 
     /**

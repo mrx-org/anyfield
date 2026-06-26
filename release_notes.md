@@ -1,5 +1,9 @@
 # Release notes
 
+## v2.1.2
+
+- the SCAN▶ button now awaits only sequence prep + job submit, then polls and reconstructs in the background. Many scans run concurrently on the worker pool while local recon stays serialized, so you can change params/FOV and fire scans back-to-back. Each scan freezes its own seq + FOV at submit time (no cross-contamination), transient gateway errors retry with backoff (no more spurious CORS/"Failed to fetch"), completed scans stream into the SCANS list as they finish (focus follows the latest), and plot/Get-FOV/CROP are gated during in-flight recon to avoid Pyodide races.
+
 ## v2.1.1
 
 - **Protocol tooltip fix** — scan tooltips now read the protocol's entry function (`anyfield.prot_func`) instead of the first `def prot_*`, so inline protocols show the actual run parameters rather than the embedded base sequence defaults.
