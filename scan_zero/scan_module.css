@@ -26,29 +26,96 @@
     border-bottom: 1px solid var(--border, rgba(255, 255, 255, 0.12));
 }
 
-/* Rapisim (SCAN▶▶): pro only — ?pro=1 sets html.pro-user in index.html */
-.scan-module #btn-start-sim-fast {
+/* Pro-only RUN controls */
+.scan-module #btn-start-crop,
+.scan-module #btn-scan-settings {
     display: none !important;
 }
-html.pro-user .scan-module #btn-start-sim-fast {
+html.pro-user .scan-module #btn-start-crop,
+html.pro-user .scan-module #btn-scan-settings {
     display: flex !important;
 }
 
 /* Protocol panel mobile duplicates (pro-gated like RUN tab) */
-#seq-mobile-scan-fast,
-#seq-mobile-crop {
+#seq-mobile-crop,
+#seq-mobile-scan-settings {
     display: none !important;
 }
-html.pro-user #seq-mobile-scan-fast,
-html.pro-user #seq-mobile-crop {
+html.pro-user #seq-mobile-crop,
+html.pro-user #seq-mobile-scan-settings {
     display: flex !important;
 }
 
-/* Multiple RUN buttons in one row (CROP / SCAN▶ / SCAN▶▶); avoid global .scan-btn width:100% here */
-.scan-header .scan-btn {
-    width: auto;
+/* RUN row: optional CROP | SCAN | settings */
+.scan-header-row {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: center;
+    gap: 0.5rem;
+}
+
+.scan-header-row .scan-btn-primary {
     flex: 1 1 0;
     min-width: 4.5rem;
+}
+
+.scan-header-row .scan-btn-secondary,
+.scan-header-row .scan-btn-settings {
+    flex: 0 0 auto;
+    width: auto;
+}
+
+.scan-header-row .scan-btn-settings {
+    min-width: auto;
+}
+
+.scan-btn-secondary {
+    background: rgba(255, 255, 255, 0.1);
+    border: 1px solid var(--border, rgba(255, 255, 255, 0.18));
+    min-width: 3.5rem;
+}
+
+.scan-btn-secondary:hover {
+    background: rgba(255, 255, 255, 0.16);
+}
+
+.scan-module .scan-btn-primary:hover {
+    background: #16a34a;
+}
+
+.scan-module .scan-btn:not(.scan-btn-primary):not(.scan-btn-settings):hover {
+    transform: scale(1.02);
+}
+
+.scan-module .scan-btn-settings {
+    background: transparent;
+    border: none;
+    box-shadow: none;
+    padding: 0.2rem 0.35rem;
+    min-width: auto;
+    color: var(--accent, #4a9eff);
+    font-weight: var(--font-weight-medium, 500);
+}
+
+.scan-module .scan-btn-settings:hover {
+    background: rgba(59, 130, 246, 0.12);
+    color: #7db7ff;
+    transform: none;
+}
+
+.scan-module .scan-btn-settings:active {
+    transform: none;
+}
+
+.scan-module .scan-btn-settings .bi {
+    font-size: 1.05rem;
+    line-height: 1;
+    color: inherit;
+}
+
+/* Single SCAN button in header; avoid global .scan-btn width:100% here */
+.scan-header .scan-btn {
+    width: auto;
 }
 
 .scan-btn {

@@ -330,9 +330,11 @@ export function findVolumeByScanNumber(scanNum) {
 }
 
 export function getProtocolTooltipForScanNumber(scanNum) {
-  const vol = findVolumeByScanNumber(scanNum);
-  if (vol && window.scanModule?.getProtocolTooltipForVolume) {
-    return window.scanModule.getProtocolTooltipForVolume(vol) || "";
+  if (typeof window !== 'undefined' && window.scanModule?.getProtocolTooltipForScanNumber) {
+    return window.scanModule.getProtocolTooltipForScanNumber(scanNum) || "";
+  }
+  if (typeof window !== 'undefined' && window.seqExplorer?.getProtocolTooltipForScanNumber) {
+    return window.seqExplorer.getProtocolTooltipForScanNumber(scanNum) || "";
   }
   return "";
 }

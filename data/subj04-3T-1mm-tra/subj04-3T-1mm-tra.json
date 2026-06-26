@@ -1,0 +1,120 @@
+{
+  "$schema": "https://raw.githubusercontent.com/mrx-org/nifti-phantoms/refs/heads/main/nifti-phantom-v1.schema.json",
+  "units": {
+    "gyro": "MHz/T",
+    "B0": "T",
+    "T1": "s",
+    "T2": "s",
+    "T2'": "s",
+    "ADC": "10^-3 mm^2/s",
+    "dB0": "Hz",
+    "B1+": "rel",
+    "B1-": "rel"
+  },
+  "system": {
+    "gyro": 42.5764,
+    "B0": 3
+  },
+  "reslice_to": {
+    "affine": [
+      [
+        1,
+        0,
+        0,
+        -90
+      ],
+      [
+        0,
+        1,
+        0,
+        -108
+      ],
+      [
+        0,
+        0,
+        8.0,
+        0
+      ]
+    ],
+    "resolution": [
+      181,
+      217,
+      1
+    ]
+  },
+  "tissues": {
+    "gm": {
+      "density": "subj04.nii.gz[0]",
+      "T1": 1.56,
+      "T2": 0.083,
+      "T2'": 0.32,
+      "ADC": 0.83,
+      "dB0": "subj04_dB0.nii.gz[0]",
+      "B1+": [
+        "subj04_B1+.nii.gz[0]"
+      ],
+      "B1-": [
+        1.0
+      ]
+    },
+    "wm": {
+      "density": "subj04.nii.gz[1]",
+      "T1": 0.83,
+      "T2": 0.075,
+      "T2'": 0.18,
+      "ADC": 0.65,
+      "dB0": "subj04_dB0.nii.gz[0]",
+      "B1+": [
+        "subj04_B1+.nii.gz[0]"
+      ],
+      "B1-": [
+        1.0
+      ]
+    },
+    "csf": {
+      "density": "subj04.nii.gz[2]",
+      "T1": 4.16,
+      "T2": 1.65,
+      "T2'": 0.059,
+      "ADC": 3.19,
+      "dB0": "subj04_dB0.nii.gz[0]",
+      "B1+": [
+        "subj04_B1+.nii.gz[0]"
+      ],
+      "B1-": [
+        1.0
+      ]
+    },
+    "vessels": {
+      "density": "subj04.nii.gz[3]",
+      "T1": 4.16,
+      "T2": 1.65,
+      "T2'": 0.059,
+      "ADC": 3.19,
+      "dB0": "subj04_dB0.nii.gz[0]",
+      "B1+": [
+        "subj04_B1+.nii.gz[0]"
+      ],
+      "B1-": [
+        1.0
+      ]
+    },
+    "fat": {
+      "density": "subj04.nii.gz[4]",
+      "T1": 0.37,
+      "T2": 0.125,
+      "T2'": 0.012,
+      "ADC": 0.1,
+      "dB0": {
+        "file": "subj04_dB0.nii.gz[0]",
+        "func": "x - 440"
+      },
+      "B1+": [
+        "subj04_B1+.nii.gz[0]"
+      ],
+      "B1-": [
+        1.0
+      ]
+    }
+  }
+}

@@ -1,5 +1,11 @@
 import { eventHub } from '../event_hub.js';
 import { SequenceExplorer } from '../pypulseq/seq_explorer.js';
+import {
+    DEFAULT_SIM_BACKEND_ID,
+    SIM_BACKENDS,
+    SIM_BACKEND_OPTIONS,
+    formatSimBackendLabel,
+} from './sim_backends.js';
 
 /** toolapi-wasm WebSocket URLs (same path `/tool`, different host). */
 export const TOOL_CONSEQ = 'wss://tool-conseq.fly.dev/tool';
@@ -7,6 +13,25 @@ export const TOOL_TRAJEX = 'wss://tool-trajex.fly.dev/tool';
 export const TOOL_RAPISIM = 'wss://tool-rapisim.fly.dev/tool';
 export const TOOL_MR0SIM = 'wss://tool-mr0sim.fly.dev/tool';
 export const TOOL_MR0SIM_T4 = 'wss://mzaiss--tool-mr0sim-modal-serve-t4.modal.run/tool';
+/** Modal HTTP gateway (tool-mr0sim-modal_http); worker chosen per job (`cpu` / `t4` / `a10g` / `a100`). */
+export const TOOL_MR0SIM_HTTP_MODAL =
+    'https://mzaiss--tool-mr0sim-modal-http-gateway.modal.run';
+/** Local dev only — set `window.ANYFIELD_HTTP_SIM_URL` to this to use local server. */
+export const TOOL_MR0SIM_HTTP = 'http://127.0.0.1:8080';
+
+export {
+    DEFAULT_SIM_BACKEND_ID,
+    SIM_BACKENDS,
+    SIM_BACKEND_OPTIONS,
+    formatSimBackendLabel,
+} from './sim_backends.js';
+
+function defaultHttpSimBaseUrl() {
+    if (typeof window !== 'undefined' && window.ANYFIELD_HTTP_SIM_URL) {
+        return String(window.ANYFIELD_HTTP_SIM_URL).replace(/\/$/, '');
+    }
+    return TOOL_MR0SIM_HTTP_MODAL;
+}
 
 const TOOL_FLY_HOSTS = [TOOL_CONSEQ, TOOL_TRAJEX, TOOL_RAPISIM, TOOL_MR0SIM].map(
     (url) => new URL(url).hostname,
@@ -102,10 +127,27 @@ const MAX_CONCURRENT_TOOL_WS = 2;
 export const RECON_METHOD = 'anyfield-pynufft';
 
 /**
- * Human scan title: `1. gre_seq` from queue job or `scan_<n>_<name>.nii.gz`.
+ * Scan index from a loaded scan NIfTI name, e.g. `scan_18_foo.nii.gz` → 18.
+ */
+export function parseScanNumberFromVolumeName(volName) {
+    const m = String(volName || '').match(/^scan_(\d+)(?:_|\.)/i);
+    return m ? Number(m[1]) : null;
+}
+
+/**
+ * Human scan title from protocol file for scan N, e.g. `18. prot_TSE_2D_FLAIR`.
+ * Falls back to queue draft name or volume filename when no protocol exists yet.
  */
 export function formatScanDisplayTitle(volName, job = null) {
-    if (job?.scanNumber != null && job?.name != null && String(job.name).trim()) {
+    if (job?.cropOnly && job.scanNumber != null) {
+        return `${job.scanNumber}. crop`;
+    }
+    const n = job?.scanNumber ?? parseScanNumberFromVolumeName(volName);
+    if (n != null && typeof window !== 'undefined' && window.seqExplorer?.getProtocolDisplayNameForScanNumber) {
+        const fromProtocol = window.seqExplorer.getProtocolDisplayNameForScanNumber(n);
+        if (fromProtocol) return fromProtocol;
+    }
+    if (job?.scanNumber != null && job?.name) {
         return `${job.scanNumber}. ${job.name}`;
     }
     const m = String(volName || '').match(/^scan_(\d+)_(.*)\.nii(\.gz)?$/i);
@@ -115,24 +157,7 @@ export function formatScanDisplayTitle(volName, job = null) {
     return String(volName || '').replace(/\.nii(\.gz)?$/i, '');
 }
 
-/** Sim backend registry — stable ids for TOML `[simulation].backend`. */
-export const SIM_BACKENDS = {
-    mr0sim: {
-        id: 'mr0sim',
-        label: 'MR0',
-        toolUrl: TOOL_MR0SIM,
-        reconBackend: 'mr0',
-        proOnly: false,
-    },
-    rapisim: {
-        id: 'rapisim',
-        label: 'mr0 GPU',
-        toolUrl: TOOL_MR0SIM_T4,
-        reconBackend: 'mr0',
-        useGpu: true,
-        proOnly: true,
-    },
-};
+const SIM_BACKEND_STORAGE_KEY = 'anyfield.simBackendId';
 
 /** Footer swipe layout (viewport ≤768px or OPTIONS → Compact). */
 export function isCompactFooterLayout() {
@@ -166,8 +191,43 @@ export class ScanModule {
         this._simPipelineJob = null;
         this._toolWsInflight = 0;
         this._toolWsWaiters = [];
+        this._selectedSimBackendId = this._loadSimBackendId();
 
         this.setupEventListeners();
+    }
+
+    _loadSimBackendId() {
+        const fallback = DEFAULT_SIM_BACKEND_ID;
+        if (typeof window === 'undefined' || !window.localStorage) return fallback;
+        try {
+            const stored = String(window.localStorage.getItem(SIM_BACKEND_STORAGE_KEY) || '').trim();
+            return SIM_BACKENDS[stored] ? stored : fallback;
+        } catch (_) {
+            return fallback;
+        }
+    }
+
+    getSelectedSimBackendId() {
+        const id = this._selectedSimBackendId || DEFAULT_SIM_BACKEND_ID;
+        return SIM_BACKENDS[id] ? id : DEFAULT_SIM_BACKEND_ID;
+    }
+
+    setSelectedSimBackendId(backendId) {
+        const id = String(backendId || '').trim();
+        if (!SIM_BACKENDS[id]) throw new Error(`Unknown sim backend: ${backendId}`);
+        this._selectedSimBackendId = id;
+        try {
+            window.localStorage?.setItem(SIM_BACKEND_STORAGE_KEY, id);
+        } catch (_) { /* ignore */ }
+        this._syncScanControlLabels();
+    }
+
+    _syncScanControlLabels() {
+        const title = `Run scan (${formatSimBackendLabel(this.getSelectedSimBackendId())})`;
+        for (const sel of ['#btn-start-scan', '#seq-mobile-scan']) {
+            const btn = document.querySelector(sel);
+            if (btn) btn.title = title;
+        }
     }
 
     /** Fetch `scan_zero/recon.py` and stage in Pyodide (source passed to Python via global). */
@@ -367,18 +427,18 @@ export class ScanModule {
                 <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 0.75rem;">
                     <h3 class="section-title" style="margin: 0;">RUN</h3>
                 </div>
-                <div class="scan-header" style="display: flex; flex-wrap: wrap; align-items: center; gap: 0.5rem;">
+                <div class="scan-header scan-header-row">
                     ${isProUser() ? `
-                    <button id="btn-start-crop" class="scan-btn" title="Resample first volume to FOV (crop to box)">
+                    <button id="btn-start-crop" class="scan-btn scan-btn-secondary" title="Resample first volume to FOV (crop to box)">
                         CROP
                     </button>
                     ` : ''}
-                    <button id="btn-start-sim-mr0" class="scan-btn" title="MR0 (tool-mr0sim)">
-                        SCAN<span class="icon">▶</span> 
+                    <button id="btn-start-scan" class="scan-btn scan-btn-primary" title="Run scan">
+                        SCAN<span class="icon">▶</span>
                     </button>
                     ${isProUser() ? `
-                    <button id="btn-start-sim-fast" class="scan-btn" title="GPU T4 (Modal mr0sim)">
-                         SCAN<span class="icon">▶▶</span>
+                    <button id="btn-scan-settings" type="button" class="scan-btn scan-btn-settings" title="Simulation backend" aria-label="Simulation backend">
+                        <i class="bi bi-gear" aria-hidden="true"></i>
                     </button>
                     ` : ''}
                 </div>
@@ -390,13 +450,126 @@ export class ScanModule {
 
         const cropBtn = this.container.querySelector('#btn-start-crop');
         if (cropBtn) cropBtn.onclick = () => this.startCrop();
-        this.container.querySelector('#btn-start-sim-mr0').onclick = () => this.startSimMr0();
-        const fastBtn = this.container.querySelector('#btn-start-sim-fast');
-        if (fastBtn) fastBtn.onclick = () => this.startSimFast();
-        
+        this.container.querySelector('#btn-start-scan').onclick = () => this.startScan();
+        const settingsBtn = this.container.querySelector('#btn-scan-settings');
+        if (settingsBtn) settingsBtn.onclick = () => this.openSimSettingsDialog();
+
         // Make this instance available globally for UI callbacks if needed
         window.scanModule = this;
+        this._syncScanControlLabels();
         this._syncMobileScanControls();
+    }
+
+    openSimSettingsDialog() {
+        if (!isProUser()) return;
+
+        const overlay = document.createElement('div');
+        overlay.style.cssText = `
+            position: fixed;
+            top: 0;
+            left: 0;
+            width: 100%;
+            height: 100%;
+            background: rgba(0, 0, 0, 0.7);
+            z-index: 10001;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+        `;
+
+        const dialogContent = document.createElement('div');
+        dialogContent.style.cssText = `
+            background: var(--bg, #1e1e1e);
+            border: 1px solid var(--border, #333);
+            border-radius: 8px;
+            padding: 1.5rem;
+            min-width: 500px;
+            max-width: 600px;
+            max-height: 80vh;
+            display: flex;
+            flex-direction: column;
+            box-shadow: 0 4px 20px rgba(0, 0, 0, 0.5);
+        `;
+
+        const dialogTitle = document.createElement('h3');
+        dialogTitle.textContent = 'Simulation backend';
+        dialogTitle.style.cssText = 'margin: 0 0 1rem 0; color: var(--accent, #4a9eff);';
+
+        const optionsWrap = document.createElement('div');
+        optionsWrap.style.cssText = `
+            display: flex;
+            flex-direction: column;
+            gap: 0.65rem;
+            margin-bottom: 1.25rem;
+        `;
+
+        const selectedId = this.getSelectedSimBackendId();
+        const radioName = `sim-backend-${Date.now()}`;
+        for (const opt of SIM_BACKEND_OPTIONS) {
+            const row = document.createElement('label');
+            row.style.cssText = `
+                display: flex;
+                align-items: center;
+                gap: 0.6rem;
+                padding: 0.45rem 0.55rem;
+                border-radius: 4px;
+                cursor: pointer;
+                color: var(--text, #ddd);
+                font-size: 0.9rem;
+            `;
+            row.addEventListener('mouseenter', () => {
+                row.style.background = 'rgba(255, 255, 255, 0.06)';
+            });
+            row.addEventListener('mouseleave', () => {
+                row.style.background = 'transparent';
+            });
+
+            const input = document.createElement('input');
+            input.type = 'radio';
+            input.name = radioName;
+            input.value = opt.id;
+            input.checked = opt.id === selectedId;
+            input.style.cssText = 'accent-color: var(--accent, #4a9eff);';
+
+            const text = document.createElement('span');
+            text.textContent = opt.label;
+
+            row.appendChild(input);
+            row.appendChild(text);
+            optionsWrap.appendChild(row);
+        }
+
+        const buttonRow = document.createElement('div');
+        buttonRow.style.cssText = 'display: flex; justify-content: flex-end; gap: 0.5rem;';
+
+        const cancelBtn = document.createElement('button');
+        cancelBtn.type = 'button';
+        cancelBtn.textContent = 'Cancel';
+        cancelBtn.className = 'btn btn-secondary btn-md';
+
+        const saveBtn = document.createElement('button');
+        saveBtn.type = 'button';
+        saveBtn.textContent = 'Save';
+        saveBtn.className = 'btn btn-secondary btn-md seq-btn-primary';
+
+        const close = () => overlay.remove();
+        cancelBtn.onclick = close;
+        overlay.addEventListener('click', (e) => {
+            if (e.target === overlay) close();
+        });
+        saveBtn.onclick = () => {
+            const picked = optionsWrap.querySelector(`input[name="${radioName}"]:checked`);
+            if (picked?.value) this.setSelectedSimBackendId(picked.value);
+            close();
+        };
+
+        buttonRow.appendChild(cancelBtn);
+        buttonRow.appendChild(saveBtn);
+        dialogContent.appendChild(dialogTitle);
+        dialogContent.appendChild(optionsWrap);
+        dialogContent.appendChild(buttonRow);
+        overlay.appendChild(dialogContent);
+        document.body.appendChild(overlay);
     }
 
     _getActiveScanJob() {
@@ -498,6 +671,10 @@ export class ScanModule {
                 toolUrl: backend.toolUrl,
                 reconBackend: backend.reconBackend,
                 useGpu: backend.useGpu === true,
+                transport: backend.transport || 'ws',
+                httpBaseUrl: backend.httpBaseUrl || null,
+                worker: backend.worker || null,
+                exactTrajectories: backend.exactTrajectories === true,
             },
             status: 'pending',
             timestamp: `${pad(now.getHours())}:${pad(now.getMinutes())}:${pad(now.getSeconds())}`,
@@ -510,8 +687,14 @@ export class ScanModule {
         return job;
     }
 
-    async startSimFast() {
-        if (!isProUser()) return;
+    async startScan(backendId = null) {
+        const resolvedId = backendId || this.getSelectedSimBackendId();
+        const backend = SIM_BACKENDS[resolvedId];
+        if (!backend) throw new Error(`Unknown sim backend: ${resolvedId}`);
+        if (backend.proOnly && !isProUser()) {
+            alert('This simulation backend is available in pro mode only.');
+            return;
+        }
         if (!this.currentSequence) {
             alert("Please select a sequence in the Explorer first.");
             return;
@@ -527,28 +710,28 @@ export class ScanModule {
         }
         const userName = this._getValidatedDraftName();
         if (!userName) return;
-        const job = this._enqueueSimJob({ backendId: 'rapisim', userName });
-        await this.runSimPipeline(job);
+        const job = this._enqueueSimJob({ backendId: resolvedId, userName });
+        if (backend.transport === 'http') {
+            await this.runHttpSimPipeline(job);
+        } else {
+            await this.runSimPipeline(job);
+        }
+    }
+
+    async startSimFast() {
+        return this.startScan('modal_http_t4');
+    }
+
+    async startSimModalCpu() {
+        return this.startScan('modal_http_cpu');
     }
 
     async startSimMr0() {
-        if (!this.currentSequence) {
-            alert("Please select a sequence in the Explorer first.");
-            return;
-        }
-        const nvMod = window.nvModule;
-        if (!nvMod || !nvMod.nv?.volumes?.length) {
-            alert("No volume loaded in Niivue.");
-            return;
-        }
-        if (!nvMod.pyodide) {
-            alert("Python (Pyodide) is not ready.");
-            return;
-        }
-        const userName = this._getValidatedDraftName();
-        if (!userName) return;
-        const job = this._enqueueSimJob({ backendId: 'mr0sim', userName });
-        await this.runSimPipeline(job);
+        return this.startScan('mr0sim');
+    }
+
+    async startSimHttp() {
+        return this.startScan('modal_http');
     }
 
     async runCropScan(job) {
@@ -1058,45 +1241,44 @@ export class ScanModule {
     }
 
     _jobSimLogTag(job) {
-        return job?.simulation?.backendLabel || job?.simulation?.backendId || 'SIM';
+        return formatSimBackendLabel(job?.simulation?.backendId)
+            || job?.simulation?.backendLabel
+            || 'SIM';
     }
 
     _jobMetaLine(job) {
         const parts = [job.timestamp];
-        if (job.simulation?.backendLabel) parts.push(job.simulation.backendLabel);
+        const backendLabel = job.simulation?.backendId
+            ? formatSimBackendLabel(job.simulation.backendId)
+            : job.simulation?.backendLabel;
+        if (backendLabel) parts.push(backendLabel);
         if (job.status === 'error' && job.error) parts.push(job.error);
         return parts.join(' · ');
     }
 
-    async _affineFromNiftiBytes(nvMod, bytes) {
-        const run = async () => {
-            await nvMod._ensureNibabelReady();
-            const u8 = bytes instanceof Uint8Array ? bytes : new Uint8Array(bytes);
-            nvMod.pyodide.globals.set('_nifti_bytes_for_affine', u8);
-            const result = await nvMod.pyodide.runPythonAsync(`
-import io, json
-import nibabel as nib
-_b = _nifti_bytes_for_affine.to_py()
-_buf = io.BytesIO(bytes(_b))
-_fh = nib.FileHolder(fileobj=_buf)
-img = nib.Nifti1Image.from_file_map({"header": _fh, "image": _fh})
-aff = img.affine.reshape(-1).tolist()
-json.dumps([float(x) for x in aff])
-            `);
-            return JSON.parse(result);
-        };
-        if (nvMod._pyodideDrainDepth > 0) return run();
-        return nvMod.enqueuePyodideTask("affine", "nifti-affine", run);
+    /** Row-major 4×4 from `getResliceToFromFovSnapshot().affine` (3×4) for protocol TOML. */
+    _flattenFovAffineForToml(affine3x4) {
+        if (!Array.isArray(affine3x4) || affine3x4.length !== 3) {
+            throw new Error('_flattenFovAffineForToml: expected 3×4 affine');
+        }
+        return [
+            ...affine3x4[0],
+            ...affine3x4[1],
+            ...affine3x4[2],
+            0, 0, 0, 1,
+        ];
     }
 
-    async _patchProtocolSimulationToml(job, { phantomRef, phantomMatrix, reconMatrix, phantomName }) {
-        if (!job?.protocolPath || !window.seqExplorer) return;
+    async _patchProtocolSimulationToml(job, { phantomFovAffine, phantomMatrix, reconMatrix, phantomName }) {
+        if (!job?.scanNumber || !window.seqExplorer) return;
+        const protocolPath = window.seqExplorer.findProtocolPathForScanNumber(job.scanNumber);
+        if (!protocolPath) return;
         const sim = job.simulation || {};
-        await window.seqExplorer.patchProtocolTomlSections(job.protocolPath, {
+        await window.seqExplorer.patchProtocolTomlSections(protocolPath, {
             simulation: {
                 backend: sim.backendId || 'mr0sim',
                 phantom: phantomName || 'unknown',
-                phantom_fov_affine: await this._affineFromNiftiBytes(window.nvModule, phantomRef),
+                phantom_fov_affine: phantomFovAffine,
                 phantom_matrix: phantomMatrix,
             },
             recon: {
@@ -1135,9 +1317,6 @@ json.dumps([float(x) for x in aff])
                 name: job.name,
             };
             await window.seqExplorer.executeFunction(true, job.scanNumber);
-            if (window.seqExplorer._lastProtocolSnapshotPath) {
-                job.protocolPath = window.seqExplorer._lastProtocolSnapshotPath;
-            }
             window.seqExplorer._pendingProtocolMeta = null;
         }
         _t('after executeFunction');
@@ -1459,6 +1638,347 @@ if os.path.exists(_p):
         return out;
     }
 
+    _getHttpSimBaseUrl(job) {
+        const fromJob = job?.simulation?.httpBaseUrl;
+        if (fromJob) return String(fromJob).replace(/\/$/, '');
+        return defaultHttpSimBaseUrl();
+    }
+
+    /** Bifti registry id for remote HTTP phantom load (no local upload). */
+    _resolveBiftiId(group) {
+        if (!group) return null;
+        if (group.biftiRegistryId) return String(group.biftiRegistryId);
+        const name = String(group.jsonName || '').replace(/\.json$/i, '');
+        if (/^subj\d+-/i.test(name)) return `brainweb-20-v2/${name}`;
+        return null;
+    }
+
+    _parseHttpJobProgress(status) {
+        const msg = String(status?.message || '').trim();
+        const rep = status?.repetition;
+        const total = status?.total;
+        if (rep != null && total != null && total > 0) {
+            return simBandFrac('exec', Number(rep) / Number(total));
+        }
+        const parsed = parseMr0SimProgressMessage(msg);
+        if (parsed != null) {
+            if (typeof parsed === 'object') return parsed.frac;
+            return parsed;
+        }
+        if (/phantom|reslice|bifti|zenodo/i.test(msg)) return simBandFrac('phantom', 0.35);
+        if (/import|sequence|convert seq/i.test(msg)) return simBandFrac('build', 0.25);
+        if (/trajectory|k-space/i.test(msg)) return simBandFrac('exec', 0.05);
+        return null;
+    }
+
+    _applyHttpJobProgress(job, status, logTag) {
+        const frac = this._parseHttpJobProgress(status);
+        if (frac == null) return;
+        job.simProgressTarget = Math.max(job.simProgressTarget ?? 0, frac);
+        this._ensureSimProgressAnimator(job);
+        console.log(`${logTag} [http]`, status.message || status.status);
+    }
+
+    async _httpSubmitJob(baseUrl, seqBytes, seqFilename, options, fovReferenceBytes = null) {
+        const form = new FormData();
+        form.append('seq', new Blob([seqBytes], { type: 'application/octet-stream' }), seqFilename);
+        form.append('options', JSON.stringify(options));
+        if (fovReferenceBytes) {
+            form.append(
+                'fov_reference',
+                new Blob([fovReferenceBytes], { type: 'application/octet-stream' }),
+                'fov_reference.nii',
+            );
+        }
+        const resp = await fetch(`${baseUrl}/v1/jobs`, { method: 'POST', body: form });
+        if (!resp.ok) {
+            const detail = await resp.text();
+            throw new Error(`HTTP job submit failed (${resp.status}): ${detail}`);
+        }
+        const data = await resp.json();
+        if (!data?.job_id) throw new Error('HTTP job submit: missing job_id');
+        return data.job_id;
+    }
+
+    async _httpPollJob(baseUrl, jobId, job, logTag) {
+        const pollMs = 2000;
+        while (true) {
+            if (job.abortSim) throw new Error('user stopped');
+            const resp = await fetch(`${baseUrl}/v1/jobs/${jobId}`);
+            if (!resp.ok) {
+                const detail = await resp.text();
+                throw new Error(`HTTP job poll failed (${resp.status}): ${detail}`);
+            }
+            const status = await resp.json();
+            this._applyHttpJobProgress(job, status, logTag);
+            const st = status.status;
+            if (st === 'done') return status;
+            if (st === 'failed') {
+                throw new Error(status.error || status.message || 'HTTP simulation failed');
+            }
+            if (st === 'aborted') throw new Error('Job aborted');
+            await new Promise((r) => setTimeout(r, pollMs));
+        }
+    }
+
+    async _httpFetchResultNpz(baseUrl, jobId) {
+        const resp = await fetch(`${baseUrl}/v1/jobs/${jobId}/result`);
+        if (!resp.ok) {
+            const detail = await resp.text();
+            throw new Error(`HTTP result fetch failed (${resp.status}): ${detail}`);
+        }
+        return await resp.arrayBuffer();
+    }
+
+    async _httpHealth(baseUrl) {
+        const resp = await fetch(`${baseUrl}/v1/health`);
+        if (!resp.ok) return { ok: false, cuda: false };
+        return await resp.json();
+    }
+
+    async _parseHttpNpzForRecon(nvMod, npzBytes) {
+        nvMod.pyodide.globals.set('http_npz_bytes', npzBytes);
+        const pairsPy = await nvMod.pyodide.runPythonAsync(`
+import io
+import numpy as np
+_buf = http_npz_bytes.to_py() if hasattr(http_npz_bytes, 'to_py') else http_npz_bytes
+if isinstance(_buf, (list, tuple)):
+    _buf = bytes(_buf)
+data = np.load(io.BytesIO(_buf))
+signal = np.asarray(data['signal']).ravel()
+ktraj = np.asarray(data['ktraj'], dtype=np.float32)
+if ktraj.ndim == 2 and ktraj.shape[0] == 3 and ktraj.shape[1] != 3:
+    ktraj = ktraj.T
+sig_pairs = [[float(np.real(x)), float(np.imag(x))] for x in signal]
+traj_pts = []
+for i in range(ktraj.shape[0]):
+    kx = float(ktraj[i, 0])
+    ky = float(ktraj[i, 1] if ktraj.shape[1] > 1 else 0.0)
+    kz = float(ktraj[i, 2] if ktraj.shape[1] > 2 else 0.0)
+    traj_pts.append([kx, ky, kz])
+(sig_pairs, traj_pts)
+        `);
+        const out = (pairsPy && pairsPy.toJs) ? pairsPy.toJs() : pairsPy;
+        if (pairsPy?.destroy) pairsPy.destroy();
+        return { signalPairs: out[0], trajPoints: out[1] };
+    }
+
+    /**
+     * HTTP full pipeline: upload .seq → remote MRzeroCore sim → NPZ → local PyNUFFT recon.
+     * @param {object} job — simulation.transport === 'http' (from _enqueueSimJob modal_http).
+     */
+    async runHttpSimPipeline(job) {
+        const nvMod = window.nvModule;
+        const simLogTag = this._jobSimLogTag(job);
+        const httpBase = this._getHttpSimBaseUrl(job);
+        job.httpBaseUrl = httpBase;
+        this._simPipelineJob = job;
+        job.abortSim = false;
+        job.status = 'scanning';
+        job.pipelineStage = 0;
+        job.error = null;
+        this.updateQueueUI();
+        const _tPipeline = performance.now();
+        try {
+            await nvMod.initPyodide();
+            const activeGroup = typeof nvMod.getActivePhantomGroup === 'function'
+                ? nvMod.getActivePhantomGroup()
+                : nvMod.volumeGroups?.find(g => g.volumes?.length
+                    && !String(g.jsonName || '').endsWith('_resampled')
+                    && !String(g.jsonName || '').endsWith('_averaged'));
+            if (!activeGroup) throw new Error("No phantom group with JSON found. Load phantom via Add (json/nii) first.");
+
+            const biftiId = this._resolveBiftiId(activeGroup);
+            if (!biftiId) {
+                throw new Error(
+                    'HTTP SCAN requires a bifti registry phantom (e.g. subj04-3T-1mm-tra from Zenodo). '
+                    + 'Local-only phantoms need upload support (not yet implemented).',
+                );
+            }
+
+            const _tSeq = performance.now();
+            const seqText = await nvMod.enqueuePyodideTask(job.id, 'sim-seq', async () => {
+                return await this._prepareCurrentSeqForTools(job);
+            });
+            console.log(`[HTTP] sim-seq: ${(performance.now() - _tSeq).toFixed(0)}ms`);
+
+            const seqBytes = job.vfsSeqPath
+                ? nvMod.pyodide.FS.readFile(job.vfsSeqPath)
+                : new TextEncoder().encode(seqText);
+            const seqFilename = job.vfsSeqPath
+                ? job.vfsSeqPath.split('/').pop()
+                : `${job.baseName}.seq`;
+
+            // FOV after seq: executeFunction may sync Pulseq FOV → viewer sliders.
+            job.fovSnapshot = nvMod.captureFovSnapshot();
+            const phantomOversample = nvMod.getPhantomOversampleFactors();
+            job.phantomOversample = phantomOversample;
+            const phantomFovSnapshot = nvMod.applyPhantomOversampleToSnapshot(job.fovSnapshot, phantomOversample);
+            const phantomMatrix = nvMod.getSimPhantomMatrixDims(phantomOversample);
+            const reconMatrix = nvMod.getReconMatrixDims();
+            const phantomReslice = nvMod.getResliceToFromFovSnapshot(phantomFovSnapshot, phantomMatrix);
+            const phantomFovAffineFlat = this._flattenFovAffineForToml(phantomReslice.affine);
+
+            const options = {
+                exact_trajectories: job.simulation?.exactTrajectories !== false,
+                phantom: {
+                    type: 'bifti',
+                    id: biftiId,
+                    res: phantomReslice.resolution,
+                    affine: phantomReslice.affine,
+                },
+            };
+            const modalWorker = job.simulation?.worker;
+            if (modalWorker) {
+                options.worker = modalWorker;
+            } else if (job.simulation?.useGpu === true) {
+                options.use_gpu = true;
+            }
+
+            void this._patchProtocolSimulationToml(job, {
+                phantomFovAffine: phantomFovAffineFlat,
+                phantomMatrix,
+                reconMatrix,
+                phantomName: biftiId,
+            }).catch((tomlErr) => {
+                console.warn(`[${simLogTag}] protocol TOML simulation/recon patch failed:`, tomlErr);
+            });
+
+            this._setPipelineStage(job, 3);
+            job.simProgress = 0;
+            job.simProgressTarget = 0;
+            job.simDisplayProgress = 0;
+            job._simIndeterminate = false;
+            this._ensureSimProgressAnimator(job);
+
+            const _tSubmit = performance.now();
+            const httpJobId = await this._httpSubmitJob(
+                httpBase,
+                seqBytes,
+                seqFilename,
+                options,
+            );
+            job.httpJobId = httpJobId;
+            console.log(`[HTTP] submit ${httpJobId}: ${(performance.now() - _tSubmit).toFixed(0)}ms`);
+
+            const _tPoll = performance.now();
+            await this._httpPollJob(httpBase, httpJobId, job, simLogTag);
+            console.log(`[HTTP] poll done: ${(performance.now() - _tPoll).toFixed(0)}ms`);
+
+            if (job.abortSim) throw new Error('user stopped');
+            this._stopSimProgressAnimator(job);
+            job.simProgressTarget = 1;
+            job.simDisplayProgress = 1;
+            job.simProgress = 1;
+            this._setPipelineStage(job, 3);
+
+            const npzBytes = await this._httpFetchResultNpz(httpBase, httpJobId);
+            const { signalPairs, trajPoints } = await nvMod.enqueuePyodideTask(job.id, 'http-npz', () =>
+                this._parseHttpNpzForRecon(nvMod, npzBytes),
+            );
+
+            if (!trajPoints?.length) throw new Error(`${simLogTag}: HTTP result has no trajectory.`);
+            if (!signalPairs?.length) throw new Error(`${simLogTag}: HTTP result has no signal.`);
+
+            const reconRef = nvMod.generateFovMaskNiftiFromSnapshot(job.fovSnapshot, reconMatrix);
+
+            const useRecon = typeof nvMod.isScanReconEnabled === 'function'
+                ? nvMod.isScanReconEnabled()
+                : nvMod.scanRecon?.checked !== false;
+            const simBackend = job.simulation?.reconBackend || 'mr0';
+            const recoOutPath = typeof nvMod.simReconOutPath === 'function'
+                ? nvMod.simReconOutPath(job.id)
+                : '/tmp/__sim_pipeline_reco.nii';
+            job.reconDone = false;
+            this._setPipelineStage(job, 4);
+            const _tRecon = performance.now();
+            const recoBytes = await nvMod.enqueuePyodideTask(job.id, 'sim-recon', async () => {
+                await nvMod._ensureNibabelReady();
+                await nvMod.pyodide.loadPackage(['micropip']);
+                await nvMod.pyodide.runPythonAsync(`
+import micropip
+try:
+    import pynufft  # noqa
+except Exception:
+    await micropip.install('pynufft')
+                `);
+                await this._ensureSimReconPy(nvMod);
+                nvMod.pyodide.globals.set('sim_signal_pairs', signalPairs);
+                nvMod.pyodide.globals.set('sim_traj_points', trajPoints);
+                nvMod.pyodide.globals.set('sim_ref_bytes', reconRef);
+                nvMod.pyodide.globals.set('sim_output_mode', useRecon ? 'image' : 'kspace_log');
+                nvMod.pyodide.globals.set('sim_seq_path', job.vfsSeqPath || '');
+                nvMod.pyodide.globals.set('sim_backend', simBackend);
+                nvMod.pyodide.globals.set('sim_reco_out_path', recoOutPath);
+                const recoPathRes = await nvMod.pyodide.runPythonAsync(`
+import types
+_matrix = None
+_seq_path = sim_seq_path.to_py() if hasattr(sim_seq_path, 'to_py') else sim_seq_path
+if _seq_path:
+    try:
+        import os
+        import pypulseq as pp
+        _p = str(_seq_path)
+        if os.path.exists(_p):
+            _seq = pp.Sequence()
+            _seq.read(_p)
+            _m = _seq.get_definition('matrix')
+            if _m is not None:
+                _matrix = [int(_m[0]), int(_m[1]), int(_m[2]) if len(_m) > 2 else 1]
+    except Exception:
+        pass
+_src = sim_recon_py_source.to_py() if hasattr(sim_recon_py_source, 'to_py') else str(sim_recon_py_source)
+if "output_mode" not in _src:
+    raise RuntimeError("sim_recon_py_source is stale (missing output_mode)")
+_recon = types.ModuleType("_scan_recon_live")
+_recon.__dict__["__file__"] = "/scan_zero/recon.py"
+exec(compile(_src, "/scan_zero/recon.py", "exec"), _recon.__dict__)
+_backend = sim_backend.to_py() if hasattr(sim_backend, 'to_py') else str(sim_backend)
+_out = sim_reco_out_path.to_py() if hasattr(sim_reco_out_path, 'to_py') else str(sim_reco_out_path)
+_recon.run_sim_recon(
+    sim_signal_pairs,
+    sim_traj_points,
+    sim_ref_bytes,
+    out_path=_out,
+    output_mode=sim_output_mode,
+    matrix=_matrix,
+    sim_backend=_backend,
+)
+                `);
+                const recoPath = (recoPathRes && recoPathRes.toJs) ? recoPathRes.toJs() : recoPathRes;
+                if (recoPathRes?.destroy) recoPathRes.destroy();
+                const path = String(recoPath || recoOutPath);
+                const bytes = nvMod.pyodide.FS.readFile(path);
+                try { nvMod.pyodide.FS.unlink(path); } catch (_) {}
+                return bytes;
+            });
+            console.log(`[HTTP] ${useRecon ? 'PyNUFFT recon' : 'k-space log'}: ${(performance.now() - _tRecon).toFixed(0)}ms`);
+            job.reconDone = true;
+            this._setPipelineStage(job, 4);
+
+            job.niftiUrl = URL.createObjectURL(new Blob([recoBytes], { type: 'application/octet-stream' }));
+            job.seqUrl = URL.createObjectURL(new Blob([seqText], { type: 'text/plain' }));
+            job.status = 'done';
+            console.log(`[HTTP] *** TOTAL pipeline: ${(performance.now() - _tPipeline).toFixed(0)}ms ***`);
+            this.loadJob(job.id, false);
+        } catch (e) {
+            if (job.abortSim) {
+                job.status = 'error';
+                job.error = 'user stopped';
+            } else {
+                console.error('HTTP scan failed:', e);
+                job.status = 'error';
+                job.error = typeof nvMod?.formatPyodideError === 'function'
+                    ? nvMod.formatPyodideError(e)
+                    : (e.message || String(e));
+            }
+        } finally {
+            this._stopSimProgressAnimator(job);
+            this._simPipelineJob = null;
+        }
+        this.updateQueueUI();
+    }
+
     /**
      * Shared pipeline: resample phantom → conseq / trajex → rapisim or tool-mr0sim → PyNUFFT → queue result.
      * @param {object} job — must include simulation.toolUrl (from _enqueueSimJob).
@@ -1509,10 +2029,11 @@ if os.path.exists(_p):
                 phantomMatrix,
             );
             const reconRef = nvMod.generateFovMaskNiftiFromSnapshot(job.fovSnapshot, reconMatrix);
+            const phantomReslice = nvMod.getResliceToFromFovSnapshot(phantomFovSnapshot, phantomMatrix);
 
             try {
                 await this._patchProtocolSimulationToml(job, {
-                    phantomRef,
+                    phantomFovAffine: this._flattenFovAffineForToml(phantomReslice.affine),
                     phantomMatrix,
                     reconMatrix,
                     phantomName: activeGroup.jsonName || activeGroup.jsonFileName || 'unknown',
@@ -1774,7 +2295,7 @@ _recon.run_sim_recon(
         html += this.queue.map(job => `
             <div class="queue-item status-${job.status}" data-id="${job.id}">
                 <div class="item-main">
-                    <div class="item-title">${job.scanNumber}. ${job.name}</div>
+                    <div class="item-title">${this._escapeHtml(formatScanDisplayTitle(`${job.baseName}.nii.gz`, job))}</div>
                     <div class="item-meta">${this._escapeHtml(this._jobMetaLine(job))}</div>
                 </div>
                 <div class="item-actions">
@@ -1832,6 +2353,9 @@ _recon.run_sim_recon(
         if (!job || job.cropOnly || (job.pipelineStage ?? 0) !== 3) return;
         if (job.status !== 'scanning' && !(job.status === 'error' && job.abortSim)) return;
         job.abortSim = true;
+        if (job.httpJobId && job.httpBaseUrl) {
+            fetch(`${job.httpBaseUrl}/v1/jobs/${job.httpJobId}/abort`, { method: 'POST' }).catch(() => {});
+        }
         job.status = 'error';
         job.error = 'user stopped';
         this._stopSimProgressAnimator(job);
@@ -1920,17 +2444,14 @@ data
 
     /** Native tooltip: full protocol parameters for a scan volume row. */
     getProtocolTooltipForVolume(vol) {
-        const explorer = window.seqExplorer;
-        if (!explorer) return null;
-        const job = this.getJobForVolume(vol);
-        const protocolPath = job?.protocolPath
-            || (job?.scanNumber != null ? explorer.findProtocolPathForScanNumber(job.scanNumber) : null)
-            || (() => {
-                const m = vol?.name?.match(/^scan_(\d+)_/);
-                return m ? explorer.findProtocolPathForScanNumber(m[1]) : null;
-            })();
-        if (!protocolPath) return null;
-        return explorer.formatProtocolTooltip(protocolPath);
+        const n = parseScanNumberFromVolumeName(vol?.name);
+        if (n == null) return null;
+        return window.seqExplorer?.getProtocolTooltipForScanNumber?.(n) ?? null;
+    }
+
+    /** Tooltip for scan N via protocol file (used by paper plot and volume list). */
+    getProtocolTooltipForScanNumber(scanNumber) {
+        return window.seqExplorer?.getProtocolTooltipForScanNumber?.(scanNumber) ?? null;
     }
 
     async loadJob(jobId, syncFov = true) {

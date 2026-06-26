@@ -11,6 +11,7 @@
  */
 
 import { eventHub } from "../event_hub.js";
+import { formatSimBackendLabel } from "../scan_zero/sim_backends.js";
 import {
     SEQ_DEFAULT_PLOT_SPEED,
     buildSeqPlotExecuteFragments,
@@ -141,9 +142,9 @@ const SEQ_TEMPLATES = {
         return `<div id="seq-mobile-run-btns" class="seq-mobile-run-btns" aria-label="Run scan">
                     <div id="seq-mobile-pipeline-status" class="seq-mobile-pipeline-status" hidden aria-hidden="true"></div>
                     <div class="seq-mobile-run-btns-group">
-                    <button id="seq-mobile-crop" type="button" class="scan-btn scan-btn-compact" title="Resample first volume to FOV (crop to box)">CROP</button>
-                    <button id="seq-mobile-scan-mr0" type="button" class="scan-btn scan-btn-compact" title="MR0 (tool-mr0sim)">SCAN<span class="icon">▶</span></button>
-                    <button id="seq-mobile-scan-fast" type="button" class="scan-btn scan-btn-compact" title="Rapisim (tool-rapisim)">SCAN<span class="icon">▶▶</span></button>
+                    <button id="seq-mobile-crop" type="button" class="scan-btn scan-btn-compact scan-btn-secondary" title="Resample first volume to FOV (crop to box)">CROP</button>
+                    <button id="seq-mobile-scan" type="button" class="scan-btn scan-btn-compact" title="Run scan">SCAN<span class="icon">▶</span></button>
+                    <button id="seq-mobile-scan-settings" type="button" class="scan-btn scan-btn-compact scan-btn-settings" title="Simulation backend" aria-label="Simulation backend"><i class="bi bi-gear" aria-hidden="true"></i></button>
                     </div>
                 </div>`;
     },
@@ -351,11 +352,11 @@ export class SequenceExplorer {
 
     _bindMobileScanButtons(root) {
         const crop = root.querySelector('#seq-mobile-crop');
-        const mr0 = root.querySelector('#seq-mobile-scan-mr0');
-        const fast = root.querySelector('#seq-mobile-scan-fast');
+        const scan = root.querySelector('#seq-mobile-scan');
+        const settings = root.querySelector('#seq-mobile-scan-settings');
         if (crop) crop.addEventListener('click', () => window.scanModule?.startCrop?.());
-        if (mr0) mr0.addEventListener('click', () => window.scanModule?.startSimMr0?.());
-        if (fast) fast.addEventListener('click', () => window.scanModule?.startSimFast?.());
+        if (scan) scan.addEventListener('click', () => window.scanModule?.startScan?.());
+        if (settings) settings.addEventListener('click', () => window.scanModule?.openSimSettingsDialog?.());
     }
 
     async renderPlot(target) {
@@ -1326,50 +1327,28 @@ plt.rcParams['font.size'] = 8`;
         return m ? m[1] : base;
     }
 
-    /** User label from queue job or matching `scan_<n>_*.nii.gz` volume. */
-    _resolveScanUserLabel(scanNumber) {
-        if (scanNumber == null) return null;
-        const job = typeof window !== 'undefined'
-            ? window.scanModule?.queue?.find((j) => j.scanNumber === scanNumber)
-            : null;
-        if (job?.name) return job.name;
-        const vol = typeof window !== 'undefined'
-            ? window.nvModule?.nv?.volumes?.find((v) => {
-                const m = v.name?.match(/^scan_(\d+)_/i);
-                return m && Number(m[1]) === scanNumber;
-            })
-            : null;
-        if (vol?.name) {
-            const m = vol.name.match(/^scan_(\d+)_(.*?)\.nii/i);
-            if (m?.[2]) return m[2];
-        }
-        return null;
+    /** User-facing label from protocol path stem only (no queue / NIfTI lookups). */
+    protocolLabelFromPathStem(protocolPath) {
+        return this.protocolSeqStemFromPath(protocolPath).replace(/^prot_/, '');
     }
 
     /**
-     * User-facing protocol label from path + scan output filename: `2. tüdel`.
-     * Scan number comes from `user/prot/<n>_*.py`; user name from queue or `scan_<n>_*.nii.gz`.
+     * User-facing protocol label from path: `2. gre` or `2. prot_tse_2d_flair`.
      * @param {string} protocolPath
-     * @param {string} [nameOverride] - use when scan volume does not exist yet (e.g. at save time)
+     * @param {string} [nameOverride] - use only at snapshot save time before the file is indexed
      */
     protocolDisplayNameFromPath(protocolPath, nameOverride = null) {
         const n = this.parseProtocolScanNumber(protocolPath);
         if (n == null) {
             return this.protocolSeqStemFromPath(protocolPath) || '';
         }
-        const userLabel = nameOverride || this._resolveScanUserLabel(n);
-        if (userLabel) return `${n}. ${userLabel}`;
-        const stem = this.protocolSeqStemFromPath(protocolPath);
-        return stem ? `${n}. ${stem}` : String(n);
+        const label = nameOverride || this.protocolLabelFromPathStem(protocolPath);
+        return label ? `${n}. ${label}` : String(n);
     }
 
     /** User label for a saved protocol path (without its scan-number prefix). */
     protocolUserLabelFromPath(protocolPath) {
-        const n = this.parseProtocolScanNumber(protocolPath);
-        if (n == null) return this.protocolSeqStemFromPath(protocolPath).replace(/^prot_/, '');
-        const fromQueue = this._resolveScanUserLabel(n);
-        if (fromQueue) return fromQueue;
-        return this.protocolSeqStemFromPath(protocolPath).replace(/^prot_/, '');
+        return this.protocolLabelFromPathStem(protocolPath);
     }
 
     /** Default scan name when deriving a new protocol from an existing numbered protocol (e.g. `3.gre`). */
@@ -1388,19 +1367,91 @@ plt.rcParams['font.size'] = 8`;
         return s;
     }
 
-    /** Find user protocol snapshot saved for scan N (e.g. user/prot/1_prot_gre.py). */
+    /**
+     * Canonical protocol file for scan N (`user/prot/N_*.py`).
+     * One file per scan number; warns if multiple matches exist.
+     */
     findProtocolPathForScanNumber(scanNumber) {
-        const n = String(scanNumber);
+        if (scanNumber == null || scanNumber === '') return null;
+        const n = Number(scanNumber);
+        if (!Number.isFinite(n) || n < 1) return null;
         const prefix = `user/prot/${n}_`;
+        const matches = [];
         for (const key of Object.keys(this.sequences)) {
             const path = this._sequenceKeyToPath(key);
             if (!path.startsWith(prefix) || !path.endsWith('.py')) continue;
             const fd = this.sequences[key];
             const isProtocol = fd?.source?.itemKind === 'protocol'
                 || fd?.functions?.some((f) => f.name?.startsWith('prot_'));
-            if (isProtocol) return path;
+            if (isProtocol) matches.push(path);
         }
-        return null;
+        if (matches.length === 0) return null;
+        matches.sort();
+        if (matches.length > 1) {
+            console.warn(
+                `[seqExplorer] Multiple protocols for scan ${n}; using ${matches[0]} (${matches.length} total)`,
+            );
+        }
+        return matches[0];
+    }
+
+    /** Display title for scan N from its protocol file (e.g. `18. prot_TSE_2D_FLAIR`). */
+    getProtocolDisplayNameForScanNumber(scanNumber) {
+        const path = this.findProtocolPathForScanNumber(scanNumber);
+        if (!path) return null;
+        const norm = path.replace(/\\/g, '/');
+        let key = this.sequences[norm] ? norm : null;
+        if (!key) {
+            key = Object.keys(this.sequences).find((k) => this._sequenceKeyToPath(k) === norm) || null;
+        }
+        const fileData = key ? this.sequences[key] : null;
+        if (fileData?.source?.displayName) return fileData.source.displayName;
+        return this.protocolDisplayNameFromPath(norm);
+    }
+
+    /** Full protocol tooltip for scan N (underlying sequence, params, sim/recon). */
+    getProtocolTooltipForScanNumber(scanNumber) {
+        const path = this.findProtocolPathForScanNumber(scanNumber);
+        if (!path) return null;
+        return this.formatProtocolTooltip(path);
+    }
+
+    async _removeProtocolFileSilent(filePath) {
+        const norm = String(filePath || '').replace(/\\/g, '/');
+        if (!norm) return;
+        if (this.config.pyodide) {
+            try {
+                await this.config.pyodide.runPythonAsync(`
+import sys
+if hasattr(sys.modules['__main__'], '_user_edited_files'):
+    user_files = sys.modules['__main__']._user_edited_files
+    if ${JSON.stringify(norm)} in user_files:
+        del user_files[${JSON.stringify(norm)}]
+`);
+            } catch (_) { /* ignore */ }
+        }
+        const sourceIndex = this.config.sources.findIndex((s) => s.path === norm);
+        if (sourceIndex >= 0) this.config.sources.splice(sourceIndex, 1);
+        for (const key of Object.keys(this.sequences)) {
+            if (this._sequenceKeyToPath(key) === norm) delete this.sequences[key];
+        }
+    }
+
+    /** Keep a single `user/prot/N_*.py` per scan number. */
+    async _purgeOtherProtocolsForScanNumber(scanNumber, keepPath) {
+        const n = Number(scanNumber);
+        if (!Number.isFinite(n)) return;
+        const keep = String(keepPath || '').replace(/\\/g, '/');
+        const toRemove = [];
+        for (const key of Object.keys(this.sequences)) {
+            const path = this._sequenceKeyToPath(key);
+            if (path === keep || !path.endsWith('.py')) continue;
+            if (this.parseProtocolScanNumber(path) !== n) continue;
+            toRemove.push(path);
+        }
+        for (const path of toRemove) {
+            await this._removeProtocolFileSilent(path);
+        }
     }
 
     /**
@@ -4981,7 +5032,9 @@ parse_metadata_toml(_toml_payload)
         const lines = [];
         if (simulation && Object.keys(simulation).length) {
             lines.push('Simulation:');
-            if (simulation.backend != null) lines.push(`  backend: ${simulation.backend}`);
+            if (simulation.backend != null) {
+                lines.push(`  backend: ${formatSimBackendLabel(simulation.backend)}`);
+            }
             if (simulation.phantom != null) lines.push(`  phantom: ${simulation.phantom}`);
             if (Array.isArray(simulation.phantom_matrix)) {
                 lines.push(`  phantom_matrix: [${simulation.phantom_matrix.join(', ')}]`);
@@ -5279,6 +5332,9 @@ def ${safeFunctionName}(
         // 3. Save silently
         
         try {
+            if (filePrefix) {
+                await this._purgeOtherProtocolsForScanNumber(protocolName, finalFileName);
+            }
             await this.storeUserFile(finalFileName, code);
 
             const displayName = this.protocolDisplayNameFromPath(finalFileName, scanLabel || pendingMeta.name);

@@ -663,6 +663,25 @@ body {
     min-height: 26px;
     border-radius: var(--radius-md, 4px);
 }
+#seq-params-section .seq-mobile-run-btns .scan-btn-compact.scan-btn-settings {
+    flex: 0 0 auto;
+    min-width: 1.75rem;
+    max-width: 2rem;
+    padding: 0.2rem 0.25rem;
+    background: transparent;
+    border: none;
+    color: var(--accent, #4a9eff);
+    font-weight: var(--font-weight-medium, 500);
+}
+#seq-params-section .seq-mobile-run-btns .scan-btn-compact.scan-btn-settings:hover {
+    background: rgba(59, 130, 246, 0.12);
+    color: #7db7ff;
+    transform: none;
+}
+#seq-params-section .seq-mobile-run-btns .scan-btn-compact.scan-btn-secondary {
+    background: rgba(255, 255, 255, 0.1);
+    border: 1px solid var(--border, rgba(255, 255, 255, 0.18));
+}
 #seq-params-section .seq-mobile-run-btns .scan-btn-compact .icon {
     font-size: 0.75em;
 }

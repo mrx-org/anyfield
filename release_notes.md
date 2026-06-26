@@ -1,5 +1,15 @@
 # Release notes
 
+## v2.1.0
+
+- **Default phantom** — Switched to BIfTI phantoms https://github.com/mrx-org/bifti-phantoms BrainWeb **subj04-3T-1mm-tra** (true 1 mm iso, resampled from orihinal bifti)
+- **Single SCAN + backend picker** — RUN tab and mobile footer use one **SCAN▶** button plus a gear **Simulation backend** dialog (pro) instead of separate MR0 / GPU buttons. Choice persists in `localStorage`.
+- **Sim backend registry** — `scan_zero/sim_backends.js` centralizes Fly WebSocket and Modal HTTP backends (mr0 CPU, mr0r, Modal CPU / T4 / A10 / A100); queue meta and tooltips show the selected backend label.
+- **Modal HTTP simulation** — new `runHttpSimPipeline`: upload `.seq` to the Modal HTTP gateway, poll remote MRzeroCore progress, download NPZ, local PyNUFFT recon. Supports bifti registry phantoms via `reslice_to` grid from `getResliceToFromFovSnapshot`.
+- **Phantom sidebar labels** — nifti_phantom_v1 JSON drives load order and per-volume labels (density, dB0, B1+, …) instead of raw filenames.
+- **Protocol-driven scan titles** — SCANS list, preview **B**, and Paper Plot use `N. <protocol stem>` from `user/prot/N_*.py` (e.g. `18. prot_TSE_2D_FLAIR`), not queue draft names. Saving a protocol purges duplicate files for the same scan number.
+- **Pipeline progress** — HTTP jobs map remote status messages to the ring progress arc; sim stage uses banded fractions with smoother animation during long runs.
+
 ## v2.0.0
 
 - **Protocol file standard** — saved protocols use a three-layer format: PEP 723 (`dependencies`, `[tool.anyfield] micropip_no_deps`) for `uv run` and Pyodide; a Colab/Jupyter `%pip` guard; and a marked `_anyfield_json` block for scanner metadata (`prot_func`, `seq_func`, `simulation`, `recon`).

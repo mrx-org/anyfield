@@ -8,6 +8,10 @@
 !data/brain_default_1mm_single_slice/brain_default_PD.nii.gz
 !data/brain_default_1mm_single_slice/brain_default_dB0.nii.gz
 !data/brain_default_1mm_single_slice/brain_default_B1+.nii.gz
+# Default lab phantom: subj04 BrainWeb 1 mm iso (tracked despite *.nii.gz)
+!data/subj04-3T-1mm-tra/subj04.nii.gz
+!data/subj04-3T-1mm-tra/subj04_dB0.nii.gz
+!data/subj04-3T-1mm-tra/subj04_B1+.nii.gz
 *.stl
 niivue_/
 node_modules/

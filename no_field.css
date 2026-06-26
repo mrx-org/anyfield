@@ -433,6 +433,30 @@
     transform: scale(0.98);
 }
 
+.scan-btn.scan-btn-settings {
+    width: auto;
+    min-width: unset;
+    padding: 0.2rem 0.35rem;
+    background: transparent;
+    border: none;
+    color: var(--accent, #4a9eff);
+    font-weight: var(--font-weight-medium, 500);
+}
+
+.scan-btn.scan-btn-settings:hover {
+    background: rgba(59, 130, 246, 0.12);
+    color: #7db7ff;
+    transform: none;
+}
+
+.scan-btn.scan-btn-settings:active {
+    transform: none;
+}
+
+.scan-btn.scan-btn-settings .bi {
+    color: inherit;
+}
+
 /* Queue Action Buttons - Small uppercase buttons for scan queue */
 .view-btn,
 .view-seq-btn {

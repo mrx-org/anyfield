@@ -4,15 +4,87 @@ import { formatScanDisplayTitle } from "./scan_zero/scan_module.js";
 import { volumeIs4D, syncVolumeClimsToCurrent4DFrame, installFrameAwareContrastDrag, installFrameAwareBriConReset } from "./hist_panel/histogram-clim-panel.js";
 
 /**
- * Remote base URL for the bundled default nifti_phantom (JSON + NIfTIs), served from GitHub `raw`.
- * In-repo mirror: `data/brain_default_1mm_gz/`. Override via `NiivueModule({ defaultPhantomBaseUrl })`
- * or `window.NV_DEFAULT_PHANTOM_BASE` (set before app init).
+ * Base URL for the bundled default nifti_phantom (JSON + NIfTIs).
+ * In-repo bundle: `data/subj04-3T-1mm-tra/` (BrainWeb subj04, true 1 mm iso).
+ * Override via `NiivueModule({ defaultPhantomBaseUrl })` or `window.NV_DEFAULT_PHANTOM_BASE`.
  */
-export const DEFAULT_PHANTOM_REMOTE_BASE =
-  "https://raw.githubusercontent.com/mrx-org/anyfield/main/data/brain_default_1mm_gz";
+export const DEFAULT_PHANTOM_REMOTE_BASE = "data/subj04-3T-1mm-tra/";
 
 /** Must match `RESAMPLING_PY_VERSION` in data/resampling.py (cache-bust + reload). */
 export const RESAMPLING_PY_VERSION = 4;
+
+/** nifti_phantom_v1 property keys → sidebar label (density first in list order). */
+const PHANTOM_NIFTI_PROP_CATALOG = [
+  { keys: ["density"], label: "density" },
+  { keys: ["dB0"], label: "dB0" },
+  { keys: ["B1+"], label: "B1+" },
+  { keys: ["B1-"], label: "B1-" },
+  { keys: ["T1"], label: "T1" },
+  { keys: ["T2"], label: "T2" },
+  { keys: ["T2'"], label: "T2'" },
+  { keys: ["ADC"], label: "ADC" },
+];
+
+function phantomExtractNiftiFileRef(val) {
+  if (val == null || typeof val === "number") return null;
+  if (typeof val === "string") {
+    const m = val.match(/^(.+?)\[\d+\]$/);
+    if (m) return m[1];
+    if (/\.nii(\.gz)?$/i.test(val)) return val;
+    return null;
+  }
+  if (typeof val === "object" && val.file) return phantomExtractNiftiFileRef(val.file);
+  return null;
+}
+
+function phantomNiftiRefsFromProp(val) {
+  if (val == null || typeof val === "number") return [];
+  if (Array.isArray(val)) {
+    const out = [];
+    for (const item of val) {
+      const ref = phantomExtractNiftiFileRef(item);
+      if (ref) out.push(ref);
+    }
+    return out;
+  }
+  const ref = phantomExtractNiftiFileRef(val);
+  return ref ? [ref] : [];
+}
+
+/**
+ * From a nifti_phantom_v1 JSON, map each referenced NIfTI file to a property label
+ * (density, dB0, B1+, …) and return load order (density first).
+ * @returns {{ fileToLabel: Map<string, string>, order: string[] } | null}
+ */
+function phantomNiftiCatalogFromJson(jsonText) {
+  let parsed;
+  try {
+    parsed = JSON.parse(jsonText);
+  } catch {
+    return null;
+  }
+  if (!parsed?.tissues || typeof parsed.tissues !== "object") return null;
+
+  const fileToLabel = new Map();
+  const order = [];
+
+  for (const { keys, label } of PHANTOM_NIFTI_PROP_CATALOG) {
+    for (const tissue of Object.values(parsed.tissues)) {
+      if (!tissue || typeof tissue !== "object") continue;
+      for (const key of keys) {
+        const refs = phantomNiftiRefsFromProp(tissue[key]);
+        for (const fn of refs) {
+          if (!fileToLabel.has(fn)) {
+            fileToLabel.set(fn, label);
+            order.push(fn);
+          }
+        }
+      }
+    }
+  }
+
+  return order.length ? { fileToLabel, order } : null;
+}
 
 export class NiivueModule {
   constructor(options = {}) {
@@ -355,7 +427,7 @@ export class NiivueModule {
           <div class="row" style="display: flex; flex-direction: column; gap: 4px; flex-shrink: 0;">
             <div style="display: flex; gap: 4px; flex-wrap: wrap;">
               <button id="btn-add-folder-${this.instanceId}" class="btn btn-secondary btn-sm btn-flex" title="Select folder with JSON + NIfTIs">Add BIfTI</button>
-              <button id="load-demo-${this.instanceId}" class="btn btn-secondary btn-sm btn-flex" title="Reload bundled brain default phantom">Default phantom</button>
+              <button id="load-demo-${this.instanceId}" class="btn btn-secondary btn-sm btn-flex" title="Reload bundled subj04-3T-1mm-tra phantom">Default phantom</button>
               <input id="dir-${this.instanceId}" type="file" webkitdirectory directory multiple style="display: none;" />
             </div>
           </div>
@@ -2759,6 +2831,50 @@ os.makedirs('/phantom/averaged', exist_ok=True)
   }
 
   /**
+   * Bifti ``reslice_to`` grid matching `generateFovMaskNiftiFromSnapshot` (mm, RAS+).
+   * @returns {{ resolution: [number, number, number], affine: number[][] }}
+   */
+  getResliceToFromFovSnapshot(snapshot, matrixDims = null) {
+    if (!snapshot || !snapshot.centerWorld || !snapshot.sizeMm || !snapshot.rotationDeg) {
+      throw new Error("getResliceToFromFovSnapshot: invalid snapshot");
+    }
+    const fovCenterWorld = snapshot.centerWorld;
+    const fovSizeMm = snapshot.sizeMm;
+    const fovRotDeg = snapshot.rotationDeg;
+    const mDims = Array.isArray(matrixDims) && matrixDims.length >= 3
+      ? [
+          Math.max(1, Math.round(Number(matrixDims[0]) || 1)),
+          Math.max(1, Math.round(Number(matrixDims[1]) || 1)),
+          Math.max(1, Math.round(Number(matrixDims[2]) || 1)),
+        ]
+      : this.getReconMatrixDims();
+    const vSpacing = [fovSizeMm[0] / mDims[0], fovSizeMm[1] / mDims[1], fovSizeMm[2] / mDims[2]];
+    const toRad = (d) => (d * Math.PI) / 180;
+    const rX = toRad(fovRotDeg[0]), rY = toRad(fovRotDeg[1]), rZ = toRad(fovRotDeg[2]);
+    const cX = Math.cos(rX), sX = Math.sin(rX), cY = Math.cos(rY), sY = Math.sin(rY), cZ = Math.cos(rZ), sZ = Math.sin(rZ);
+    const R = [
+      [cZ * cY, cZ * sY * sX - sZ * cX, cZ * sY * cX + sZ * sX],
+      [sZ * cY, sZ * sY * sX + cZ * cX, sZ * sY * cX - cZ * sX],
+      [-sY, cY * sX, cY * cX],
+    ];
+    const h = [fovSizeMm[0] / 2, fovSizeMm[1] / 2, fovSizeMm[2] / 2];
+    const local_0 = [-h[0] + vSpacing[0] / 2, -h[1] + vSpacing[1] / 2, -h[2] + vSpacing[2] / 2];
+    const rasOrigin = [
+      R[0][0] * local_0[0] + R[0][1] * local_0[1] + R[0][2] * local_0[2] + fovCenterWorld[0],
+      R[1][0] * local_0[0] + R[1][1] * local_0[1] + R[1][2] * local_0[2] + fovCenterWorld[1],
+      R[2][0] * local_0[0] + R[2][1] * local_0[1] + R[2][2] * local_0[2] + fovCenterWorld[2],
+    ];
+    return {
+      resolution: [mDims[0], mDims[1], mDims[2]],
+      affine: [
+        [R[0][0] * vSpacing[0], R[0][1] * vSpacing[1], R[0][2] * vSpacing[2], rasOrigin[0]],
+        [R[1][0] * vSpacing[0], R[1][1] * vSpacing[1], R[1][2] * vSpacing[2], rasOrigin[1]],
+        [R[2][0] * vSpacing[0], R[2][1] * vSpacing[1], R[2][2] * vSpacing[2], rasOrigin[2]],
+      ],
+    };
+  }
+
+  /**
    * Binary mask NIfTI for the current FOV box + chosen grid.
    * Goes through `getFovGeometry()` (which also refreshes the 3D FOV mesh data and emits
    * `fov_changed`) to preserve the side effects legacy callers expect, then delegates to
@@ -3100,9 +3216,13 @@ os.makedirs('/phantom/averaged', exist_ok=True)
         titleText = window.scanModule?.getScanDisplayTitle(vol)
           ?? formatScanDisplayTitle(vol.name);
         metaText = "";
-      } else if (shortTitle && vol.name) {
-        const m = vol.name.match(/_([^_.]+)\.nii(\.gz)?$/i);
-        titleText = m ? m[1] : vol.name.replace(/\.nii(\.gz)?$/i, '').replace(/.*_/, '') || vol.name;
+      } else if (shortTitle) {
+        if (vol._phantomLabel) {
+          titleText = vol._phantomLabel;
+        } else if (vol.name) {
+          const m = vol.name.match(/_([^_.]+)\.nii(\.gz)?$/i);
+          titleText = m ? m[1] : vol.name.replace(/\.nii(\.gz)?$/i, '').replace(/.*_/, '') || vol.name;
+        }
       }
       let dimTooltip = "";
       try {
@@ -3391,10 +3511,10 @@ os.makedirs('/phantom/averaged', exist_ok=True)
       ? new URL(base)
       : new URL(base, typeof window !== "undefined" ? window.location.href : "http://localhost/");
     const names = [
-      "brain_default.json",
-      "brain_default_PD.nii.gz",
-      "brain_default_dB0.nii.gz",
-      "brain_default_B1+.nii.gz",
+      "subj04-3T-1mm-tra.json",
+      "subj04.nii.gz",
+      "subj04_dB0.nii.gz",
+      "subj04_B1+.nii.gz",
     ];
     const files = [];
     for (const n of names) {
@@ -3426,6 +3546,7 @@ os.makedirs('/phantom/averaged', exist_ok=True)
     await this.waitForInit();
     try {
       const jsonText = await jsonFile.text();
+      const niftiCatalog = phantomNiftiCatalogFromJson(jsonText);
       let fileList = null;
       try {
         const parsed = JSON.parse(jsonText);
@@ -3439,19 +3560,30 @@ os.makedirs('/phantom/averaged', exist_ok=True)
         }
       } catch (_) {}
       const nameMap = new Map(niftiFiles.map(f => [f.name, f]));
-      const ordered = fileList
-        ? fileList.map(n => nameMap.get(n)).filter(Boolean)
-        : [...niftiFiles].sort((a, b) => a.name.localeCompare(b.name));
+      let ordered;
+      if (niftiCatalog) {
+        ordered = niftiCatalog.order.map(n => nameMap.get(n)).filter(Boolean);
+        const used = new Set(ordered.map(f => f.name));
+        for (const f of niftiFiles) {
+          if (!used.has(f.name)) ordered.push(f);
+        }
+      } else if (fileList) {
+        ordered = fileList.map(n => nameMap.get(n)).filter(Boolean);
+      } else {
+        ordered = [...niftiFiles].sort((a, b) => a.name.localeCompare(b.name));
+      }
       if (ordered.length === 0) {
         return;
       }
       const groupId = "g-" + Math.random().toString(36).substr(2, 9);
       const jsonName = jsonFile.name.replace(/\.json$/i, "");
-      // Ensure PD volume is first (volume 0) if present
-      const pdIdx = ordered.findIndex(f => /_PD\.nii(\.gz)?$/i.test(f.name));
-      if (pdIdx > 0) {
-        const [pdFile] = ordered.splice(pdIdx, 1);
-        ordered.unshift(pdFile);
+      if (!niftiCatalog) {
+        // Legacy: ensure *_PD.nii volume is first when filename carries the suffix
+        const pdIdx = ordered.findIndex(f => /_PD\.nii(\.gz)?$/i.test(f.name));
+        if (pdIdx > 0) {
+          const [pdFile] = ordered.splice(pdIdx, 1);
+          ordered.unshift(pdFile);
+        }
       }
       const defaultVisibleIdx = 0;
       const groupVolumes = [];
@@ -3468,6 +3600,9 @@ os.makedirs('/phantom/averaged', exist_ok=True)
           added[0].sourceUrl = u;
           added[0]._groupId = groupId;
           added[0]._sourceFile = f;
+          if (niftiCatalog?.fileToLabel.has(f.name)) {
+            added[0]._phantomLabel = niftiCatalog.fileToLabel.get(f.name);
+          }
           groupVolumes.push(added[0]);
         }
         setTimeout(() => URL.revokeObjectURL(u), 30000);
