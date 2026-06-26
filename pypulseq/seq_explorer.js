@@ -1490,7 +1490,14 @@ if hasattr(sys.modules['__main__'], '_user_edited_files'):
             lines.push(`Name: ${pathLabel}`);
         }
 
-        const defMatch = code.match(/def\s+(prot_\w+)\s*\(\s*([\s\S]*?)\)\s*:/);
+        // Target the protocol's entry function by name (anyfield.prot_func). Inline protocols embed
+        // the base sequence source, which defines its own `prot_*` functions *before* the wrapper —
+        // a generic first-match regex would show those stale base defaults instead of the run values.
+        const entryFunc = anyfield.prot_func;
+        const defRe = entryFunc
+            ? new RegExp(`def\\s+(${entryFunc})\\s*\\(\\s*([\\s\\S]*?)\\)\\s*:`)
+            : /def\s+(prot_\w+)\s*\(\s*([\s\S]*?)\)\s*:/;
+        const defMatch = code.match(defRe);
         if (defMatch) {
             lines.push('');
             lines.push(`${defMatch[1]}:`);

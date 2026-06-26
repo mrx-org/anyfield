@@ -1,5 +1,9 @@
 # Release notes
 
+## v2.1.1
+
+- **Protocol tooltip fix** — scan tooltips now read the protocol's entry function (`anyfield.prot_func`) instead of the first `def prot_*`, so inline protocols show the actual run parameters rather than the embedded base sequence defaults.
+
 ## v2.1.0
 
 - **Default phantom** — Switched to BIfTI phantoms https://github.com/mrx-org/bifti-phantoms BrainWeb **subj04-3T-1mm-tra** (true 1 mm iso, resampled from orihinal bifti)
