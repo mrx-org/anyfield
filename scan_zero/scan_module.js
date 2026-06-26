@@ -1693,6 +1693,24 @@ if os.path.exists(_p):
         return null;
     }
 
+    /**
+     * Current (possibly edited) nifti_phantom_v1 JSON for the active group, parsed to an object so
+     * the Modal server applies tissue edits on top of the registry NIfTIs. Returns null if no valid
+     * JSON is available (server then falls back to the registry sidecar).
+     */
+    _resolvePhantomConfigForHttp(nvMod, group, simLogTag) {
+        try {
+            const raw = typeof nvMod.getPhantomJsonContent === 'function'
+                ? nvMod.getPhantomJsonContent(group)
+                : (group?.jsonContent != null ? String(group.jsonContent) : null);
+            if (!raw || !String(raw).trim()) return null;
+            return JSON.parse(raw);
+        } catch (e) {
+            console.warn(`[${simLogTag}] phantom JSON parse failed; server will use registry sidecar:`, e);
+            return null;
+        }
+    }
+
     _parseHttpJobProgress(status) {
         const msg = String(status?.message || '').trim();
         const rep = status?.repetition;
@@ -1914,14 +1932,20 @@ for i in range(ktraj.shape[0]):
             job.reconMatrix = reconMatrix;
             job.seqText = seqText;
 
+            const phantomSpec = {
+                type: 'bifti',
+                id: biftiId,
+                res: phantomReslice.resolution,
+                affine: phantomReslice.affine,
+            };
+            // Send the current (possibly edited) JSON sidecar so tissue scalars / func / B1 / mapping
+            // edits are honored remotely. NIfTI voxel data still comes from the registry download
+            // (filename refs in the JSON must match the registry files).
+            const phantomConfig = this._resolvePhantomConfigForHttp(nvMod, activeGroup, simLogTag);
+            if (phantomConfig) phantomSpec.config = phantomConfig;
             const options = {
                 exact_trajectories: job.simulation?.exactTrajectories !== false,
-                phantom: {
-                    type: 'bifti',
-                    id: biftiId,
-                    res: phantomReslice.resolution,
-                    affine: phantomReslice.affine,
-                },
+                phantom: phantomSpec,
             };
             const modalWorker = job.simulation?.worker;
             if (modalWorker) {
