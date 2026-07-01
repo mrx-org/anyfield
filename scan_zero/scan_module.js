@@ -1684,12 +1684,14 @@ if os.path.exists(_p):
         return defaultHttpSimBaseUrl();
     }
 
-    /** Bifti registry id for remote HTTP phantom load (no local upload). */
+    /**
+     * Scan-ready bifti cache id for remote HTTP phantom load (no local upload).
+     * Set on the group when the phantom is loaded from the Modal cache; must match an
+     * entry from `GET /v1/cache` so `options.phantom.id` is accepted by the sim gateway.
+     */
     _resolveBiftiId(group) {
         if (!group) return null;
         if (group.biftiRegistryId) return String(group.biftiRegistryId);
-        const name = String(group.jsonName || '').replace(/\.json$/i, '');
-        if (/^subj\d+-/i.test(name)) return `brainweb-20-v2/${name}`;
         return null;
     }
 
@@ -1791,6 +1793,12 @@ if os.path.exists(_p):
         });
         if (!resp.ok) {
             const detail = await resp.text().catch(() => '');
+            if (resp.status === 400) {
+                throw new Error(
+                    `HTTP job submit rejected (400): ${detail}. `
+                    + 'The phantom id may not be on the cache — add it via the cache admin, then retry.',
+                );
+            }
             throw new Error(`HTTP job submit failed (${resp.status}): ${detail}`);
         }
         const data = await resp.json();
@@ -1895,13 +1903,13 @@ for i in range(ktraj.shape[0]):
                 : nvMod.volumeGroups?.find(g => g.volumes?.length
                     && !String(g.jsonName || '').endsWith('_resampled')
                     && !String(g.jsonName || '').endsWith('_averaged'));
-            if (!activeGroup) throw new Error("No phantom group with JSON found. Load phantom via Add (json/nii) first.");
+            if (!activeGroup) throw new Error("No phantom group found. Load a phantom via Add BIfTI first.");
 
             const biftiId = this._resolveBiftiId(activeGroup);
             if (!biftiId) {
                 throw new Error(
-                    'HTTP SCAN requires a bifti registry phantom (e.g. subj04-3T-1mm-tra from Zenodo). '
-                    + 'Local-only phantoms need upload support (not yet implemented).',
+                    'HTTP SCAN needs a cache phantom. Load one via "Add BIfTI" (or upload it to the '
+                    + 'cache admin as user/… first), then retry.',
                 );
             }
 

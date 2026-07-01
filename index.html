@@ -727,7 +727,7 @@ await micropip.install('pypulseq==1.4.2.post2', deps=False)
 
                 const mainViewerEl = document.getElementById('nv-viewer-container');
                 if (mainViewerEl) mainViewerEl.classList.add('viewer-waiting-demo');
-                const phantomReady = nvModule.loadBundledDefaultPhantom().then(() => {
+                const phantomReady = nvModule.loadDefaultCachePhantom().then(() => {
                     if (mainViewerEl) mainViewerEl.classList.remove('viewer-waiting-demo');
                 }).catch((err) => {
                     console.error('Default phantom load failed:', err);

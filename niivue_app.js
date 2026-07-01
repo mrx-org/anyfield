@@ -2,6 +2,7 @@ import { Niivue, NVMesh, NVImage, SLICE_TYPE, MULTIPLANAR_TYPE, DRAG_MODE, SHOW_
 import { eventHub } from "./event_hub.js";
 import { formatScanDisplayTitle } from "./scan_zero/scan_module.js";
 import { volumeIs4D, syncVolumeClimsToCurrent4DFrame, installFrameAwareContrastDrag, installFrameAwareBriConReset } from "./hist_panel/histogram-clim-panel.js";
+import { DEFAULT_CACHE_PHANTOM_ID, BIFTI_CACHE_ADMIN_BASE, fetchCachedPhantomIds, downloadPhantomTarGz, normalizeCacheId } from "./scan_zero/bifti_cache.js";
 
 /**
  * Base URL for the bundled default nifti_phantom (JSON + NIfTIs).
@@ -426,9 +427,8 @@ export class NiivueModule {
         <div id="panel-phantoms-${this.instanceId}" class="panel-flat" style="display: flex; flex-direction: column; height: 100%; box-sizing: border-box; overflow: hidden;">
           <div class="row" style="display: flex; flex-direction: column; gap: 4px; flex-shrink: 0;">
             <div style="display: flex; gap: 4px; flex-wrap: wrap;">
-              <button id="btn-add-folder-${this.instanceId}" class="btn btn-secondary btn-sm btn-flex" title="Select folder with JSON + NIfTIs">Add BIfTI</button>
-              <button id="load-demo-${this.instanceId}" class="btn btn-secondary btn-sm btn-flex" title="Reload bundled subj04-3T-1mm-tra phantom">Default phantom</button>
-              <input id="dir-${this.instanceId}" type="file" webkitdirectory directory multiple style="display: none;" />
+              <button id="btn-add-folder-${this.instanceId}" class="btn btn-secondary btn-sm btn-flex" title="Browse phantoms on the Modal cache">Add BIfTI</button>
+              <button id="load-demo-${this.instanceId}" class="btn btn-secondary btn-sm btn-flex" title="Reload default cache phantom (brainweb-20-v2/subj04-3T-1mm-tra)">Default phantom</button>
             </div>
           </div>
           <div id="phantom-volume-list-${this.instanceId}" style="margin-top: 6px; display: flex; flex-direction: column; gap: 4px; flex: 0 0 auto; max-height: 90px; overflow-y: auto; border-top: 1px solid var(--border); padding-top: 4px;"></div>
@@ -1654,43 +1654,8 @@ os.makedirs('/phantom/averaged', exist_ok=True)
   }
 
   setupEventListeners() {
-    if (this.btnAddFolder && this.dirInput) {
-      this.btnAddFolder.addEventListener("click", () => this.dirInput.click());
-      this.dirInput.onchange = async (e) => {
-        const entries = Array.from(e.target.files || []);
-        e.target.value = "";
-        if (!entries.length) return;
-        if (!await this.confirmPhantomReset()) return;
-        this.resetViewer();
-        const rootDir = entries[0]?.webkitRelativePath?.split("/")[0] || "";
-        const jsonFiles = entries.filter(f => {
-          if (!f.name.toLowerCase().endsWith(".json")) return false;
-          const dir = f.webkitRelativePath.split("/")[0];
-          return dir === rootDir && !f.webkitRelativePath.slice(rootDir.length + 1).includes("/");
-        });
-        const niftiFiles = entries.filter(f => {
-          if (!/\.nii(\.gz)?$/i.test(f.name)) return false;
-          const dir = f.webkitRelativePath.split("/")[0];
-          return dir === rootDir && !f.webkitRelativePath.slice(rootDir.length + 1).includes("/");
-        });
-        if (jsonFiles.length === 0) {
-          return;
-        }
-        if (niftiFiles.length === 0) {
-          return;
-        }
-        await this.populatePyodideVFS(niftiFiles, jsonFiles);
-        let chosenName = jsonFiles[0].name;
-        if (jsonFiles.length > 1) {
-          const chosen = await this.showJsonChoiceDialog(jsonFiles, niftiFiles);
-          if (!chosen) return;
-          chosenName = chosen.name;
-        }
-        this.jsonTabCurrentName = chosenName;
-        this.updateJsonTab();
-        const chosenJsonFile = jsonFiles.find(f => f.name === chosenName) || jsonFiles[0];
-        await this.loadMultiPhantomFromFiles(chosenJsonFile, niftiFiles);
-      };
+    if (this.btnAddFolder) {
+      this.btnAddFolder.addEventListener("click", () => this.showCachePhantomDialog());
     }
 
     this.showFov.addEventListener("change", () => this.requestFovUpdate());
@@ -1745,7 +1710,12 @@ os.makedirs('/phantom/averaged', exist_ok=True)
     this.btnDemo.onclick = async () => {
       if (!await this.confirmPhantomReset()) return;
       this.resetViewer();
-      await this.loadBundledDefaultPhantom();
+      try {
+        await this.loadDefaultCachePhantom();
+      } catch (e) {
+        console.error("Default cache phantom load failed:", e);
+        alert(`Default phantom load failed: ${e?.message || e}`);
+      }
       this.updateJsonTab();
     };
 
@@ -3504,28 +3474,31 @@ os.makedirs('/phantom/averaged', exist_ok=True)
    * Fetch bundled nifti_phantom_v1 folder (JSON + NIfTIs) and load like Add (json/nii).
    * Base URL may be absolute (GitHub raw) or relative to the current page.
    */
+  /** Load the fixed default phantom (`DEFAULT_CACHE_PHANTOM_ID`) from the Modal cache. */
+  async loadDefaultCachePhantom() {
+    return this.loadPhantomFromCache(DEFAULT_CACHE_PHANTOM_ID);
+  }
+
+  /** Back-compat alias: startup / "Default phantom" button now load from the cache. */
   async loadBundledDefaultPhantom() {
+    return this.loadDefaultCachePhantom();
+  }
+
+  /**
+   * Load a phantom from the cache admin download URL (`{collection}/{name}/download`),
+   * extract the `.tar.gz`, and show it in Niivue. Tags the group with `biftiRegistryId`
+   * (the scan-ready id used by Modal HTTP sim).
+   * @param {string} phantomId — e.g. `brainweb-20-v2/subj04-3T-1mm-tra`
+   */
+  async loadPhantomFromCache(phantomId) {
     await this.waitForInit();
-    const base = String(this.defaultPhantomBaseUrl || "").trim().replace(/\/?$/, "/");
-    const root = /^https?:\/\//i.test(base)
-      ? new URL(base)
-      : new URL(base, typeof window !== "undefined" ? window.location.href : "http://localhost/");
-    const names = [
-      "subj04-3T-1mm-tra.json",
-      "subj04.nii.gz",
-      "subj04_dB0.nii.gz",
-      "subj04_B1+.nii.gz",
-    ];
-    const files = [];
-    for (const n of names) {
-      const res = await fetch(new URL(n, root));
-      if (!res.ok) throw new Error(`Default phantom: ${n} → ${res.status} ${res.statusText}`);
-      const blob = await res.blob();
-      files.push(new File([blob], n, { type: "application/octet-stream" }));
+    const id = normalizeCacheId(phantomId);
+    if (!id) throw new Error("loadPhantomFromCache: empty phantom id");
+    const tarBytes = new Uint8Array(await downloadPhantomTarGz(id));
+    const { jsonFile, niftiFiles } = await this._extractPhantomTarGz(tarBytes, id);
+    if (!jsonFile || niftiFiles.length === 0) {
+      throw new Error(`Phantom "${id}": archive missing JSON or NIfTIs`);
     }
-    const jsonFile = files.find((f) => f.name.toLowerCase().endsWith(".json"));
-    const niftiFiles = files.filter((f) => /\.nii(\.gz)?$/i.test(f.name));
-    if (!jsonFile || niftiFiles.length === 0) throw new Error("Default phantom: missing JSON or NIfTIs");
     if (this.pyodide) {
       await this.populatePyodideVFS(niftiFiles, [jsonFile]);
       this._pendingPhantomVfs = null;
@@ -3533,7 +3506,7 @@ os.makedirs('/phantom/averaged', exist_ok=True)
       this._pendingPhantomVfs = { jsonFile, niftiFiles };
     }
     try {
-      await this.loadMultiPhantomFromFiles(jsonFile, niftiFiles);
+      await this.loadMultiPhantomFromFiles(jsonFile, niftiFiles, { biftiRegistryId: id });
     } catch (e) {
       this._pendingPhantomVfs = null;
       throw e;
@@ -3542,8 +3515,174 @@ os.makedirs('/phantom/averaged', exist_ok=True)
     this.updateJsonTab();
   }
 
-  async loadMultiPhantomFromFiles(jsonFile, niftiFiles) {
+  /**
+   * Extract a phantom `.tar.gz` (browser-fetched bytes) into JSON + NIfTI `File`s via Pyodide.
+   * Download must use JS `fetch` — Pyodide urllib cannot open https URLs in the browser.
+   * @param {Uint8Array} tarBytes
+   * @param {string} id — scan-ready id (for error messages)
+   */
+  async _extractPhantomTarGz(tarBytes, id) {
+    await this.initPyodide();
+    this.pyodide.globals.set("_bifti_tar_bytes", tarBytes);
+    let membersPy;
+    try {
+      membersPy = await this.pyodide.runPythonAsync(`
+import io, gzip, tarfile
+_raw = _bifti_tar_bytes.to_py() if hasattr(_bifti_tar_bytes, 'to_py') else _bifti_tar_bytes
+_raw = bytes(_raw)
+try:
+    _buf = gzip.decompress(_raw)
+except OSError:
+    _buf = _raw
+_out = []
+with tarfile.open(fileobj=io.BytesIO(_buf), mode='r:*') as tf:
+    for m in tf.getmembers():
+        if not m.isfile():
+            continue
+        name = m.name
+        base = name.split('/')[-1]
+        if not base or base.startswith('.') or '__MACOSX' in name:
+            continue
+        low = base.lower()
+        if low.endswith('.json') or low.endswith('.nii') or low.endswith('.nii.gz'):
+            data = tf.extractfile(m).read()
+            depth = name.count('/')
+            _out.append((base, low.endswith('.json'), depth, data))
+_out
+`);
+    } catch (e) {
+      const msg = typeof this.formatPyodideError === "function" ? this.formatPyodideError(e) : (e?.message || String(e));
+      throw new Error(`Phantom "${id}": ${msg}`);
+    }
+    const members = (membersPy && membersPy.toJs) ? membersPy.toJs() : membersPy;
+    if (membersPy?.destroy) membersPy.destroy();
+
+    const jsonEntries = [];
+    const niftiFiles = [];
+    for (const entry of members) {
+      const [base, isJson, depth, data] = entry;
+      const bytes = data instanceof Uint8Array ? data : new Uint8Array(data);
+      const file = new File([bytes], base, { type: "application/octet-stream" });
+      if (isJson) jsonEntries.push({ file, depth });
+      else niftiFiles.push(file);
+    }
+    if (jsonEntries.length === 0) {
+      throw new Error(`Phantom "${id}": no JSON found in archive`);
+    }
+    jsonEntries.sort((a, b) => a.depth - b.depth);
+    const jsonFile = jsonEntries[0].file;
+    return { jsonFile, niftiFiles };
+  }
+
+  /**
+   * Modal cache picker: fetch the scan-ready phantom list and let the user choose one.
+   * Loading replaces all volumes (same reset semantics as "Add BIfTI"/"Default phantom").
+   */
+  async showCachePhantomDialog() {
+    return new Promise((resolve) => {
+      const overlay = document.createElement("div");
+      overlay.className = "json-choice-overlay";
+      overlay.style.cssText = "position:fixed;inset:0;background:rgba(0,0,0,0.6);display:flex;align-items:center;justify-content:center;z-index:9999;";
+      const box = document.createElement("div");
+      box.className = "json-choice-dialog";
+      box.style.cssText = "background:var(--bg-panel);border:1px solid var(--border);border-radius:8px;padding:16px;min-width:320px;max-width:460px;box-shadow:0 8px 32px rgba(0,0,0,0.4);";
+      const title = document.createElement("div");
+      title.style.cssText = "font-weight:600;margin-bottom:6px;color:var(--text);";
+      title.textContent = "Add BIfTI — phantom cache";
+      const hint = document.createElement("div");
+      hint.style.cssText = "font-size:11px;color:var(--muted);margin-bottom:12px;";
+      hint.textContent = "Loading a phantom replaces all volumes, scans, and masks in the viewer.";
+      const list = document.createElement("div");
+      list.style.cssText = "display:flex;flex-direction:column;gap:6px;margin-bottom:14px;max-height:260px;overflow-y:auto;min-height:40px;";
+      const status = document.createElement("div");
+      status.style.cssText = "font-size:11px;color:var(--muted);margin-bottom:10px;";
+      status.textContent = "Fetching phantom list…";
+      const footer = document.createElement("div");
+      footer.style.cssText = "display:flex;justify-content:space-between;align-items:center;gap:8px;";
+      const adminLink = document.createElement("a");
+      adminLink.href = BIFTI_CACHE_ADMIN_BASE;
+      adminLink.target = "_blank";
+      adminLink.rel = "noopener noreferrer";
+      adminLink.textContent = "Add phantoms on cache admin ↗";
+      adminLink.style.cssText = "font-size:11px;color:var(--accent, #4a9eff);text-decoration:none;";
+      const rightActions = document.createElement("div");
+      rightActions.style.cssText = "display:flex;align-items:center;gap:8px;";
+      const refresh = document.createElement("button");
+      refresh.className = "btn btn-secondary";
+      refresh.textContent = "Refresh";
+      const cancel = document.createElement("button");
+      cancel.className = "btn btn-secondary";
+      cancel.textContent = "Cancel";
+
+      const close = (result) => { overlay.remove(); resolve(result); };
+      cancel.onclick = () => close(null);
+      overlay.onclick = (e) => { if (e.target === overlay) close(null); };
+      footer.appendChild(adminLink);
+      rightActions.appendChild(refresh);
+      rightActions.appendChild(cancel);
+      footer.appendChild(rightActions);
+      box.appendChild(title);
+      box.appendChild(hint);
+      box.appendChild(status);
+      box.appendChild(list);
+      box.appendChild(footer);
+      overlay.appendChild(box);
+      document.body.appendChild(overlay);
+
+      const pick = async (id) => {
+        if (!await this.confirmPhantomReset()) return;
+        status.textContent = `Loading ${id}…`;
+        list.querySelectorAll("button").forEach((b) => (b.disabled = true));
+        try {
+          this.resetViewer();
+          await this.loadPhantomFromCache(id);
+          this.updateJsonTab();
+          close(id);
+        } catch (e) {
+          console.error("Cache phantom load failed:", e);
+          status.textContent = e?.message || String(e);
+          list.querySelectorAll("button").forEach((b) => (b.disabled = false));
+        }
+      };
+
+      const loadList = () => {
+        list.innerHTML = "";
+        refresh.disabled = true;
+        status.textContent = "Fetching phantom list…";
+        fetchCachedPhantomIds()
+        .then((ids) => {
+          if (!overlay.isConnected) return;
+          if (!ids.length) {
+            status.textContent = "No phantoms on the cache yet. Use the cache admin to add one.";
+            return;
+          }
+          status.textContent = `${ids.length} phantom(s) available:`;
+          ids.forEach((id) => {
+            const btn = document.createElement("button");
+            btn.className = "btn";
+            btn.style.cssText = "text-align:left;padding:9px 12px;justify-content:flex-start;font-family:monospace;font-size:12px;";
+            btn.textContent = id;
+            btn.onclick = () => pick(id);
+            list.appendChild(btn);
+          });
+        })
+        .catch((e) => {
+          if (!overlay.isConnected) return;
+          console.error("Cache list failed:", e);
+          status.textContent = `Could not fetch phantom list: ${e?.message || e}`;
+        })
+        .finally(() => {
+          if (overlay.isConnected) refresh.disabled = false;
+        });
+      };
+      refresh.onclick = loadList;
+      loadList();
+    });
+  }
+
+  async loadMultiPhantomFromFiles(jsonFile, niftiFiles, options = {}) {
     await this.waitForInit();
+    const biftiRegistryId = options.biftiRegistryId ? normalizeCacheId(options.biftiRegistryId) : null;
     try {
       const jsonText = await jsonFile.text();
       const niftiCatalog = phantomNiftiCatalogFromJson(jsonText);
@@ -3607,7 +3746,7 @@ os.makedirs('/phantom/averaged', exist_ok=True)
         }
         setTimeout(() => URL.revokeObjectURL(u), 30000);
       }
-      this.volumeGroups.push({ id: groupId, jsonName, volumes: groupVolumes, jsonContent: jsonText, jsonFileName: jsonFile.name });
+      this.volumeGroups.push({ id: groupId, jsonName, volumes: groupVolumes, jsonContent: jsonText, jsonFileName: jsonFile.name, biftiRegistryId });
       this.refreshFovForNewVolume();
       this.updateVolumeList();
       this.updatePreviewFromSelection();
@@ -4372,10 +4511,12 @@ export async function initNiivueApp(containerId, options = {}) {
   module.renderFull(containerId);
   // Do not await initPyodide here, it can run in background
   module.initPyodide();
-  module.loadBundledDefaultPhantom().catch((e) => console.warn("Bundled default phantom:", e));
+  module.loadDefaultCachePhantom().catch((e) => console.warn("Default cache phantom:", e));
   return {
     nv: module.nv,
     loadUrl: module.loadUrl.bind(module),
+    loadDefaultCachePhantom: module.loadDefaultCachePhantom.bind(module),
+    loadPhantomFromCache: module.loadPhantomFromCache.bind(module),
     loadBundledDefaultPhantom: module.loadBundledDefaultPhantom.bind(module),
   };
 }
