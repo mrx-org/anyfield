@@ -15,6 +15,15 @@
 *.stl
 niivue_/
 node_modules/
+
+# --- chat assistant (local dev) ---
+chat/backend/.venv/
+chat/backend/.env
+chat/backend/logs/
+chat/backend/**/__pycache__/
+chat/backend/**/*.py[cod]
+chat/backend/**/*.log
+
 .cursor/
 terminals/
 tests/prot_uv_colab_conform_tests/_colab_notebooks/
