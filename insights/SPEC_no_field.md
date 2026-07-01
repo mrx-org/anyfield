@@ -69,3 +69,7 @@ Mobile-specific styles are defined in `no_field_mobile.css`:
 ## Pro mode
 - **Activation**: URL `?pro=1` (or `true`/`yes`). Parsed in `index.html` and `viewer.html`; stored as `window.pro` for use by any module.
 - **When on**: OPTIONS-tab debug block (volume/FOV/cursor info), PHANTOMS **Execute**, and **SCAN▶▶** (rapisim). Phantom JSON editor (Save / edit) is always on the PHANTOMS tab. No persistence; reload without `?pro=1` to turn off.
+
+## Chat assistant (optional)
+
+Fourth header view — LLM sequence assistant. Backend: `chat/backend/`. See [SPEC_chat_assistant.md](SPEC_chat_assistant.md).
