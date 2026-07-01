@@ -193,13 +193,23 @@
 .loader-text {
     font-family: monospace; /* Optional: looks better for loading logs */
     text-align: center;
-    min-height: 1.5em; 
+    min-height: 3em;
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    gap: 0.15em;
+}
+
+.loader-text::before {
+    content: "BOOTING ANY-FIELD MRI SCANNER...";
+    display: block;
 }
 
 /* The magic happens here: animated loading messages driven purely by CSS */
 .loader-text::after {
     content: "Initializing...";
     animation: loadSequence 30s linear forwards;
+    display: block;
 }
 
 /* --- ANIMATIONS --- */
