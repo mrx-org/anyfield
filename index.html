@@ -13,6 +13,7 @@
     <link rel="stylesheet" href="niivue_app.css?v=5">
     <link rel="stylesheet" href="pypulseq/seq_explorer.css">
     <link rel="stylesheet" href="scan_zero/scan_module.css?v=2">
+    <link rel="stylesheet" href="chat/chat_panel.css">
     <link rel="stylesheet" href="no_field.css"> <!-- Master override LAST -->
     <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/bootstrap-icons@1.11.3/font/bootstrap-icons.min.css">
     
@@ -274,6 +275,9 @@
                         <button type="button" id="view-mode-sequence-btn" class="credits-btn view-mode-btn" title="Sequence plot view" aria-label="Sequence plot view">
                             <svg class="view-mode-icon" viewBox="0 0 16 16" aria-hidden="true"><path d="M1.5 8 C3.5 4.5 5.5 11.5 8 8 S12.5 4.5 14.5 8" fill="none" stroke="currentColor" stroke-width="1.3" stroke-linecap="round"/></svg>
                         </button>
+                        <button type="button" id="view-mode-chat-btn" class="credits-btn view-mode-btn" title="Sequence assistant (chat)" aria-label="Sequence assistant chat view">
+                            <svg class="view-mode-icon" viewBox="0 0 16 16" aria-hidden="true"><path d="M2 3.5h12v7H5.2L2 13.5V3.5z" fill="none" stroke="currentColor" stroke-width="1.2" stroke-linejoin="round"/></svg>
+                        </button>
                     </div>
                     <button type="button" id="paper-plot-btn" class="credits-btn paper-plot-launch-btn" title="Paper plot figure builder"><i class="bi bi-grid-3x3-gap" aria-hidden="true"></i></button>
                     <button type="button" id="credits-btn" class="credits-btn" title="Credits &amp; dependencies"><i class="bi bi-award" aria-hidden="true"></i></button>
@@ -357,6 +361,7 @@
         <div id="seq-params-container" class="seq-explorer"></div>
         <div id="seq-plot-container" class="seq-explorer"></div>
         <div id="scan-module-container" class="scan-module"></div>
+        <div id="chat-panel-container" class="chat-panel-host"></div>
     </div>
 
     <script type="module" src="paper_plot/launch.js?v=11"></script>
@@ -366,6 +371,7 @@
         import { SequenceExplorer, patchSequencePlotFromCode } from './pypulseq/seq_explorer.js';
         import { ScanModule } from './scan_zero/scan_module.js?v=10';
         import { eventHub } from './event_hub.js';
+        import { initChatPanel } from './chat/chat_panel.js';
 
         // URL flags: ?pro=1 pro/debug; readable deep link ?s_category=&s_file=&s_func= or legacy ?init_prot=; ?seq_url= remote .seq
         const urlParams = new URLSearchParams(window.location.search);
@@ -406,6 +412,7 @@
                 this.currentMode = null;
                 this.maximizedViewer = null; // null | nvViewer | nvScanPreview | nvCompare
                 this.compareActive = false;
+                this._viewModeExplicit = false;
                 this.slots = {
                     sidebar: document.getElementById('slot-sidebar'),
                     main: document.getElementById('slot-main'),
@@ -422,7 +429,8 @@
                     seqTree: document.getElementById('seq-tree-container'),
                     seqParams: document.getElementById('seq-params-container'),
                     seqPlot: document.getElementById('seq-plot-container'),
-                    scanModule: document.getElementById('scan-module-container')
+                    scanModule: document.getElementById('scan-module-container'),
+                    chatPanel: document.getElementById('chat-panel-container')
                 };
                 
                 // Listen for toggle maximize events
@@ -432,19 +440,36 @@
             }
 
             bindViewModeButtons() {
+                const go = (mode, fn) => {
+                    this._viewModeExplicit = true;
+                    if (fn) fn();
+                    else this.setMode(mode);
+                };
                 document.getElementById('view-mode-planning-btn')?.addEventListener('click', () => {
-                    if (this.compareActive) this.deactivateCompareColumn();
-                    this.setMode('planning');
+                    go('planning', () => {
+                        if (this.compareActive) this.deactivateCompareColumn();
+                        this.setMode('planning');
+                    });
                 });
                 document.getElementById('view-mode-compare-btn')?.addEventListener('click', () => {
-                    this.setMode('planning');
-                    this.activateCompareColumn();
+                    go('planning', () => {
+                        this.setMode('planning');
+                        this.activateCompareColumn();
+                    });
                 });
                 document.getElementById('view-mode-sequence-btn')?.addEventListener('click', () => {
-                    if (this.currentMode !== 'sequence') {
-                        this.setMode('sequence');
-                    }
-                    this.seq?.executeFunction?.();
+                    go('sequence', () => {
+                        if (this.currentMode !== 'sequence') {
+                            this.setMode('sequence');
+                        }
+                        this.seq?.executeFunction?.();
+                    });
+                });
+                document.getElementById('view-mode-chat-btn')?.addEventListener('click', () => {
+                    go('chat', () => {
+                        if (this.compareActive) this.deactivateCompareColumn();
+                        this.setMode('chat');
+                    });
                 });
                 this.syncViewModeButtons();
             }
@@ -453,10 +478,12 @@
                 const planningBtn = document.getElementById('view-mode-planning-btn');
                 const compareBtn = document.getElementById('view-mode-compare-btn');
                 const sequenceBtn = document.getElementById('view-mode-sequence-btn');
+                const chatBtn = document.getElementById('view-mode-chat-btn');
                 const compare = !!this.compareActive;
                 planningBtn?.classList.toggle('is-active', this.currentMode === 'planning' && !compare);
                 compareBtn?.classList.toggle('is-active', this.currentMode === 'planning' && compare);
                 sequenceBtn?.classList.toggle('is-active', this.currentMode === 'sequence');
+                chatBtn?.classList.toggle('is-active', this.currentMode === 'chat');
             }
             
             toggleViewerMaximize(containerId) {
@@ -610,6 +637,10 @@
             }
 
             setMode(mode, autoPlot = false) {
+                if (this.currentMode === 'chat' && mode !== 'chat' && !this._viewModeExplicit) {
+                    return;
+                }
+                this._viewModeExplicit = false;
                 console.log('Switching to mode:', mode);
                 this.currentMode = mode;
                 
@@ -634,6 +665,13 @@
                     this.moveToSlot('nvPreviewBcStack', 'main');
                     this.slots.main.classList.remove('scrollable');
                     this.applyViewerLayout();
+                } else if (mode === 'chat') {
+                    this.maximizedViewer = null;
+                    this.slots.main.style.display = 'flex';
+                    this.slots.main.style.flexDirection = 'column';
+                    this.slots.main.classList.remove('planning-hist-visible');
+                    this.moveToSlot('chatPanel', 'main');
+                    this.slots.main.classList.remove('scrollable');
                 } else if (mode === 'sequence') {
                     this.slots.main.classList.remove('planning-hist-visible');
                     // Reset maximize state when leaving planning mode
@@ -790,6 +828,7 @@ await micropip.install('pypulseq==1.5.0.post1', deps=False)
                 window.scanCompare = scanCompare;
                 window.mainHist = mainHist;
                 window.jointHist = jointHist;
+                initChatPanel('chat-panel-container');
 
                 // Footer listeners (footer stays hidden until Pyodide ready)
                 (function initFooterCardDots() {
