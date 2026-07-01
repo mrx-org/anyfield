@@ -1,5 +1,10 @@
 # Release notes
 
+## v2.2.0
+
+- **Phantoms from the cloud cache** — Default phantom and **Add BIfTI** load BIfTIs from the Modal cache (no local folder picker). Pick from the list, or use **Default phantom** for BrainWeb subj04.
+- **Modal sim** — HTTP SCAN uses the same cache id as the loaded phantom; add new phantoms via the linked cache admin, then **Refresh** the list.
+
 ## v2.1.2
 
 - the SCAN▶ button now awaits only sequence prep + job submit, then polls and reconstructs in the background. Many scans run concurrently on the worker pool while local recon stays serialized, so you can change params/FOV and fire scans back-to-back. Each scan freezes its own seq + FOV at submit time (no cross-contamination), transient gateway errors retry with backoff (no more spurious CORS/"Failed to fetch"), completed scans stream into the SCANS list as they finish (focus follows the latest), and plot/Get-FOV/CROP are gated during in-flight recon to avoid Pyodide races.
