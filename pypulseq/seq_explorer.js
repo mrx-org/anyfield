@@ -11,7 +11,7 @@
  */
 
 import { eventHub } from "../event_hub.js";
-import { formatSimBackendLabel } from "../scan_zero/sim_backends.js";
+import { formatSimBackendLabel, SIM_BACKENDS } from "../scan_zero/sim_backends.js";
 import {
     SEQ_DEFAULT_PLOT_SPEED,
     buildSeqPlotExecuteFragments,
@@ -604,6 +604,7 @@ json.dumps(code)
     }
 
     async importSharedProtocolFromLocation() {
+        if (this._skipSharedImport) return false;
         const encoded = this.getSharedProtocolPayloadFromLocation();
         if (!encoded) return false;
         try {
@@ -626,6 +627,324 @@ json.dumps(code)
         return url;
     }
 
+    /**
+     * UI-faithful simulation state for sharing (both capsule + light URL): the active
+     * bifti phantom id, sim backend, recon-grid FOV (`fov_affine` + `fov_matrix`) and the
+     * scan-resolution bundle (`phantom_matrix` base, `phantom_oversample`, `recon_matrix`).
+     * Reads the live viewer/scan modules; skips missing fields; null when nothing is available.
+     */
+    collectSimulationShareMeta() {
+        const nvMod = window.nvModule;
+        const scanModule = window.scanModule;
+        const meta = {};
+        try {
+            const phantom = typeof scanModule?.getActiveBiftiId === 'function'
+                ? scanModule.getActiveBiftiId()
+                : (nvMod?.getActivePhantomGroup?.()?.biftiRegistryId ?? null);
+            if (phantom) meta.phantom = String(phantom);
+        } catch (_) { /* ignore */ }
+        try {
+            const backend = scanModule?.getSelectedSimBackendId?.();
+            if (backend) meta.backend = backend;
+        } catch (_) { /* ignore */ }
+        try {
+            const fov = nvMod?.getFovAffineShareMeta?.();
+            if (fov?.fov_affine) {
+                meta.fov_affine = fov.fov_affine;
+                meta.fov_matrix = fov.fov_matrix;
+            }
+        } catch (_) { /* ignore */ }
+        try {
+            const res = nvMod?.getScanResolutionShareMeta?.();
+            if (res) {
+                if (res.phantom_matrix) meta.phantom_matrix = res.phantom_matrix;
+                if (res.phantom_oversample) meta.phantom_oversample = res.phantom_oversample;
+                if (res.recon_matrix) meta.recon_matrix = res.recon_matrix;
+            }
+        } catch (_) { /* ignore */ }
+        return Object.keys(meta).length ? meta : null;
+    }
+
+    /** Map `collectSimulationShareMeta()` output into `{ simulation, recon }` TOML sections. */
+    _shareMetaToTomlSections(meta) {
+        if (!meta) return null;
+        const simulation = {};
+        if (meta.backend) simulation.backend = meta.backend;
+        if (meta.phantom) simulation.phantom = meta.phantom;
+        if (meta.fov_affine) simulation.fov_affine = meta.fov_affine;
+        if (meta.fov_matrix) simulation.fov_matrix = meta.fov_matrix;
+        if (meta.phantom_matrix) simulation.phantom_matrix = meta.phantom_matrix;
+        if (meta.phantom_oversample) simulation.phantom_oversample = meta.phantom_oversample;
+        const sections = {};
+        if (Object.keys(simulation).length) sections.simulation = simulation;
+        if (meta.recon_matrix) sections.recon = { matrix: meta.recon_matrix, method: 'anyfield-pynufft' };
+        return Object.keys(sections).length ? sections : null;
+    }
+
+    /**
+     * Normalize a shared simulation bundle (from a protocol's `[simulation]` block or from
+     * URL params) into the flat share-meta shape used by `applySimulationStateFromMeta`.
+     * `recon_matrix` is taken from `[recon].matrix` when not on the simulation block.
+     */
+    normalizeSharedSimMeta(simulation, recon) {
+        if (!simulation && !recon) return null;
+        const sim = simulation || {};
+        const out = {};
+        if (sim.backend != null) out.backend = String(sim.backend);
+        if (sim.phantom != null) out.phantom = String(sim.phantom);
+        if (Array.isArray(sim.fov_affine)) out.fov_affine = sim.fov_affine.map(Number);
+        if (Array.isArray(sim.fov_matrix)) out.fov_matrix = sim.fov_matrix.map(Number);
+        if (Array.isArray(sim.phantom_matrix)) out.phantom_matrix = sim.phantom_matrix.map(Number);
+        if (Array.isArray(sim.phantom_oversample)) out.phantom_oversample = sim.phantom_oversample.map(Number);
+        if (Array.isArray(sim.recon_matrix)) out.recon_matrix = sim.recon_matrix.map(Number);
+        else if (recon && Array.isArray(recon.matrix)) out.recon_matrix = recon.matrix.map(Number);
+        return Object.keys(out).length ? out : null;
+    }
+
+    /**
+     * Apply a shared simulation-state bundle to the live viewer/scan modules: set the sim
+     * backend, apply the scan-resolution sliders, (optionally) load the phantom by id, then
+     * restore the FOV box (which needs a loaded reference volume). All steps are best-effort;
+     * failures are surfaced via `showStatus` and do not abort the rest.
+     * @param {object} sim flat share-meta (see `collectSimulationShareMeta`).
+     * @param {object} [opts]
+     * @param {boolean} [opts.loadPhantom=true] set false when the phantom is already loaded.
+     */
+    async applySimulationStateFromMeta(sim, { loadPhantom = true } = {}) {
+        if (!sim || typeof sim !== 'object') return;
+        const nvMod = window.nvModule;
+        const scanModule = window.scanModule;
+        if (sim.backend && typeof scanModule?.setSelectedSimBackendId === 'function') {
+            const spec = SIM_BACKENDS[sim.backend];
+            if (!spec) {
+                console.warn('[share] ignoring unknown shared backend', sim.backend);
+            } else if (spec.proOnly && !window.pro) {
+                console.warn('[share] shared backend is pro-only; keeping current backend', sim.backend);
+            } else {
+                try {
+                    scanModule.setSelectedSimBackendId(sim.backend);
+                } catch (e) {
+                    console.warn('[share] ignoring shared backend', sim.backend, e?.message || e);
+                }
+            }
+        }
+        // Scan-resolution BEFORE FOV so the recon grid matches fov_matrix.
+        try {
+            nvMod?.applyScanResolutionSettings?.(sim);
+        } catch (e) {
+            console.warn('[share] scan-resolution apply failed', e);
+        }
+        let haveVolume = !!nvMod?.nv?.volumes?.length;
+        if (loadPhantom && sim.phantom && typeof nvMod?.loadPhantomFromCache === 'function') {
+            try {
+                await nvMod.loadPhantomFromCache(sim.phantom);
+                haveVolume = true;
+            } catch (e) {
+                console.warn('[share] shared phantom cache load failed', sim.phantom, e);
+                this.showStatus?.(`Shared phantom "${sim.phantom}" not found; keeping current phantom`, 'error');
+                if (!haveVolume && typeof nvMod?.loadDefaultCachePhantom === 'function') {
+                    try { await nvMod.loadDefaultCachePhantom(); haveVolume = true; } catch (_) { /* ignore */ }
+                }
+            }
+        } else if (!loadPhantom && this._sharedPhantomPromise) {
+            // index.html already kicked off the shared phantom load; wait so FOV has a reference volume.
+            try { await this._sharedPhantomPromise; } catch (_) { /* ignore */ }
+            haveVolume = !!nvMod?.nv?.volumes?.length;
+        }
+        if (haveVolume && Array.isArray(sim.fov_affine) && Array.isArray(sim.fov_matrix)
+            && typeof nvMod?.applyFovFromAffine === 'function') {
+            try {
+                nvMod.applyFovFromAffine(sim.fov_affine, sim.fov_matrix);
+            } catch (e) {
+                console.warn('[share] FOV restore failed', e);
+            }
+        }
+    }
+
+    /** Approximate FOV size in mm from a flat 4×4 affine (row-major) + matrix ([nx,ny,nz]). */
+    _fovMmFromAffineMatrix(affine, matrix) {
+        if (!Array.isArray(affine) || affine.length < 12 || !Array.isArray(matrix) || matrix.length < 3) return null;
+        const col = (c) => Math.hypot(Number(affine[c]), Number(affine[4 + c]), Number(affine[8 + c]));
+        return [col(0) * Number(matrix[0]), col(1) * Number(matrix[1]), col(2) * Number(matrix[2])];
+    }
+
+    /**
+     * Non-committing preview of a shared link for the startup confirmation dialog.
+     * Returns null when no shared link (capsule hash or light-URL params) is present.
+     * Capsule preview uses gunzip + `extractAnyfieldJsonFromCode` (pure JS, no Pyodide,
+     * no `storeUserFile`), so nothing is imported until the user accepts.
+     */
+    async previewSharedImport() {
+        const encoded = this.getSharedProtocolPayloadFromLocation();
+        if (encoded) {
+            try {
+                const payloadText = await this._gunzipString(this._base64UrlToBytes(encoded));
+                const payload = JSON.parse(payloadText);
+                const code = typeof payload?.code === 'string' ? payload.code : '';
+                const anyfield = code ? (this.extractAnyfieldJsonFromCode(code) || {}) : {};
+                const sim = anyfield.simulation || {};
+                const filename = this._sanitizeProtocolShareFilename(payload?.filename || 'shared_protocol.py');
+                const simMeta = this.normalizeSharedSimMeta(anyfield.simulation, anyfield.recon);
+                return {
+                    source: 'capsule',
+                    protocolName: this.protocolDisplayNameFromPath(filename) || filename,
+                    sequenceName: this.getProtocolDisplayNameFromSeqFuncFile(anyfield.seq_func) || anyfield.prot_func || '',
+                    phantom: sim.phantom || null,
+                    backend: sim.backend || null,
+                    fovMm: this._fovMmFromAffineMatrix(sim.fov_affine, sim.fov_matrix),
+                    fov_matrix: Array.isArray(sim.fov_matrix) ? sim.fov_matrix : null,
+                    phantom_matrix: Array.isArray(sim.phantom_matrix) ? sim.phantom_matrix : null,
+                    phantom_oversample: Array.isArray(sim.phantom_oversample) ? sim.phantom_oversample : null,
+                    recon_matrix: simMeta?.recon_matrix || null,
+                    simMeta,
+                };
+            } catch (e) {
+                console.warn('previewSharedImport: capsule decode failed', e);
+                return null;
+            }
+        }
+        const p = new URLSearchParams(window.location.search);
+        const sFile = (p.get('s_file') || '').trim();
+        const sFunc = (p.get('s_func') || '').trim();
+        const sCat = (p.get('s_category') || '').trim();
+        const phantom = (p.get('phantom') || '').trim();
+        const parseArr = (k) => {
+            const v = p.get(k);
+            if (!v) return null;
+            try { const a = JSON.parse(v); return Array.isArray(a) ? a.map(Number) : null; } catch (_) { return null; }
+        };
+        const fov_affine = parseArr('fov_affine');
+        const fov_matrix = parseArr('fov_matrix');
+        const phantom_matrix = parseArr('phantom_matrix');
+        const phantom_oversample = parseArr('phantom_oversample');
+        const recon_matrix = parseArr('recon_matrix');
+        const hasShared = (sCat && sFile && sFunc) || !!phantom || !!fov_affine;
+        if (!hasShared) return null;
+        const simMeta = {};
+        if (phantom) simMeta.phantom = phantom;
+        if (fov_affine) simMeta.fov_affine = fov_affine;
+        if (fov_matrix) simMeta.fov_matrix = fov_matrix;
+        if (phantom_matrix) simMeta.phantom_matrix = phantom_matrix;
+        if (phantom_oversample) simMeta.phantom_oversample = phantom_oversample;
+        if (recon_matrix) simMeta.recon_matrix = recon_matrix;
+        return {
+            source: 'url',
+            protocolName: sFile || '',
+            sequenceName: sFunc || '',
+            phantom: phantom || null,
+            backend: null,
+            fovMm: this._fovMmFromAffineMatrix(fov_affine, fov_matrix),
+            fov_matrix,
+            phantom_matrix,
+            phantom_oversample,
+            recon_matrix,
+            simMeta: Object.keys(simMeta).length ? simMeta : null,
+        };
+    }
+
+    /**
+     * Startup confirmation modal summarizing a shared link. Resolves `'shared'` (accept) or
+     * `'default'` (ignore shared, load defaults). Backdrop / Escape resolve `'default'`.
+     * @param {object} summary from `previewSharedImport()`
+     * @returns {Promise<'shared'|'default'>}
+     */
+    showSharedImportDialog(summary) {
+        return new Promise((resolve) => {
+            let settled = false;
+            const finish = (choice) => {
+                if (settled) return;
+                settled = true;
+                document.removeEventListener('keydown', onKey);
+                overlay.remove();
+                resolve(choice);
+            };
+
+            const fmtArr = (a) => (Array.isArray(a) ? `[${a.map((v) => Math.round(Number(v) * 100) / 100).join(', ')}]` : '—');
+            const rows = [];
+            if (summary.protocolName) rows.push(['Protocol', summary.protocolName]);
+            if (summary.sequenceName) rows.push(['Sequence', summary.sequenceName]);
+            if (summary.phantom) rows.push(['Phantom', summary.phantom]);
+            if (summary.fovMm) {
+                const size = summary.fovMm.map((v) => Math.round(v)).join(' × ');
+                const mtx = Array.isArray(summary.fov_matrix) ? `, matrix ${summary.fov_matrix.join(' × ')}` : '';
+                rows.push(['FOV', `${size} mm${mtx}`]);
+            } else if (summary.fov_matrix) {
+                rows.push(['FOV matrix', fmtArr(summary.fov_matrix)]);
+            }
+            if (summary.phantom_matrix) {
+                let s = fmtArr(summary.phantom_matrix);
+                if (summary.phantom_oversample) s += ` × oversample ${fmtArr(summary.phantom_oversample)}`;
+                rows.push(['Phantom matrix', s]);
+            }
+            if (summary.recon_matrix) rows.push(['Recon matrix', fmtArr(summary.recon_matrix)]);
+            if (summary.backend) rows.push(['Backend', formatSimBackendLabel(summary.backend)]);
+
+            const overlay = document.createElement('div');
+            overlay.style.cssText = 'position:fixed;top:0;left:0;width:100%;height:100%;background:rgba(0,0,0,0.7);z-index:10002;display:flex;align-items:center;justify-content:center;';
+
+            const dialog = document.createElement('div');
+            dialog.style.cssText = 'background:var(--bg,#1e1e1e);border:1px solid var(--border,#333);border-radius:8px;padding:1.5rem;min-width:360px;max-width:560px;max-height:80vh;overflow:auto;display:flex;flex-direction:column;box-shadow:0 4px 20px rgba(0,0,0,0.5);';
+
+            const title = document.createElement('h3');
+            title.textContent = 'Open shared link?';
+            title.style.cssText = 'margin:0 0 0.5rem 0;color:var(--accent,#4a9eff);';
+
+            const subtitle = document.createElement('div');
+            subtitle.textContent = summary.source === 'capsule'
+                ? 'A shared protocol capsule was detected. Load it, or start with the default?'
+                : 'A shared link was detected. Load it, or start with the default?';
+            subtitle.style.cssText = 'color:var(--text,#ddd);font-size:0.85rem;margin-bottom:1rem;opacity:0.85;';
+
+            const table = document.createElement('div');
+            table.style.cssText = 'display:grid;grid-template-columns:auto 1fr;gap:0.35rem 0.9rem;margin-bottom:1.25rem;color:var(--text,#ddd);font-size:0.88rem;';
+            for (const [label, value] of rows) {
+                const k = document.createElement('div');
+                k.textContent = label;
+                k.style.cssText = 'opacity:0.7;white-space:nowrap;';
+                const v = document.createElement('div');
+                v.textContent = value;
+                v.style.cssText = 'word-break:break-word;';
+                table.appendChild(k);
+                table.appendChild(v);
+            }
+            if (!rows.length) {
+                const none = document.createElement('div');
+                none.textContent = 'No details available.';
+                none.style.cssText = 'color:var(--text,#ddd);opacity:0.7;grid-column:1 / -1;';
+                table.appendChild(none);
+            }
+
+            const buttonRow = document.createElement('div');
+            buttonRow.style.cssText = 'display:flex;justify-content:flex-end;gap:0.5rem;';
+
+            const defaultBtn = document.createElement('button');
+            defaultBtn.type = 'button';
+            defaultBtn.textContent = 'Load default';
+            defaultBtn.className = 'btn btn-secondary btn-md';
+            defaultBtn.onclick = () => finish('default');
+
+            const sharedBtn = document.createElement('button');
+            sharedBtn.type = 'button';
+            sharedBtn.textContent = 'Load shared';
+            sharedBtn.className = 'btn btn-secondary btn-md seq-btn-primary';
+            sharedBtn.onclick = () => finish('shared');
+
+            const onKey = (e) => { if (e.key === 'Escape') finish('default'); };
+            document.addEventListener('keydown', onKey);
+            overlay.addEventListener('click', (e) => { if (e.target === overlay) finish('default'); });
+
+            buttonRow.appendChild(defaultBtn);
+            buttonRow.appendChild(sharedBtn);
+            dialog.appendChild(title);
+            dialog.appendChild(subtitle);
+            dialog.appendChild(table);
+            dialog.appendChild(buttonRow);
+            overlay.appendChild(dialog);
+            document.body.appendChild(overlay);
+            sharedBtn.focus();
+        });
+    }
+
     async shareCurrentProtocol() {
         if (!this.selectedSequence) {
             this.showStatus('Select a sequence or protocol before sharing', 'error');
@@ -638,6 +957,15 @@ json.dumps(code)
             if (!protocolPath) {
                 this.showStatus('Could not create protocol capsule for sharing', 'error');
                 return null;
+            }
+            // Embed the current phantom id + FOV + scan-resolution into the capsule's
+            // [simulation]/[recon] metadata so the shared .py reproduces the full state,
+            // even when no scan has been run yet (which would otherwise patch it).
+            try {
+                const sections = this._shareMetaToTomlSections(this.collectSimulationShareMeta());
+                if (sections) await this.patchProtocolTomlSections(protocolPath, sections);
+            } catch (metaErr) {
+                console.warn('shareCurrentProtocol: could not embed simulation meta:', metaErr);
             }
             const code = this.sequences[protocolPath]?.code;
             if (!code) throw new Error(`No protocol code found for ${protocolPath}`);
@@ -765,6 +1093,16 @@ json.dumps(code)
         const changedParams = this.collectChangedSeqParamsForShare();
         for (const [name, value] of Object.entries(changedParams)) {
             url.searchParams.set(`sp_${name}`, this._formatSpParamValue(value));
+        }
+        // Phantom id + FOV + scan-resolution so the light link reproduces the full state.
+        const sim = this.collectSimulationShareMeta();
+        if (sim) {
+            if (sim.phantom) url.searchParams.set('phantom', sim.phantom);
+            if (sim.fov_affine) url.searchParams.set('fov_affine', JSON.stringify(sim.fov_affine));
+            if (sim.fov_matrix) url.searchParams.set('fov_matrix', JSON.stringify(sim.fov_matrix));
+            if (sim.phantom_matrix) url.searchParams.set('phantom_matrix', JSON.stringify(sim.phantom_matrix));
+            if (sim.phantom_oversample) url.searchParams.set('phantom_oversample', JSON.stringify(sim.phantom_oversample));
+            if (sim.recon_matrix) url.searchParams.set('recon_matrix', JSON.stringify(sim.recon_matrix));
         }
         return url.toString();
     }
@@ -1841,11 +2179,40 @@ result
     /**
      * After loadSequences: apply ?init_prot= or default built-in GRE; fallback to first item.
      */
+    /**
+     * Resolve the shared simulation-state bundle to apply after the initial selection:
+     * URL-provided meta wins; otherwise the imported capsule protocol's own `[simulation]`
+     * block (only when THAT protocol is the one selected, never a default's block).
+     */
+    _resolveInitialSharedSimMeta(fileName) {
+        if (this._skipSharedImport) return null;
+        if (this._pendingSharedSimMeta) return this._pendingSharedSimMeta;
+        if (this._sharedProtocolSelection?.fileName && fileName === this._sharedProtocolSelection.fileName) {
+            const anyfield = this.sequences[fileName]?.source?.anyfield;
+            if (anyfield && (anyfield.simulation || anyfield.recon)) {
+                return this.normalizeSharedSimMeta(anyfield.simulation, anyfield.recon);
+            }
+        }
+        return null;
+    }
+
+    /** Apply shared sim state (phantom/backend/scan-res/FOV) after the initial sequence is selected. */
+    async _applyInitialSharedSimMeta(fileName) {
+        const sim = this._resolveInitialSharedSimMeta(fileName);
+        if (!sim) return;
+        try {
+            await this.applySimulationStateFromMeta(sim, { loadPhantom: this._sharedPhantomAlreadyLoaded !== true });
+        } catch (e) {
+            console.warn('[share] applySimulationStateFromMeta failed:', e);
+        }
+    }
+
     async selectInitialSequence() {
         if (this._sharedProtocolSelection?.fileName && this._sharedProtocolSelection?.functionName) {
             const { fileName, functionName } = this._sharedProtocolSelection;
             if (await this.selectSequenceByFileAndFunction(fileName, functionName)) {
                 console.log('[share] selected imported protocol', this._sharedProtocolSelection);
+                await this._applyInitialSharedSimMeta(fileName);
                 return;
             }
         }
@@ -1880,6 +2247,7 @@ result
             console.log('[init_prot] OK selected', token);
             this.applyInitialSeqParams();
             await this.applyInitialSeqUrl();
+            await this._applyInitialSharedSimMeta(fileName);
             return;
         }
         console.warn('[init_prot] primary selection failed → fallback', { token, fileName, wantedFunc: parsed.functionName });
@@ -1895,6 +2263,7 @@ result
         if (fbKey && fbFn && await this.selectSequenceByFileAndFunction(fbKey, fbFn)) {
             if (explicitInitFailed) console.log('[init_prot] fell back to default', SequenceExplorer.DEFAULT_INIT_PROT);
             await this.applyInitialSeqUrl();
+            await this._applyInitialSharedSimMeta(fbKey);
             return;
         }
         if (!fbKey || !fbFn) {
@@ -5043,12 +5412,20 @@ parse_metadata_toml(_toml_payload)
                 lines.push(`  backend: ${formatSimBackendLabel(simulation.backend)}`);
             }
             if (simulation.phantom != null) lines.push(`  phantom: ${simulation.phantom}`);
-            if (Array.isArray(simulation.phantom_matrix)) {
-                lines.push(`  phantom_matrix: [${simulation.phantom_matrix.join(', ')}]`);
+            const base = Array.isArray(simulation.phantom_matrix) ? simulation.phantom_matrix : null;
+            const os = Array.isArray(simulation.phantom_oversample) ? simulation.phantom_oversample : null;
+            if (base) {
+                lines.push(`  phantom_matrix: [${base.join(', ')}]`);
             }
-            if (Array.isArray(simulation.phantom_fov_affine)) {
-                const aff = simulation.phantom_fov_affine.map((v) => Number(v).toFixed(4)).join(', ');
-                lines.push(`  phantom_fov_affine: [${aff}]`);
+            if (os) {
+                lines.push(`  phantom_oversample: [${os.join(', ')}]`);
+                if (base && base.length >= 3 && os.length >= 3) {
+                    const eff = base.map((d, i) => Math.max(1, Math.round(Number(d) * Number(os[i]))));
+                    lines.push(`  phantom_matrix (effective): [${eff.join(', ')}]`);
+                }
+            }
+            if (Array.isArray(simulation.fov_matrix)) {
+                lines.push(`  fov_matrix: [${simulation.fov_matrix.join(', ')}]`);
             }
         }
         if (recon && Object.keys(recon).length) {

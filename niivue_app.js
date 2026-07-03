@@ -2379,11 +2379,6 @@ os.makedirs('/phantom/averaged', exist_ok=True)
    */
   syncFovFromScanVolume(vol) {
     if (!vol?.name?.startsWith("scan_")) return;
-    const ref = this.getReferenceVolumeInfoForFovSync();
-    if (!ref?.vol || !ref?.dim3 || !ref?.affine) return;
-
-    this.voxelSpacingMm = this.estimateVoxelSpacingMm(ref);
-
     const scanHdr = vol?.hdr ?? vol?.header ?? null;
     const scanAffine = scanHdr?.affine ?? vol?.affine ?? vol?.matRAS ?? null;
     const scanDimRaw = scanHdr?.dims ?? scanHdr?.dim ?? vol?.dims ?? vol?.dim ?? null;
@@ -2393,14 +2388,31 @@ os.makedirs('/phantom/averaged', exist_ok=True)
       else if (scanDimRaw.length === 3) scanDims = scanDimRaw;
     }
     if (!scanAffine || !scanDims) return;
+    this.applyFovFromAffine(scanAffine, scanDims);
+  }
+
+  /**
+   * Set the FOV sliders + mesh from a NIfTI-style affine + matrix dims.
+   * Reusable core of `syncFovFromScanVolume`: also used to restore a shared FOV
+   * (recon-grid `fov_affine` + `fov_matrix`) via the same proven inverse
+   * (`affineToFovParams`). Requires a reference (phantom) volume to be loaded.
+   * @param {number[]|number[][]} affine 4×4 (flat 16 or nested 3×4/4×4) RAS+ affine.
+   * @param {number[]} dims [nx, ny, nz] matrix of the affine's grid.
+   * @returns {boolean} true when the sliders were updated.
+   */
+  applyFovFromAffine(affine, dims) {
+    const ref = this.getReferenceVolumeInfoForFovSync();
+    if (!ref?.vol || !ref?.dim3 || !ref?.affine) return false;
+    if (!affine || !Array.isArray(dims) || dims.length < 3) return false;
+
+    this.voxelSpacingMm = this.estimateVoxelSpacingMm(ref);
+
     // Niivue / NIfTI often use nz=0 for "2D" volumes; FOV box math needs a true 3D extent (singleton z=1).
-    {
-      const nx = Math.max(1, Math.floor(Number(scanDims[0])) || 1);
-      const ny = Math.max(1, Math.floor(Number(scanDims[1])) || 1);
-      let nz = Math.floor(Number(scanDims[2]));
-      if (!Number.isFinite(nz) || nz < 1) nz = 1;
-      scanDims = [nx, ny, nz];
-    }
+    const nx = Math.max(1, Math.floor(Number(dims[0])) || 1);
+    const ny = Math.max(1, Math.floor(Number(dims[1])) || 1);
+    let nz = Math.floor(Number(dims[2]));
+    if (!Number.isFinite(nz) || nz < 1) nz = 1;
+    const gridDims = [nx, ny, nz];
 
     const flat = (a) =>
       Array.isArray(a) && a.length < 16 && Array.isArray(a[0])
@@ -2408,10 +2420,10 @@ os.makedirs('/phantom/averaged', exist_ok=True)
             a[0][0], a[0][1], a[0][2], a[0][3],
             a[1][0], a[1][1], a[1][2], a[1][3],
             a[2][0], a[2][1], a[2][2], a[2][3],
-            a[3][0], a[3][1], a[3][2], a[3][3],
+            (a[3]?.[0]) ?? 0, (a[3]?.[1]) ?? 0, (a[3]?.[2]) ?? 0, (a[3]?.[3]) ?? 1,
           ]
         : a;
-    const params = this.affineToFovParams(flat(scanAffine), scanDims, ref.affine, ref.dim3, this.voxelSpacingMm);
+    const params = this.affineToFovParams(flat(affine), gridDims, ref.affine, ref.dim3, this.voxelSpacingMm);
     if (params && this.fovX && this.fovOffX && this.fovRotX) {
       this.fovX.value = String(Math.round(params.sizeMm[0]));
       this.fovY.value = String(Math.round(params.sizeMm[1]));
@@ -2424,6 +2436,41 @@ os.makedirs('/phantom/averaged', exist_ok=True)
       this.fovRotZ.value = String(Math.round(params.rotationDeg[2]));
       if (this.showFov) this.showFov.checked = true;
       this.rebuildFovLive(true);
+      return true;
+    }
+    return false;
+  }
+
+  /** Row-major flat 16 (4×4) from a 3×4 affine (`getResliceToFromFovSnapshot().affine`). */
+  _flattenAffine3x4ToFlat16(affine3x4) {
+    if (!Array.isArray(affine3x4) || affine3x4.length !== 3) {
+      throw new Error('_flattenAffine3x4ToFlat16: expected 3×4 affine');
+    }
+    return [
+      ...affine3x4[0],
+      ...affine3x4[1],
+      ...affine3x4[2],
+      0, 0, 0, 1,
+    ];
+  }
+
+  /**
+   * UI-faithful, NON-oversampled FOV for sharing: the recon-grid affine + matrix.
+   * `fov_affine` (flat 16) + `fov_matrix` ([nx,ny,nz]) round-trip through
+   * `applyFovFromAffine` -> `affineToFovParams` to restore the FOV box.
+   * @returns {{ fov_affine: number[], fov_matrix: number[] }|null}
+   */
+  getFovAffineShareMeta() {
+    try {
+      const snapshot = this.captureFovSnapshot();
+      const reconMatrix = this.getReconMatrixDims();
+      const reslice = this.getResliceToFromFovSnapshot(snapshot, reconMatrix);
+      return {
+        fov_affine: this._flattenAffine3x4ToFlat16(reslice.affine),
+        fov_matrix: reslice.resolution,
+      };
+    } catch (_) {
+      return null;
     }
   }
 
@@ -2637,6 +2684,44 @@ os.makedirs('/phantom/averaged', exist_ok=True)
     const f = factors ?? this.getPhantomOversampleFactors();
     const base = this.getPhantomMatrixDims();
     return base.map((d, i) => Math.max(1, Math.round(d * f[i])));
+  }
+
+  /**
+   * UI-faithful scan-resolution bundle for sharing (mirrors the sliders, not the sequence):
+   * `phantom_matrix` is the BASE phantom matrix, `phantom_oversample` the factors, and
+   * `recon_matrix` the recon grid. The effective/oversampled grid is derived when needed.
+   * @returns {{ phantom_matrix: number[], phantom_oversample: number[], recon_matrix: number[] }}
+   */
+  getScanResolutionShareMeta() {
+    return {
+      phantom_matrix: this.getPhantomMatrixDims(),
+      phantom_oversample: this.getPhantomOversampleFactors(),
+      recon_matrix: this.getReconMatrixDims(),
+    };
+  }
+
+  /**
+   * Apply a shared scan-resolution bundle to the sliders (base phantom matrix, oversample,
+   * recon matrix). Missing fields are ignored. Updates labels + FOV mask via the usual sync.
+   */
+  applyScanResolutionSettings(meta) {
+    if (!meta || typeof meta !== 'object') return;
+    const setXYZ = (els, vals) => {
+      if (!Array.isArray(vals) || vals.length < 3) return;
+      els.forEach((el, i) => {
+        if (el) el.value = String(Math.max(1, Math.round(Number(vals[i]) || 1)));
+      });
+    };
+    setXYZ([this.phantomX, this.phantomY, this.phantomZ], meta.phantom_matrix);
+    setXYZ([this.maskX, this.maskY, this.maskZ], meta.recon_matrix);
+    if (meta.phantom_oversample && this.phantomOversampleInput) {
+      const f = this.parsePhantomOversampleFactors(
+        Array.isArray(meta.phantom_oversample) ? JSON.stringify(meta.phantom_oversample) : meta.phantom_oversample,
+      );
+      this.phantomOversampleInput.value = JSON.stringify(f);
+    }
+    this.syncFovLabels();
+    this.rebuildFovLive(true);
   }
 
   /** Scale frozen FOV mm box for sim phantom ref; recon keeps the UI snapshot. */

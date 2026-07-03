@@ -262,7 +262,7 @@
     <div class="lab-shell">
         <header>
             <div class="header-content">
-                <div class="header-title">Any-Field <span class="header-subtitle">Scanner</span><span class="app-version" aria-label="Version v2.2.1">v2.2.1</span></div>
+                <div class="header-title">Any-Field <span class="header-subtitle">Scanner</span><span class="app-version" aria-label="Version v2.2.2">v2.2.2</span></div>
                 <div class="header-actions">
                     <div class="header-view-modes" role="group" aria-label="Main view mode">
                         <button type="button" id="view-mode-planning-btn" class="credits-btn view-mode-btn" title="Planning view (main + preview)" aria-label="Planning view, main and preview">
@@ -725,10 +725,49 @@ await micropip.install('pypulseq==1.4.2.post2', deps=False)
                 viewManager.setMode('planning');
                 viewManager.bindViewModeButtons();
 
+                // Shared-link gating: if a capsule/URL share is present, confirm before applying it.
+                // Resolves the user's choice; must complete before loadSourcesFromConfig (import) runs.
+                const sharedGateReady = (async () => {
+                    let preview = null;
+                    try {
+                        preview = await explorer.previewSharedImport();
+                    } catch (e) {
+                        console.warn('previewSharedImport failed:', e);
+                    }
+                    if (!preview) return { accepted: false, preview: null };
+                    let choice = 'default';
+                    try {
+                        choice = await explorer.showSharedImportDialog(preview);
+                    } catch (e) {
+                        console.warn('showSharedImportDialog failed:', e);
+                    }
+                    if (choice === 'shared') {
+                        // URL-sourced meta is applied by selectInitialSequence via _pendingSharedSimMeta;
+                        // capsule meta is read from the imported protocol's own [simulation] block.
+                        if (preview.source === 'url' && preview.simMeta) {
+                            explorer._pendingSharedSimMeta = preview.simMeta;
+                        }
+                        return { accepted: true, preview };
+                    }
+                    // Load default: ignore shared import AND the shared sequence/params in the URL.
+                    explorer._skipSharedImport = true;
+                    explorer.config.initialProt = undefined;
+                    explorer.config.initialSeqParams = null;
+                    return { accepted: false, preview };
+                })();
+
                 const mainViewerEl = document.getElementById('nv-viewer-container');
                 if (mainViewerEl) mainViewerEl.classList.add('viewer-waiting-demo');
-                const phantomReady = nvModule.loadDefaultCachePhantom().then(() => {
-                    if (mainViewerEl) mainViewerEl.classList.remove('viewer-waiting-demo');
+                // Wait for the gate so we don't load the default phantom then replace it with the shared one.
+                const phantomReady = sharedGateReady.then(({ accepted, preview }) => {
+                    if (accepted && preview?.phantom) {
+                        // The shared phantom is loaded by selectInitialSequence (applySimulationStateFromMeta).
+                        if (mainViewerEl) mainViewerEl.classList.remove('viewer-waiting-demo');
+                        return;
+                    }
+                    return nvModule.loadDefaultCachePhantom().finally(() => {
+                        if (mainViewerEl) mainViewerEl.classList.remove('viewer-waiting-demo');
+                    });
                 }).catch((err) => {
                     console.error('Default phantom load failed:', err);
                     if (mainViewerEl) mainViewerEl.classList.remove('viewer-waiting-demo');
@@ -861,6 +900,9 @@ await micropip.install('pypulseq==1.4.2.post2', deps=False)
                     nvModule.pyodide = pyodide;
                     explorer.config.pyodide = pyodide;
                     const configCode = await configPromise;
+                    // Ensure the shared-link decision (skip/import + pending meta) is settled before
+                    // loadSourcesFromConfig triggers importSharedProtocolFromLocation / selectInitialSequence.
+                    await sharedGateReady;
                     await Promise.all([
                         nvModule.initPyodide(),
                         explorer.loadSourcesFromConfig(configCode),

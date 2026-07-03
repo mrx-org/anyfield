@@ -104,8 +104,11 @@ _anyfield_json = r'''
   "seq_func": "anyseq.scripts.gre_seq:seq_gre",
   "simulation": {
     "backend": "mr0sim",
+    "phantom": "brainweb-20-v2/subj04-3T-1mm-tra",
+    "fov_affine": [2.5, 0, 0, -80, 0, 2.5, 0, -80, 0, 0, 2.5, -80, 0, 0, 0, 1],
+    "fov_matrix": [64, 64, 1],
     "phantom_matrix": [64, 64, 1],
-    "phantom_fov_affine": [2.5, 0, 0, -80, 0, 2.5, 0, -80, 0, 0, 2.5, -80, 0, 0, 0, 1]
+    "phantom_oversample": [2, 2, 1]
   },
   "recon": {
     "matrix": [8, 8, 1],
@@ -116,7 +119,13 @@ _anyfield_json = r'''
 # --- AnyField metadata end ---
 ```
 
-JSON formatting: **arrays of primitives** (e.g. `phantom_fov_affine`, `phantom_matrix`, `recon.matrix`) are written **on one line**; nested objects remain indented (`formatAnyfieldJson` / `_stringifyAnyfieldJson`).
+`[simulation]` block is **UI-faithful and provenance-only** (the sim consumes the affine from the live submit payload, not this block). All values mirror the viewer sliders:
+- `phantom`: bifti cache id (`collection/name`).
+- `fov_affine` (flat row-major 4×4) + `fov_matrix` (`[nx,ny,nz]`, the recon grid): the **NON-oversampled** FOV box; restored on shared-link load via `applyFovFromAffine` → `affineToFovParams`.
+- `phantom_matrix`: the **BASE** phantom matrix (matches the sliders); `phantom_oversample`: the oversample factors. The effective/oversampled grid is derived (`phantom_matrix × phantom_oversample`) only when needed (e.g. tooltip).
+- Removed vs. legacy: `phantom_fov_affine` (oversampled) and the effective/oversampled `phantom_matrix`. Old files still carry `phantom_fov_affine`; the tooltip no longer renders it, and `phantom_matrix` is treated as the base only when `phantom_oversample` is present.
+
+JSON formatting: **arrays of primitives** (e.g. `fov_affine`, `fov_matrix`, `phantom_matrix`, `phantom_oversample`, `recon.matrix`) are written **on one line**; nested objects remain indented (`formatAnyfieldJson` / `_stringifyAnyfieldJson`).
 
 Protocols always call a base sequence via `_anyfield_base_callable`. Package-backed protocols import a versioned package dependency; non-package protocols inline the base sequence source (wrappers stripped before embed).
 

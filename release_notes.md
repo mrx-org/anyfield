@@ -1,5 +1,12 @@
 # Release notes
 
+## v2.2.2
+
+- **Shareable phantom + FOV state** — capsule and light-URL shares now reproduce the full planning state: the bifti phantom (by cache id), the sim backend, the FOV box (non-oversampled recon-grid `fov_affine` + `fov_matrix`, restored via the existing affine→slider inverse), and the scan-resolution sliders (base `phantom_matrix`, `phantom_oversample`, `recon_matrix`). Only the phantom id is embedded, never the phantom JSON.
+- **Startup confirmation dialog** — when opening a shared link (capsule or URL), a popup summarizes what was received (protocol, sequence, phantom, FOV size/matrix, phantom matrix × oversample, recon matrix, backend) and lets you **Load shared** or **Load default**. Declining fully bypasses the shared import and URL params.
+- **UI-faithful `[simulation]` metadata** — the protocol `[simulation]` block is now non-oversampled and mirrors the sliders: `fov_affine`/`fov_matrix`, base `phantom_matrix`, and `phantom_oversample`. The legacy oversampled `phantom_fov_affine` / effective `phantom_matrix` keys are removed; the protocol tooltip and SPEC were updated accordingly (effective grid is derived as base × oversample when needed).
+- **FOV planning constraint documented** — FOV planning currently requires **RAS+, axis-aligned, isotropic** phantoms; anisotropic/oblique/non-canonical NIfTIs (e.g. some breast phantoms) can make the FOV box mismatch. All loaded biftis should be resliced to RAS+ isotropic (noted in `SPEC_niivue.md`).
+
 ## v2.2.1
 
 - **Sequence plot time calipers** — the ChartGPU waveform stack now has two draggable vertical measurement lines (solid t₁, dashed t₂) with a `t₁ | t₂ | Δt` readout above the plots. Dragging the solid line moves the pair (preserving Δt); dragging the dashed line moves only t₂. Click the readout to open a dialog and type exact `t₁` / `Δt` values. All values show 6 significant digits.

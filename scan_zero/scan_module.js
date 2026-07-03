@@ -1309,23 +1309,42 @@ export class ScanModule {
         ];
     }
 
-    async _patchProtocolSimulationToml(job, { phantomFovAffine, phantomMatrix, reconMatrix, phantomName }) {
+    /**
+     * Patch the protocol `.py` `[simulation]` / `[recon]` metadata with a UI-faithful,
+     * NON-oversampled snapshot: `fov_affine` + `fov_matrix` (recon grid), the BASE
+     * `phantom_matrix` and `phantom_oversample` (mirroring the sliders). The effective
+     * oversampled grid is derived (base × oversample) only when a tooltip needs it.
+     * This block is metadata/provenance only (the sim consumes the live submit payload).
+     */
+    async _patchProtocolSimulationToml(job, { fovAffine, fovMatrix, phantomMatrix, phantomOversample, reconMatrix, phantomName }) {
         if (!job?.scanNumber || !window.seqExplorer) return;
         const protocolPath = window.seqExplorer.findProtocolPathForScanNumber(job.scanNumber);
         if (!protocolPath) return;
         const sim = job.simulation || {};
+        const simulation = {
+            backend: sim.backendId || 'mr0sim',
+            phantom: phantomName || 'unknown',
+        };
+        if (fovAffine) simulation.fov_affine = fovAffine;
+        if (fovMatrix) simulation.fov_matrix = fovMatrix;
+        if (phantomMatrix) simulation.phantom_matrix = phantomMatrix;
+        if (phantomOversample) simulation.phantom_oversample = phantomOversample;
         await window.seqExplorer.patchProtocolTomlSections(protocolPath, {
-            simulation: {
-                backend: sim.backendId || 'mr0sim',
-                phantom: phantomName || 'unknown',
-                phantom_fov_affine: phantomFovAffine,
-                phantom_matrix: phantomMatrix,
-            },
+            simulation,
             recon: {
                 matrix: reconMatrix,
                 method: RECON_METHOD,
             },
         });
+    }
+
+    /** Scan-ready bifti cache id of the active phantom group (or null). Public wrapper. */
+    getActiveBiftiId() {
+        const nvMod = window.nvModule;
+        const group = typeof nvMod?.getActivePhantomGroup === 'function'
+            ? nvMod.getActivePhantomGroup()
+            : null;
+        return this._resolveBiftiId(group);
     }
 
     _encodeSegmentedPhantomForToolapi(plain) {
@@ -1932,9 +1951,12 @@ for i in range(ktraj.shape[0]):
             job.phantomOversample = phantomOversample;
             const phantomFovSnapshot = nvMod.applyPhantomOversampleToSnapshot(job.fovSnapshot, phantomOversample);
             const phantomMatrix = nvMod.getSimPhantomMatrixDims(phantomOversample);
+            const phantomMatrixBase = nvMod.getPhantomMatrixDims();
             const reconMatrix = nvMod.getReconMatrixDims();
             const phantomReslice = nvMod.getResliceToFromFovSnapshot(phantomFovSnapshot, phantomMatrix);
-            const phantomFovAffineFlat = this._flattenFovAffineForToml(phantomReslice.affine);
+            // UI-faithful (non-oversampled) recon-grid affine for the shared/provenance metadata.
+            const fovReslice = nvMod.getResliceToFromFovSnapshot(job.fovSnapshot, reconMatrix);
+            const fovAffineFlat = this._flattenFovAffineForToml(fovReslice.affine);
 
             // Freeze everything the background reaper needs for phases C–F onto the job.
             job.reconMatrix = reconMatrix;
@@ -1963,8 +1985,10 @@ for i in range(ktraj.shape[0]):
             }
 
             void this._patchProtocolSimulationToml(job, {
-                phantomFovAffine: phantomFovAffineFlat,
-                phantomMatrix,
+                fovAffine: fovAffineFlat,
+                fovMatrix: reconMatrix,
+                phantomMatrix: phantomMatrixBase,
+                phantomOversample,
                 reconMatrix,
                 phantomName: biftiId,
             }).catch((tomlErr) => {
@@ -2238,20 +2262,24 @@ _recon.run_sim_recon(
             job.phantomOversample = phantomOversample;
             const phantomFovSnapshot = nvMod.applyPhantomOversampleToSnapshot(job.fovSnapshot, phantomOversample);
             const phantomMatrix = nvMod.getSimPhantomMatrixDims(phantomOversample);
+            const phantomMatrixBase = nvMod.getPhantomMatrixDims();
             const reconMatrix = nvMod.getReconMatrixDims();
             const phantomRef = nvMod.generateFovMaskNiftiFromSnapshot(
                 phantomFovSnapshot,
                 phantomMatrix,
             );
             const reconRef = nvMod.generateFovMaskNiftiFromSnapshot(job.fovSnapshot, reconMatrix);
-            const phantomReslice = nvMod.getResliceToFromFovSnapshot(phantomFovSnapshot, phantomMatrix);
+            // UI-faithful (non-oversampled) recon-grid affine for the shared/provenance metadata.
+            const fovReslice = nvMod.getResliceToFromFovSnapshot(job.fovSnapshot, reconMatrix);
 
             try {
                 await this._patchProtocolSimulationToml(job, {
-                    phantomFovAffine: this._flattenFovAffineForToml(phantomReslice.affine),
-                    phantomMatrix,
+                    fovAffine: this._flattenFovAffineForToml(fovReslice.affine),
+                    fovMatrix: reconMatrix,
+                    phantomMatrix: phantomMatrixBase,
+                    phantomOversample,
                     reconMatrix,
-                    phantomName: activeGroup.jsonName || activeGroup.jsonFileName || 'unknown',
+                    phantomName: this.getActiveBiftiId() || activeGroup.jsonName || activeGroup.jsonFileName || 'unknown',
                 });
             } catch (tomlErr) {
                 console.warn(`[${simLogTag}] protocol TOML simulation/recon patch failed:`, tomlErr);
