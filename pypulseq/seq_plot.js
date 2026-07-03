@@ -2285,8 +2285,8 @@ export async function renderSeqChartGpuAfterPlot(host, plotRoot, pyodide, plotCo
         box.querySelector('.seq-cal-cancel').addEventListener('click', close);
     };
     if (caliperReadoutEl) {
-        caliperReadoutEl.title = 'Double-click to set t\u2081 and \u0394t';
-        caliperReadoutEl.addEventListener('dblclick', openCaliperDialog);
+        caliperReadoutEl.title = 'Click to set t\u2081 and \u0394t';
+        caliperReadoutEl.addEventListener('click', openCaliperDialog);
     }
 
     /**
