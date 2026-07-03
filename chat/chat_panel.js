@@ -62,6 +62,23 @@ function sequenceShortLabel(fileName, functionName) {
     return `${stem}:${functionName}`;
 }
 
+/** Infer B0 (T) from phantom name tokens like 3T, 1.5T, 1-5T, 0.5T, 7T. */
+function inferB0FromPhantomName(name) {
+    const s = String(name || '');
+    if (!s) return null;
+
+    const decimal = s.match(/(\d+\.\d+)\s*-?\s*T\b/i);
+    if (decimal) return parseFloat(decimal[1]);
+
+    const hyphenHalf = s.match(/(\d+)-5T\b/i);
+    if (hyphenHalf) return parseFloat(hyphenHalf[1]) + 0.5;
+
+    const integer = s.match(/(?:^|[^.\d])(\d+)\s*-?\s*T\b/i);
+    if (integer) return parseFloat(integer[1]);
+
+    return null;
+}
+
 function buildPhantomContext() {
     const nv = window.nvModule;
     const group = nv?.getActivePhantomGroup?.();
@@ -80,8 +97,7 @@ function buildPhantomContext() {
             /* ignore parse errors */
         }
     }
-    if (B0_T == null && /3T|3-t|3\.0T/i.test(String(name))) B0_T = 3;
-    if (B0_T == null && /1\.5T|1-5T/i.test(String(name))) B0_T = 1.5;
+    if (B0_T == null) B0_T = inferB0FromPhantomName(name);
 
     return {
         name,
