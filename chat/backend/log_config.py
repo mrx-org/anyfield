@@ -11,9 +11,13 @@ _CONFIGURED = False
 LOG_DIR = Path(__file__).resolve().parent / "logs"
 
 
+def get_logger() -> logging.Logger:
+    return logging.getLogger("anyfield.chat")
+
+
 def setup_logging() -> logging.Logger:
     global _CONFIGURED
-    logger = logging.getLogger("anyfield.chat")
+    logger = get_logger()
     if _CONFIGURED:
         return logger
 
@@ -32,11 +36,18 @@ def setup_logging() -> logging.Logger:
 
     log_file = os.getenv("LOG_FILE", str(LOG_DIR / "chat.log"))
     log_path = Path(log_file)
+    if not log_path.is_absolute():
+        log_path = (Path.cwd() / log_path).resolve()
+    else:
+        log_path = log_path.resolve()
+    max_bytes = int(os.getenv("LOG_MAX_BYTES", str(2 * 1024 * 1024)))
+    backup_count = int(os.getenv("LOG_BACKUP_COUNT", "3"))
+
     log_path.parent.mkdir(parents=True, exist_ok=True)
     file_handler = RotatingFileHandler(
         log_path,
-        maxBytes=int(os.getenv("LOG_MAX_BYTES", str(2 * 1024 * 1024))),
-        backupCount=int(os.getenv("LOG_BACKUP_COUNT", "3")),
+        maxBytes=max_bytes,
+        backupCount=backup_count,
         encoding="utf-8",
     )
     file_handler.setFormatter(fmt)
@@ -44,5 +55,4 @@ def setup_logging() -> logging.Logger:
 
     logger.propagate = False
     _CONFIGURED = True
-    logger.info("chat backend logging ready (file=%s level=%s)", log_path, level_name)
     return logger

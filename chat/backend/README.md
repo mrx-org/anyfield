@@ -37,6 +37,8 @@ Open http://localhost:8000/ → header chat view (message bubble).
 | `CORS_ORIGINS` | `http://localhost:8000,…` | Allowed Anyfield origins |
 | `LOG_LEVEL` | `INFO` | Use `DEBUG` for full LLM I/O |
 | `LOG_FILE` | `logs/chat.log` | Rotating log path |
+| `LOG_MAX_BYTES` | `2097152` | Max log file size before rotation |
+| `LOG_BACKUP_COUNT` | `3` | Rotated log copies to keep |
 
 ## API
 

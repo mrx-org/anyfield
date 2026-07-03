@@ -5,10 +5,10 @@ from typing import Any
 
 from openai import OpenAI
 
-from log_config import setup_logging
+from log_config import get_logger
 from prompts import SYSTEM_PROMPT
 
-log = setup_logging()
+log = get_logger()
 
 _JSON_BLOCK_RE = re.compile(r"```(?:json)?\s*(\{[\s\S]*?\})\s*```", re.IGNORECASE)
 

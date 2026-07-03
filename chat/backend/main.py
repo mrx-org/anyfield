@@ -67,16 +67,18 @@ def health() -> dict[str, str]:
 @app.post("/chat", response_model=ChatResponse)
 def chat(req: ChatRequest) -> ChatResponse:
     ctx = req.context.model_dump()
+    turns = len(req.messages)
+    if turns == 1:
+        log.debug("chat request context:\n%s", json.dumps(ctx, indent=2, ensure_ascii=False))
     log.info(
         "POST /chat turns=%d pyodide_ready=%s selected=%s catalog=%d state_changed=%s",
-        len(req.messages),
+        turns,
         req.context.pyodide_ready,
         (req.context.selected or {}).get("function"),
         len(req.context.sequence_catalog),
         req.context.state_changed,
     )
-    log.info("chat request messages:\n%s", json.dumps([m.model_dump() for m in req.messages], indent=2, ensure_ascii=False))
-    log.debug("chat request context:\n%s", json.dumps(ctx, indent=2, ensure_ascii=False))
+    log.info("last chat request message:\n%s", json.dumps([req.messages[-1].model_dump()], indent=2, ensure_ascii=False))
 
     try:
         result = chat_completion(
