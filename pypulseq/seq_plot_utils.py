@@ -279,7 +279,7 @@ def build_chartgpu_payload(data, is_dark: bool):
     phase_marker = '#ffff00' if is_dark else '#000000'
     # mpl scatter ADC: c='r'
     adc_red = '#ff0000'
-    lw = 0.6
+    lw = 1.1
 
     x0, x1 = data['disp_range']
     common_x = {'min': x0, 'max': x1}

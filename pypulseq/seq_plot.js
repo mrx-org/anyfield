@@ -265,13 +265,19 @@ export async function disposeSeqChartGpuHost(host) {
 }
 
 /**
- * Tooltip formatter for waveform panels: shows `t = <x> <unit>` plus each series y value
+ * Tooltip formatter for waveform panels: shows `t = <x> <unit>` and `y = <value>`
  * (6 significant digits, matching the caliper readout). Works with `trigger: 'axis'` (array
  * of params) and `trigger: 'item'` (single param).
+ *
+ * Each panel splits one physical quantity into many line segments (one series per event), so the
+ * axis-trigger tooltip receives one nearest-x point per series. When a crosshair-x getter is
+ * supplied, only the single point closest to the cursor x is shown (the segment under the cursor);
+ * without it, distinct values are de-duplicated as a fallback.
  * @param {string} timeUnit x-axis / series x unit (e.g. 'ms', 's').
+ * @param {(() => number | null)} [getCrosshairX] returns the current crosshair x in domain units.
  * @returns {(params: unknown) => string}
  */
-export function makeSeqTooltipFormatter(timeUnit) {
+export function makeSeqTooltipFormatter(timeUnit, getCrosshairX) {
     const num = (v) => (Number.isFinite(v) ? Number(v).toPrecision(6) : '—');
     const unitSuffix = timeUnit ? ` ${timeUnit}` : '';
     return (params) => {
@@ -280,6 +286,28 @@ export function makeSeqTooltipFormatter(timeUnit) {
         // Skip internal helper series (e.g. the invisible `__seqXExtent__` x-padding line).
         const real = arr.filter((p) => p && !(typeof p.seriesName === 'string' && p.seriesName.startsWith('__')));
         if (!real.length) return '';
+
+        const cx = typeof getCrosshairX === 'function' ? getCrosshairX() : null;
+        if (Number.isFinite(cx)) {
+            // Keep only the series whose nearest-x point is closest to the cursor: with
+            // non-overlapping time segments this is the segment actually under the crosshair.
+            let best = null;
+            for (const p of real) {
+                const px = p.value && p.value[0];
+                if (!Number.isFinite(px)) continue;
+                const d = Math.abs(px - cx);
+                if (!best || d < best.d) best = { p, d };
+            }
+            if (best) {
+                const bx = best.p.value[0];
+                const by = best.p.value[1];
+                const header = Number.isFinite(bx) ? `t = ${num(bx)}${unitSuffix}` : '';
+                const yLine = Number.isFinite(by) ? `y = ${num(by)}` : '';
+                return [header, yLine].filter(Boolean).join('<br>');
+            }
+        }
+
+        // Fallback (no crosshair x): header from first series, de-duplicated y values.
         const x = real[0].value && real[0].value[0];
         const header = Number.isFinite(x) ? `t = ${num(x)}${unitSuffix}` : '';
         const seen = new Set();
@@ -313,14 +341,14 @@ export function buildCaliperAnnotations(caliper) {
             type: 'lineX',
             x: caliper.t1,
             layer: 'aboveSeries',
-            style: { color, lineWidth: 1.5 },
+            style: { color, lineWidth: 2.0 },
         },
         {
             id: '__seqCaliper2__',
             type: 'lineX',
             x: caliper.t2,
             layer: 'aboveSeries',
-            style: { color, lineWidth: 1.5, lineDash: [5, 4] },
+            style: { color, lineWidth: 2.0, lineDash: [5, 4] },
         },
     ];
 }
@@ -1933,8 +1961,12 @@ export async function renderSeqChartGpuAfterPlot(host, plotRoot, pyodide, plotCo
 
     /** Time unit for the caliper readout (matches x-axis / series x units, e.g. 'ms'). */
     const caliperTimeUnit = (payload && payload.timeUnit) || '';
+    // Latest crosshair x (domain units), captured from `crosshairMove`. Panels split a single
+    // quantity into many line segments (one series each), so the axis-trigger tooltip receives one
+    // nearest-x point per series; the formatter uses this to keep only the value under the cursor.
+    const crosshairXRef = { value: null };
     /** Shared tooltip formatter (time + per-series value, 6 sig digits). */
-    const seqTooltipFormatter = makeSeqTooltipFormatter(caliperTimeUnit);
+    const seqTooltipFormatter = makeSeqTooltipFormatter(caliperTimeUnit, () => crosshairXRef.value);
 
     const chartCreatePromises = [];
     /** Full ChartGPU.create options per panel; setOption replaces the whole config (see chartgpu source). */
@@ -2016,6 +2048,19 @@ export async function renderSeqChartGpuAfterPlot(host, plotRoot, pyodide, plotCo
         charts.push(r.value);
     }
     host._seqChartGpuCharts = charts;
+
+    // Track the crosshair x so the tooltip formatter can pick the single segment under the cursor.
+    // Charts share the time axis, so any chart's crosshair x is fine. (Listeners are cleaned up on
+    // chart dispose per ChartGPU's event contract.)
+    for (const c of charts) {
+        try {
+            c.on('crosshairMove', (p) => {
+                crosshairXRef.value = p && Number.isFinite(p.x) ? p.x : null;
+            });
+        } catch (_) {
+            /* ignore */
+        }
+    }
 
     let gpuSessionDead = false;
     let zoomRaf = 0;
