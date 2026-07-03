@@ -808,10 +808,12 @@ json.dumps(code)
         const sFunc = (p.get('s_func') || '').trim();
         const sCat = (p.get('s_category') || '').trim();
         const phantom = (p.get('phantom') || '').trim();
+        // Numeric arrays are shared as bare comma lists (see buildLightShareUrl / _formatShareNumberList).
         const parseArr = (k) => {
             const v = p.get(k);
             if (!v) return null;
-            try { const a = JSON.parse(v); return Array.isArray(a) ? a.map(Number) : null; } catch (_) { return null; }
+            const nums = String(v).split(',').map(Number);
+            return nums.length && nums.every(Number.isFinite) ? nums : null;
         };
         const fov_affine = parseArr('fov_affine');
         const fov_matrix = parseArr('fov_matrix');
@@ -1095,16 +1097,35 @@ json.dumps(code)
             url.searchParams.set(`sp_${name}`, this._formatSpParamValue(value));
         }
         // Phantom id + FOV + scan-resolution so the light link reproduces the full state.
+        // Numeric arrays are emitted as bare comma lists (rounded to 4 decimals) and appended
+        // manually so the commas stay readable (URLSearchParams would percent-encode them).
         const sim = this.collectSimulationShareMeta();
+        const rawArrayParts = [];
         if (sim) {
             if (sim.phantom) url.searchParams.set('phantom', sim.phantom);
-            if (sim.fov_affine) url.searchParams.set('fov_affine', JSON.stringify(sim.fov_affine));
-            if (sim.fov_matrix) url.searchParams.set('fov_matrix', JSON.stringify(sim.fov_matrix));
-            if (sim.phantom_matrix) url.searchParams.set('phantom_matrix', JSON.stringify(sim.phantom_matrix));
-            if (sim.phantom_oversample) url.searchParams.set('phantom_oversample', JSON.stringify(sim.phantom_oversample));
-            if (sim.recon_matrix) url.searchParams.set('recon_matrix', JSON.stringify(sim.recon_matrix));
+            const addArr = (key, arr) => {
+                if (Array.isArray(arr) && arr.length) rawArrayParts.push(`${key}=${this._formatShareNumberList(arr)}`);
+            };
+            addArr('fov_affine', sim.fov_affine);
+            addArr('fov_matrix', sim.fov_matrix);
+            addArr('phantom_matrix', sim.phantom_matrix);
+            addArr('phantom_oversample', sim.phantom_oversample);
+            addArr('recon_matrix', sim.recon_matrix);
         }
-        return url.toString();
+        let result = url.toString();
+        if (rawArrayParts.length) {
+            result += (result.includes('?') ? '&' : '?') + rawArrayParts.join('&');
+        }
+        return result;
+    }
+
+    /** Comma-joined numbers rounded to 4 decimals (integers stay integral) for readable share URLs. */
+    _formatShareNumberList(arr) {
+        return arr.map((n) => {
+            const num = Number(n);
+            if (!Number.isFinite(num)) return '0';
+            return String(Math.round(num * 1e4) / 1e4);
+        }).join(',');
     }
 
     async shareCurrentLightLink() {
