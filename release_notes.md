@@ -1,5 +1,10 @@
 # Release notes
 
+## v2.2.1
+
+- **Sequence plot time calipers** — the ChartGPU waveform stack now has two draggable vertical measurement lines (solid t₁, dashed t₂) with a `t₁ | t₂ | Δt` readout above the plots. Dragging the solid line moves the pair (preserving Δt); dragging the dashed line moves only t₂. Click the readout to open a dialog and type exact `t₁` / `Δt` values. All values show 6 significant digits.
+- **Hover coordinate tooltip** — hovering a waveform panel shows a compact `t = … / y = …` tooltip (6 significant digits) next to the crosshair, displayed only on the panel under the pointer.
+
 ## v2.2.0
 
 - **Phantoms from the cloud cache** — Default phantom and **Add BIfTI** load BIfTIs from the Modal cache (no local folder picker). Pick from the list, or use **Default phantom** for BrainWeb subj04.

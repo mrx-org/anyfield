@@ -858,6 +858,94 @@ body {
     width: 100%;
     min-height: 0;
     height: 100%;
+    /* Match the ChartGPU hover tooltip font to the caliper readout size. */
+    --chartgpu-tooltip-font-size: 0.78rem;
+    --chartgpu-tooltip-padding: 3px 6px;
+}
+
+/* Time-caliper readout (t1 / t2 / dt) above the waveform stack. */
+.seq-caliper-readout {
+    flex: 0 0 auto;
+    padding: 2px 6px;
+    margin-bottom: 0.2rem;
+    font-size: 0.78rem;
+    font-variant-numeric: tabular-nums;
+    color: var(--text-muted, #9aa4bf);
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    text-align: right;
+    pointer-events: auto;
+    user-select: none;
+    cursor: pointer;
+}
+
+/* Modal dialog to set t1 / delta-t by double-clicking the caliper readout. */
+.seq-caliper-dialog-overlay {
+    position: fixed;
+    inset: 0;
+    z-index: 10000;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    background: rgba(0, 0, 0, 0.45);
+}
+
+.seq-caliper-dialog {
+    display: flex;
+    flex-direction: column;
+    gap: 0.6rem;
+    min-width: 220px;
+    padding: 1rem 1.1rem;
+    border-radius: 8px;
+    background: var(--panel-bg, #1c2030);
+    color: var(--text, #e6eaf5);
+    border: 1px solid var(--border, #333a52);
+    box-shadow: 0 8px 30px rgba(0, 0, 0, 0.5);
+    font-size: 0.85rem;
+}
+
+.seq-caliper-dialog-title {
+    font-weight: 600;
+    margin-bottom: 0.1rem;
+}
+
+.seq-caliper-dialog label {
+    display: flex;
+    flex-direction: column;
+    gap: 0.2rem;
+    font-variant-numeric: tabular-nums;
+}
+
+.seq-caliper-dialog input {
+    padding: 4px 6px;
+    border-radius: 4px;
+    border: 1px solid var(--border, #333a52);
+    background: var(--input-bg, #10131f);
+    color: inherit;
+    font: inherit;
+}
+
+.seq-caliper-dialog-btns {
+    display: flex;
+    justify-content: flex-end;
+    gap: 0.5rem;
+    margin-top: 0.3rem;
+}
+
+.seq-caliper-dialog-btns button {
+    padding: 4px 12px;
+    border-radius: 4px;
+    border: 1px solid var(--border, #333a52);
+    background: var(--input-bg, #10131f);
+    color: inherit;
+    cursor: pointer;
+}
+
+.seq-caliper-dialog-btns .seq-cal-ok {
+    background: var(--accent, #4c6ef5);
+    border-color: var(--accent, #4c6ef5);
+    color: #fff;
 }
 
 /* Waveforms + optional k-space column (ChartGPU, checkbox on) */

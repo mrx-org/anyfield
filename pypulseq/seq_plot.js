@@ -260,6 +260,69 @@ export async function disposeSeqChartGpuHost(host) {
     host._seqChartGpuDevice = null;
     host._seqChartGpuAdapter = null;
     host._seqChartZoomPadFraction = 0;
+    host._seqCaliper = null;
+    host._seqCaliperXExtent = null;
+}
+
+/**
+ * Tooltip formatter for waveform panels: shows `t = <x> <unit>` plus each series y value
+ * (6 significant digits, matching the caliper readout). Works with `trigger: 'axis'` (array
+ * of params) and `trigger: 'item'` (single param).
+ * @param {string} timeUnit x-axis / series x unit (e.g. 'ms', 's').
+ * @returns {(params: unknown) => string}
+ */
+export function makeSeqTooltipFormatter(timeUnit) {
+    const num = (v) => (Number.isFinite(v) ? Number(v).toPrecision(6) : '—');
+    const unitSuffix = timeUnit ? ` ${timeUnit}` : '';
+    return (params) => {
+        const arr = Array.isArray(params) ? params : [params];
+        if (!arr.length || !arr[0]) return '';
+        // Skip internal helper series (e.g. the invisible `__seqXExtent__` x-padding line).
+        const real = arr.filter((p) => p && !(typeof p.seriesName === 'string' && p.seriesName.startsWith('__')));
+        if (!real.length) return '';
+        const x = real[0].value && real[0].value[0];
+        const header = Number.isFinite(x) ? `t = ${num(x)}${unitSuffix}` : '';
+        const seen = new Set();
+        const lines = real
+            .map((p) => {
+                const y = p && p.value && p.value[1];
+                if (!Number.isFinite(y)) return '';
+                return `y = ${num(y)}`;
+            })
+            .filter((line) => {
+                if (!line || seen.has(line)) return false;
+                seen.add(line);
+                return true;
+            });
+        return [header, ...lines].filter(Boolean).join('<br>');
+    };
+}
+
+/**
+ * Build the two vertical time-caliper `lineX` annotations from `{ t1, t2 }` (data-x units).
+ * Returns a fresh array each call so `setOption` detects the change.
+ * @param {{ t1: number, t2: number } | null | undefined} caliper
+ * @returns {Array<Record<string, unknown>>}
+ */
+export function buildCaliperAnnotations(caliper) {
+    if (!caliper || !Number.isFinite(caliper.t1) || !Number.isFinite(caliper.t2)) return [];
+    const color = '#e8c547';
+    return [
+        {
+            id: '__seqCaliper1__',
+            type: 'lineX',
+            x: caliper.t1,
+            layer: 'aboveSeries',
+            style: { color, lineWidth: 1.5 },
+        },
+        {
+            id: '__seqCaliper2__',
+            type: 'lineX',
+            x: caliper.t2,
+            layer: 'aboveSeries',
+            style: { color, lineWidth: 1.5, lineDash: [5, 4] },
+        },
+    ];
 }
 
 /**
@@ -1770,6 +1833,13 @@ export async function renderSeqChartGpuAfterPlot(host, plotRoot, pyodide, plotCo
 </div>`
         : `<div id="seq-chartgpu-stack" class="seq-chartgpu-stack"></div>`;
     const stack = plotContainer.querySelector('#seq-chartgpu-stack');
+    // External caliper readout (t1 / t2 / dt) placed just above the waveform stack.
+    if (stack && stack.parentElement) {
+        const caliperReadout = document.createElement('div');
+        caliperReadout.id = 'seq-caliper-readout';
+        caliperReadout.className = 'seq-caliper-readout';
+        stack.parentElement.insertBefore(caliperReadout, stack);
+    }
     const panels = payload.panels;
     const n = panels.length;
     const hosts = [];
@@ -1841,13 +1911,30 @@ export async function renderSeqChartGpuAfterPlot(host, plotRoot, pyodide, plotCo
             const padded = chartGpuPaddedXBounds(xMin, xMax, SEQ_CHARTGPU_ZOOM_PAD_FRACTION);
             sharedXExtent = { min: padded.min, max: padded.max };
             host._seqChartZoomPadFraction = SEQ_CHARTGPU_ZOOM_PAD_FRACTION;
+            // Calipers: zoom percent is relative to the padded extent (the invisible
+            // `__seqXExtent__` helper line defines the data domain), so pixel<->time
+            // mapping uses this padded span. Default the two lines to 1/3 and 2/3 of the
+            // unpadded display window.
+            host._seqCaliperXExtent = sharedXExtent;
+            const dispSpan = xMax - xMin;
+            host._seqCaliper = {
+                t1: xMin + dispSpan / 3,
+                t2: xMin + (2 * dispSpan) / 3,
+            };
         } else {
             host._seqChartZoomPadFraction = 0;
+            host._seqCaliperXExtent = null;
+            host._seqCaliper = null;
         }
     }
 
     /** ChartGPU background grid: vertical line count (evenly spaced in plot; not axis ticks). */
     const CHARTGPU_GRID_LINES_VERTICAL = 5;
+
+    /** Time unit for the caliper readout (matches x-axis / series x units, e.g. 'ms'). */
+    const caliperTimeUnit = (payload && payload.timeUnit) || '';
+    /** Shared tooltip formatter (time + per-series value, 6 sig digits). */
+    const seqTooltipFormatter = makeSeqTooltipFormatter(caliperTimeUnit);
 
     const chartCreatePromises = [];
     /** Full ChartGPU.create options per panel; setOption replaces the whole config (see chartgpu source). */
@@ -1894,7 +1981,12 @@ export async function renderSeqChartGpuAfterPlot(host, plotRoot, pyodide, plotCo
                 tickFormatter: formatYTick3SigDigits,
             },
             dataZoom,
-            tooltip: { show: false },
+            // Coordinate readout next to the hover crosshair (time + value, 6 sig digits).
+            // Default off; enabled only on the panel under the pointer (see hover toggle below),
+            // otherwise the synced crosshair would show a tooltip on every panel at once.
+            tooltip: { show: false, trigger: 'axis', formatter: seqTooltipFormatter },
+            // Always-on time calipers (data-space lineX → track zoom/pan on the GPU for free).
+            annotations: buildCaliperAnnotations(host._seqCaliper),
             series,
         };
         chartUserOpts.push(opts);
@@ -2079,6 +2171,179 @@ export async function renderSeqChartGpuAfterPlot(host, plotRoot, pyodide, plotCo
         doBroadcastZoomToAll(initZoom.start, initZoom.end);
     }
 
+    // --- Time calipers: two draggable vertical lines + external t1/t2/dt readout. ---
+    // Lines render as native data-space `lineX` (already in each panel's create opts), so they
+    // track zoom/pan on the GPU with no JS cost. `setOption` is only called while dragging, and
+    // is rAF-coalesced across all panels (mirrors scheduleBroadcastZoomToAll).
+    let caliperRaf = 0;
+    const caliperReadoutEl = plotContainer.querySelector('#seq-caliper-readout');
+    const fmtCaliperTime = (v) => {
+        if (!Number.isFinite(v)) return '—';
+        const s = v.toPrecision(6); // 6 significant digits
+        return caliperTimeUnit ? `${s} ${caliperTimeUnit}` : s;
+    };
+    const updateCaliperReadout = () => {
+        if (!caliperReadoutEl || !host._seqCaliper) return;
+        const { t1, t2 } = host._seqCaliper;
+        const dt = Math.abs(t2 - t1);
+        caliperReadoutEl.textContent =
+            `t\u2081 = ${fmtCaliperTime(t1)}   |   t\u2082 = ${fmtCaliperTime(t2)}   |   \u0394t = ${fmtCaliperTime(dt)}`;
+    };
+    const applyCalipers = () => {
+        if (gpuSessionDead || !host._seqCaliper) return;
+        const ann = buildCaliperAnnotations(host._seqCaliper);
+        for (let i = 0; i < charts.length; i++) {
+            const c = charts[i];
+            if (!c || c.disposed) continue;
+            chartUserOpts[i].annotations = ann;
+            try {
+                c.setOption(chartUserOpts[i]);
+            } catch (e) {
+                /* ignore */
+            }
+        }
+        updateCaliperReadout();
+    };
+    const scheduleApplyCalipers = () => {
+        if (gpuSessionDead) return;
+        updateCaliperReadout(); // immediate text feedback; setOption is coalesced below
+        if (caliperRaf) return;
+        caliperRaf = requestAnimationFrame(() => {
+            caliperRaf = 0;
+            applyCalipers();
+        });
+    };
+    updateCaliperReadout();
+
+    // Double-click the readout to type exact t1 / delta-t values for the caliper lines.
+    const openCaliperDialog = () => {
+        if (gpuSessionDead || !host._seqCaliper) return;
+        const ext = host._seqCaliperXExtent;
+        const cur = host._seqCaliper;
+        const curDt = cur.t2 - cur.t1;
+        const unitLabel = caliperTimeUnit ? ` (${caliperTimeUnit})` : '';
+
+        const overlay = document.createElement('div');
+        overlay.className = 'seq-caliper-dialog-overlay';
+        const box = document.createElement('div');
+        box.className = 'seq-caliper-dialog';
+        box.innerHTML =
+            `<div class="seq-caliper-dialog-title">Set calipers</div>` +
+            `<label>t\u2081${unitLabel}<input type="number" step="any" class="seq-cal-t1"></label>` +
+            `<label>\u0394t${unitLabel}<input type="number" step="any" class="seq-cal-dt"></label>` +
+            `<div class="seq-caliper-dialog-btns">` +
+            `<button type="button" class="seq-cal-cancel">Cancel</button>` +
+            `<button type="button" class="seq-cal-ok">OK</button>` +
+            `</div>`;
+        overlay.appendChild(box);
+        document.body.appendChild(overlay);
+
+        const t1Input = box.querySelector('.seq-cal-t1');
+        const dtInput = box.querySelector('.seq-cal-dt');
+        const to6 = (v) => (Number.isFinite(v) ? Number(v).toPrecision(6) : '');
+        t1Input.value = to6(cur.t1);
+        dtInput.value = to6(curDt);
+        t1Input.focus();
+        t1Input.select();
+
+        const close = () => {
+            overlay.remove();
+            document.removeEventListener('keydown', onKey);
+        };
+        const commit = () => {
+            const t1v = Number(t1Input.value);
+            const dtv = Number(dtInput.value);
+            if (!Number.isFinite(t1v) || !Number.isFinite(dtv) || !host._seqCaliper) {
+                close();
+                return;
+            }
+            let t1 = t1v;
+            let t2 = t1v + dtv;
+            if (ext) {
+                t1 = Math.min(Math.max(t1, ext.min), ext.max);
+                t2 = Math.min(Math.max(t2, ext.min), ext.max);
+            }
+            host._seqCaliper.t1 = t1;
+            host._seqCaliper.t2 = t2;
+            applyCalipers();
+            close();
+        };
+        const onKey = (e) => {
+            if (e.key === 'Escape') {
+                e.preventDefault();
+                close();
+            } else if (e.key === 'Enter') {
+                e.preventDefault();
+                commit();
+            }
+        };
+        document.addEventListener('keydown', onKey);
+        overlay.addEventListener('pointerdown', (e) => {
+            if (e.target === overlay) close();
+        });
+        box.querySelector('.seq-cal-ok').addEventListener('click', commit);
+        box.querySelector('.seq-cal-cancel').addEventListener('click', close);
+    };
+    if (caliperReadoutEl) {
+        caliperReadoutEl.title = 'Double-click to set t\u2081 and \u0394t';
+        caliperReadoutEl.addEventListener('dblclick', openCaliperDialog);
+    }
+
+    /**
+     * Visible data-x window for panel `chartIdx` from its zoom range + the padded extent.
+     * @returns {{ visMin: number, visMax: number, rect: DOMRect, plotLeft: number, plotW: number } | null}
+     */
+    const caliperPanelView = (chartIdx, canvas) => {
+        const ext = host._seqCaliperXExtent;
+        const c = charts[chartIdx];
+        if (!ext || !c || c.disposed || !canvas) return null;
+        const gr = chartUserOpts[chartIdx]?.grid || {};
+        const rect = canvas.getBoundingClientRect();
+        const plotW = rect.width - (gr.left || 0) - (gr.right || 0);
+        if (!(plotW > 0)) return null;
+        let z = null;
+        try {
+            z = c.getZoomRange();
+        } catch (e) {
+            return null;
+        }
+        if (!z) return null;
+        const span = ext.max - ext.min;
+        if (!(span > 0)) return null;
+        const visMin = ext.min + (z.start / 100) * span;
+        const visMax = ext.min + (z.end / 100) * span;
+        if (!(visMax > visMin)) return null;
+        return { visMin, visMax, rect, plotLeft: rect.left + (gr.left || 0), plotW };
+    };
+
+    // Tooltip only on the actively hovered panel. ChartGPU's crosshair sync sets the interaction x
+    // on every chart, which would otherwise render a tooltip on all six. Toggle tooltip.show per
+    // chart on pointer enter/leave (only fires on hover transitions, not per move).
+    let tooltipChartIdx = -1;
+    const setChartTooltip = (i, show) => {
+        const c = charts[i];
+        if (!c || c.disposed) return;
+        const tt = chartUserOpts[i].tooltip;
+        if (!tt || tt.show === show) return;
+        chartUserOpts[i].tooltip = { ...tt, show };
+        try {
+            c.setOption(chartUserOpts[i]);
+        } catch (e) {
+            /* ignore */
+        }
+    };
+    const showTooltipOnly = (i) => {
+        if (gpuSessionDead || tooltipChartIdx === i) return;
+        if (tooltipChartIdx >= 0) setChartTooltip(tooltipChartIdx, false);
+        setChartTooltip(i, true);
+        tooltipChartIdx = i;
+    };
+    const clearHoverTooltip = (i) => {
+        if (tooltipChartIdx !== i) return;
+        setChartTooltip(i, false);
+        tooltipChartIdx = -1;
+    };
+
     // ChartGPU 0.3.x only pans x-zoom with Shift+left or middle button. Add plain left-drag pan
     // after a small move threshold so tiny jitters do not start a pan.
     const leftDragPanRemoves = [];
@@ -2183,6 +2448,88 @@ export async function renderSeqChartGpuAfterPlot(host, plotRoot, pyodide, plotCo
             }
         };
 
+        // Caliper drag: grabbing a line takes priority over pan (see onDown below).
+        const CALIPER_GRAB_PX = 6;
+        const caliperDrag = { phase: 'idle', chartIdx: 0, line: 't1', pointerId: -1, captureEl: null, pairOffset: 0 };
+        const removeCaliperWindowListeners = () => {
+            window.removeEventListener('pointermove', onCaliperMove);
+            window.removeEventListener('pointerup', stopCaliperDrag);
+            window.removeEventListener('pointercancel', stopCaliperDrag);
+        };
+        const stopCaliperDrag = () => {
+            if (caliperDrag.phase === 'active' && caliperDrag.captureEl && caliperDrag.pointerId >= 0) {
+                try {
+                    caliperDrag.captureEl.releasePointerCapture(caliperDrag.pointerId);
+                } catch (_) {
+                    /* ignore */
+                }
+            }
+            removeCaliperWindowListeners();
+            caliperDrag.phase = 'idle';
+            caliperDrag.captureEl = null;
+            caliperDrag.pointerId = -1;
+        };
+        const caliperTimeAtPointer = (chartIdx, canvas, clientX) => {
+            const view = caliperPanelView(chartIdx, canvas);
+            const ext = host._seqCaliperXExtent;
+            if (!view || !ext) return null;
+            const fx = (clientX - view.plotLeft) / view.plotW;
+            let t = view.visMin + fx * (view.visMax - view.visMin);
+            if (t < ext.min) t = ext.min;
+            if (t > ext.max) t = ext.max;
+            return t;
+        };
+        const onCaliperMove = (ev) => {
+            if (caliperDrag.phase !== 'active' || ev.pointerId !== caliperDrag.pointerId) return;
+            if (gpuSessionDead || !host._seqCaliper) return;
+            const t = caliperTimeAtPointer(caliperDrag.chartIdx, caliperDrag.captureEl, ev.clientX);
+            if (t == null) return;
+            ev.preventDefault();
+            if (caliperDrag.line === 't1') {
+                // Solid line moves the whole pair (keeps spacing to the dashed line).
+                const ext = host._seqCaliperXExtent;
+                let t1 = t;
+                let t2 = t + caliperDrag.pairOffset;
+                if (ext) {
+                    if (t2 > ext.max) {
+                        t1 -= t2 - ext.max;
+                        t2 = ext.max;
+                    }
+                    if (t1 < ext.min) {
+                        t2 += ext.min - t1;
+                        t1 = ext.min;
+                    }
+                    if (t2 > ext.max) t2 = ext.max;
+                }
+                host._seqCaliper.t1 = t1;
+                host._seqCaliper.t2 = t2;
+            } else {
+                // Dashed line moves alone.
+                host._seqCaliper.t2 = t;
+            }
+            scheduleApplyCalipers();
+        };
+        // Returns 't1' | 't2' when the pointer is within grab distance of a caliper line, else null.
+        const caliperGrabTarget = (chartIdx, canvas, clientX) => {
+            if (!host._seqCaliper) return null;
+            const view = caliperPanelView(chartIdx, canvas);
+            if (!view) return null;
+            const spanVis = view.visMax - view.visMin;
+            if (!(spanVis > 0)) return null;
+            const toPx = (t) => view.plotLeft + ((t - view.visMin) / spanVis) * view.plotW;
+            const d1 = Math.abs(clientX - toPx(host._seqCaliper.t1));
+            const d2 = Math.abs(clientX - toPx(host._seqCaliper.t2));
+            if (Math.min(d1, d2) > CALIPER_GRAB_PX) return null;
+            return d1 <= d2 ? 't1' : 't2';
+        };
+        leftDragPanRemoves.push(stopCaliperDrag);
+        leftDragPanRemoves.push(() => {
+            if (caliperRaf) {
+                cancelAnimationFrame(caliperRaf);
+                caliperRaf = 0;
+            }
+        });
+
         for (let i = 0; i < n; i++) {
             const canvas = hosts[i].querySelector('canvas');
             if (!canvas) continue;
@@ -2198,6 +2545,28 @@ export async function renderSeqChartGpuAfterPlot(host, plotRoot, pyodide, plotCo
                     return;
                 }
                 if (!ht.isInGrid) return;
+                // Grab a caliper line if the pointer landed on one (priority over pan).
+                const caliperTarget = caliperGrabTarget(i, canvas, ev.clientX);
+                if (caliperTarget) {
+                    stopLeftPan();
+                    stopCaliperDrag();
+                    caliperDrag.phase = 'active';
+                    caliperDrag.chartIdx = i;
+                    caliperDrag.line = caliperTarget;
+                    caliperDrag.pairOffset = host._seqCaliper.t2 - host._seqCaliper.t1;
+                    caliperDrag.pointerId = ev.pointerId;
+                    caliperDrag.captureEl = canvas;
+                    try {
+                        canvas.setPointerCapture(ev.pointerId);
+                    } catch (_) {
+                        /* ignore */
+                    }
+                    ev.preventDefault();
+                    window.addEventListener('pointermove', onCaliperMove);
+                    window.addEventListener('pointerup', stopCaliperDrag);
+                    window.addEventListener('pointercancel', stopCaliperDrag);
+                    return;
+                }
                 const gr = chartUserOpts[i]?.grid || {};
                 const rect = canvas.getBoundingClientRect();
                 const plotW = rect.width - (gr.left || 0) - (gr.right || 0);
@@ -2216,7 +2585,15 @@ export async function renderSeqChartGpuAfterPlot(host, plotRoot, pyodide, plotCo
                 window.addEventListener('pointercancel', stopLeftPan);
             };
             canvas.addEventListener('pointerdown', onDown);
-            leftDragPanRemoves.push(() => canvas.removeEventListener('pointerdown', onDown));
+            const onEnter = () => showTooltipOnly(i);
+            const onLeave = () => clearHoverTooltip(i);
+            canvas.addEventListener('pointerenter', onEnter);
+            canvas.addEventListener('pointerleave', onLeave);
+            leftDragPanRemoves.push(() => {
+                canvas.removeEventListener('pointerdown', onDown);
+                canvas.removeEventListener('pointerenter', onEnter);
+                canvas.removeEventListener('pointerleave', onLeave);
+            });
         }
         leftDragPanRemoves.push(stopLeftPan);
     }
