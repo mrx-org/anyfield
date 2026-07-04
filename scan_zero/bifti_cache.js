@@ -39,14 +39,32 @@ export function normalizeCacheId(id) {
   return String(id || "").trim().replace(/^\/+|\/+$/g, "");
 }
 
-/** Split scan-ready id into `{ collection, name }`. */
+/**
+ * Split a scan-ready id into its parts. Ids are either two-segment folders
+ * (`collection/name`, e.g. `brainweb-20-v2/subj04-3T-1mm-tra`) or three-segment
+ * config variants (`collection/name/config`, e.g. `user/my-phantom/single-slice`).
+ * The folder is always the first two segments; the optional third segment selects
+ * an alternate JSON config sharing the folder's NIfTIs.
+ * @returns {{ collection: string, name: string, config: string|null, folderId: string, id: string }}
+ */
 export function splitCacheId(id) {
   const cid = normalizeCacheId(id);
-  const [collection, name] = cid.split("/", 2);
+  const parts = cid.split("/").filter(Boolean);
+  const [collection, name, config] = parts;
   if (!collection || !name) {
-    throw new Error(`Invalid phantom id (expected collection/name): ${cid || "(empty)"}`);
+    throw new Error(`Invalid phantom id (expected collection/name[/config]): ${cid || "(empty)"}`);
   }
-  return { collection, name, id: cid };
+  return { collection, name, config: config || null, folderId: `${collection}/${name}`, id: cid };
+}
+
+/** Two-segment cached folder id for a scan id (drops any config segment). Used for downloads. */
+export function phantomFolderId(id) {
+  return splitCacheId(id).folderId;
+}
+
+/** Alternate-config stem for a scan id (third segment), or null for a default/folder id. */
+export function phantomConfigStem(id) {
+  return splitCacheId(id).config;
 }
 
 /** `GET {simGateway}/v1/cache` → scan-ready phantom ids. */

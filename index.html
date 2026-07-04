@@ -908,9 +908,10 @@ await micropip.install('pypulseq==1.4.2.post2', deps=False)
                         explorer.loadSourcesFromConfig(configCode),
                     ]);
                     if (nvModule._pendingPhantomVfs) {
-                        const { jsonFile, niftiFiles } = nvModule._pendingPhantomVfs;
+                        const { jsonFile, jsonFiles, niftiFiles } = nvModule._pendingPhantomVfs;
                         try {
-                            await nvModule.populatePyodideVFS(niftiFiles, [jsonFile]);
+                            // Write all JSON configs (multi-config phantoms) so the config selector lists them.
+                            await nvModule.populatePyodideVFS(niftiFiles, jsonFiles && jsonFiles.length ? jsonFiles : [jsonFile]);
                         } catch (err) {
                             console.warn('Sync default phantom to Pyodide VFS failed:', err);
                         }

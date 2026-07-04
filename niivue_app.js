@@ -2,7 +2,7 @@ import { Niivue, NVMesh, NVImage, SLICE_TYPE, MULTIPLANAR_TYPE, DRAG_MODE, SHOW_
 import { eventHub } from "./event_hub.js";
 import { formatScanDisplayTitle } from "./scan_zero/scan_module.js";
 import { volumeIs4D, syncVolumeClimsToCurrent4DFrame, installFrameAwareContrastDrag, installFrameAwareBriConReset } from "./hist_panel/histogram-clim-panel.js";
-import { DEFAULT_CACHE_PHANTOM_ID, BIFTI_CACHE_ADMIN_BASE, fetchCachedPhantomIds, downloadPhantomTarGz, normalizeCacheId } from "./scan_zero/bifti_cache.js";
+import { DEFAULT_CACHE_PHANTOM_ID, BIFTI_CACHE_ADMIN_BASE, fetchCachedPhantomIds, downloadPhantomTarGz, normalizeCacheId, splitCacheId, phantomFolderId } from "./scan_zero/bifti_cache.js";
 
 /**
  * Base URL for the bundled default nifti_phantom (JSON + NIfTIs).
@@ -94,7 +94,7 @@ export class NiivueModule {
     this.options = { ...options };
     this.nv = new Niivue({ 
       logging: false,
-      loadingText: "Load a phantom.",
+      loadingText: "Loading...",
       multiplanarLayout: 2, // MULTIPLANAR_TYPE.GRID
       fontMinPx: 11,
       fontSizeScaling: 0.4,
@@ -3525,14 +3525,7 @@ os.makedirs('/phantom/averaged', exist_ok=True)
       : this.pyodide.FS.readFile(`/phantom/${pick}`, { encoding: "utf8" });
     this.setJsonEditorValue(content ?? "");
 
-    sel.onchange = () => {
-      this.jsonTabCurrentName = sel.value;
-      if (this.pyodide) {
-        this.setJsonEditorValue(this.pyodide.FS.readFile(`/phantom/${sel.value}`, { encoding: "utf8" }));
-        return;
-      }
-      this.setJsonEditorValue(this._jsonConfigsFromVolumeGroups().get(sel.value) ?? "");
-    };
+    sel.onchange = () => this.switchActivePhantomConfig(sel.value);
   }
 
   updatePreviewFromSelection() {
@@ -3579,25 +3572,96 @@ os.makedirs('/phantom/averaged', exist_ok=True)
     await this.waitForInit();
     const id = normalizeCacheId(phantomId);
     if (!id) throw new Error("loadPhantomFromCache: empty phantom id");
+    const { folderId, name: folderName, config } = splitCacheId(id);
+    // Download is folder-based (all JSON configs + shared NIfTIs); the id's optional
+    // third segment selects which JSON config is active for scanning.
     const tarBytes = new Uint8Array(await downloadPhantomTarGz(id));
-    const { jsonFile, niftiFiles } = await this._extractPhantomTarGz(tarBytes, id);
-    if (!jsonFile || niftiFiles.length === 0) {
+    const { jsonFiles, niftiFiles } = await this._extractPhantomTarGz(tarBytes, id);
+    if (!jsonFiles.length || niftiFiles.length === 0) {
       throw new Error(`Phantom "${id}": archive missing JSON or NIfTIs`);
     }
+    const jsonFile = this._pickConfigJsonFile(jsonFiles, folderName, config);
+    // The scan id is exactly what was requested (the server accepts it directly). The default
+    // JSON (mapping to the 2-segment folder id) is `{folderName}.json` when present, else the
+    // file loaded for a folder/default request.
+    const scanId = id;
+    const eq = (a, b) => String(a).toLowerCase() === String(b).toLowerCase();
+    const defaultJsonName = jsonFiles.find((f) => eq(f.name, `${folderName}.json`))?.name
+      ?? (config ? null : jsonFile.name);
     if (this.pyodide) {
-      await this.populatePyodideVFS(niftiFiles, [jsonFile]);
+      await this.populatePyodideVFS(niftiFiles, jsonFiles);
       this._pendingPhantomVfs = null;
     } else {
-      this._pendingPhantomVfs = { jsonFile, niftiFiles };
+      this._pendingPhantomVfs = { jsonFile, jsonFiles, niftiFiles };
     }
     try {
-      await this.loadMultiPhantomFromFiles(jsonFile, niftiFiles, { biftiRegistryId: id });
+      await this.loadMultiPhantomFromFiles(jsonFile, niftiFiles, {
+        biftiRegistryId: scanId,
+        folderId,
+        configFiles: { folderId, jsonFiles, niftiFiles, defaultJsonName },
+      });
     } catch (e) {
       this._pendingPhantomVfs = null;
       throw e;
     }
     this.jsonTabCurrentName = jsonFile.name;
     this.updateJsonTab();
+  }
+
+  /** Pick the active JSON config: `{config}.json` when requested, else the folder default `{name}.json`. */
+  _pickConfigJsonFile(jsonFiles, folderName, config) {
+    const eq = (a, b) => String(a).toLowerCase() === String(b).toLowerCase();
+    const want = config ? `${config}.json` : `${folderName}.json`;
+    return jsonFiles.find((f) => eq(f.name, want))
+      ?? jsonFiles.find((f) => eq(f.name, `${folderName}.json`))
+      ?? jsonFiles[0];
+  }
+
+  /**
+   * Scan id for a folder + JSON config filename: two-segment folder id for the default config,
+   * three-segment `{folderId}/{stem}` for an alternate. The default config is identified by
+   * `defaultJsonName` when known (registry phantoms may use a JSON name != folder name); the
+   * `{folderName}.json` convention is only a fallback.
+   */
+  _configScanId(folderId, jsonFileName, defaultJsonName = null) {
+    const stem = String(jsonFileName || "").replace(/\.json$/i, "");
+    if (!stem) return folderId;
+    if (defaultJsonName && String(jsonFileName).toLowerCase() === String(defaultJsonName).toLowerCase()) {
+      return folderId;
+    }
+    const folderName = String(folderId).split("/")[1] || "";
+    if (!defaultJsonName && folderName && stem.toLowerCase() === folderName.toLowerCase()) {
+      return folderId;
+    }
+    return `${folderId}/${stem}`;
+  }
+
+  /**
+   * Switch the active phantom JSON config (from the config `<select>`): update the editor,
+   * the group's inline JSON identity, and the scan id (`biftiRegistryId`) so subsequent scans
+   * and shares use the chosen config. NIfTIs are shared across configs, so volumes are not
+   * re-fetched. Falls back to an editor-only swap for phantoms without a cache folder id.
+   */
+  switchActivePhantomConfig(jsonFileName) {
+    const fn = String(jsonFileName || "").trim();
+    if (!fn) return;
+    // Read the target config from VFS / in-memory groups — not via the editor, which still
+    // holds the previously-selected config's text at this point.
+    let text = null;
+    if (this.pyodide) {
+      try { text = this.pyodide.FS.readFile(`/phantom/${fn}`, { encoding: "utf8" }); } catch (_) { /* no VFS copy */ }
+    }
+    if (text == null) text = this._jsonConfigsFromVolumeGroups().get(fn) ?? null;
+    this.jsonTabCurrentName = fn;
+    this.setJsonEditorValue(text ?? "");
+    const g = this.getActivePhantomGroup();
+    if (!g) return;
+    const folderId = g.folderId || (g.biftiRegistryId ? phantomFolderId(g.biftiRegistryId) : null);
+    if (folderId) g.biftiRegistryId = this._configScanId(folderId, fn, g.configFiles?.defaultJsonName ?? null);
+    g.jsonFileName = fn;
+    g.jsonName = fn.replace(/\.json$/i, "");
+    if (text != null && String(text).trim()) g.jsonContent = String(text);
+    this.updateVolumeList?.();
   }
 
   /**
@@ -3654,9 +3718,10 @@ _out
     if (jsonEntries.length === 0) {
       throw new Error(`Phantom "${id}": no JSON found in archive`);
     }
+    // A cached folder may carry several JSON configs sharing the same NIfTIs (shallowest first).
     jsonEntries.sort((a, b) => a.depth - b.depth);
-    const jsonFile = jsonEntries[0].file;
-    return { jsonFile, niftiFiles };
+    const jsonFiles = jsonEntries.map((e) => e.file);
+    return { jsonFiles, jsonFile: jsonFiles[0], niftiFiles };
   }
 
   /**
@@ -3741,15 +3806,43 @@ _out
             status.textContent = "No phantoms on the cache yet. Use the cache admin to add one.";
             return;
           }
-          status.textContent = `${ids.length} phantom(s) available:`;
+          // Group scan ids by folder (first two segments): the 2-segment id is the default
+          // config; any 3-segment ids are alternate configs sharing the same folder/NIfTIs.
+          const folders = new Map();
           ids.forEach((id) => {
+            let folderId, config;
+            try { ({ folderId, config } = splitCacheId(id)); }
+            catch (_) { folderId = id; config = null; }
+            if (!folders.has(folderId)) folders.set(folderId, []);
+            folders.get(folderId).push({ id, config });
+          });
+          status.textContent = `${folders.size} phantom(s) available:`;
+          for (const [folderId, variants] of folders) {
+            const hasDefault = variants.some((v) => !v.config);
+            const defaultId = hasDefault ? folderId : variants[0].id;
             const btn = document.createElement("button");
             btn.className = "btn";
             btn.style.cssText = "text-align:left;padding:9px 12px;justify-content:flex-start;font-family:monospace;font-size:12px;";
-            btn.textContent = id;
-            btn.onclick = () => pick(id);
+            btn.textContent = variants.length > 1 ? `${folderId}  · ${variants.length} configs` : folderId;
+            btn.onclick = () => pick(defaultId);
             list.appendChild(btn);
-          });
+            if (variants.length > 1) {
+              const row = document.createElement("div");
+              row.style.cssText = "display:flex;flex-wrap:wrap;gap:4px;margin:-2px 0 4px 14px;";
+              variants
+                .slice()
+                .sort((a, b) => (a.config ? 1 : 0) - (b.config ? 1 : 0))
+                .forEach(({ id, config }) => {
+                  const chip = document.createElement("button");
+                  chip.className = "btn btn-secondary";
+                  chip.style.cssText = "padding:3px 8px;font-family:monospace;font-size:11px;";
+                  chip.textContent = config || "(default)";
+                  chip.onclick = () => pick(id);
+                  row.appendChild(chip);
+                });
+              list.appendChild(row);
+            }
+          }
         })
         .catch((e) => {
           if (!overlay.isConnected) return;
@@ -3831,7 +3924,7 @@ _out
         }
         setTimeout(() => URL.revokeObjectURL(u), 30000);
       }
-      this.volumeGroups.push({ id: groupId, jsonName, volumes: groupVolumes, jsonContent: jsonText, jsonFileName: jsonFile.name, biftiRegistryId });
+      this.volumeGroups.push({ id: groupId, jsonName, volumes: groupVolumes, jsonContent: jsonText, jsonFileName: jsonFile.name, biftiRegistryId, folderId: options.folderId ?? null, configFiles: options.configFiles ?? null });
       this.refreshFovForNewVolume();
       this.updateVolumeList();
       this.updatePreviewFromSelection();
