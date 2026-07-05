@@ -319,6 +319,19 @@ export class ScanModule {
             .replace(/"/g, '&quot;');
     }
 
+    _escapeAttr(text) {
+        return String(text)
+            .replace(/&/g, '&amp;')
+            .replace(/"/g, '&quot;')
+            .replace(/</g, '&lt;')
+            .replace(/\n/g, '&#10;');
+    }
+
+    _jobErrorTooltip(job) {
+        if (job?.status !== 'error') return '';
+        return job.errorDetail || job.error || 'error';
+    }
+
     _onSequenceSelected(data) {
         this.currentSequence = data;
         if (!data) {
@@ -1292,7 +1305,10 @@ export class ScanModule {
             ? formatSimBackendLabel(job.simulation.backendId)
             : job.simulation?.backendLabel;
         if (backendLabel) parts.push(backendLabel);
-        if (job.status === 'error' && job.error) parts.push(job.error);
+        if (job.status === 'error' && job.error) {
+            const firstLine = String(job.error).split('\n')[0];
+            parts.push(firstLine.length > 72 ? `${firstLine.slice(0, 69)}...` : firstLine);
+        }
         return parts.join(' · ');
     }
 
@@ -1377,6 +1393,9 @@ export class ScanModule {
             };
             await window.seqExplorer.executeFunction(true, job.scanNumber);
             window.seqExplorer._pendingProtocolMeta = null;
+        }
+        if (window.seqExplorer?._lastExecutionError) {
+            throw new Error(window.seqExplorer._lastExecutionError);
         }
         _t('after executeFunction');
         const nvMod = window.nvModule;
@@ -2539,7 +2558,7 @@ _recon.run_sim_recon(
             <div class="queue-item status-${job.status}" data-id="${job.id}">
                 <div class="item-main">
                     <div class="item-title">${this._escapeHtml(formatScanDisplayTitle(`${job.baseName}.nii.gz`, job))}</div>
-                    <div class="item-meta">${this._escapeHtml(this._jobMetaLine(job))}</div>
+                    <div class="item-meta"${job.status === 'error' ? ` title="${this._escapeAttr(this._jobErrorTooltip(job))}"` : ''}>${this._escapeHtml(this._jobMetaLine(job))}</div>
                 </div>
                 <div class="item-actions">
                     ${job.status === 'scanning' ? `
@@ -2565,7 +2584,7 @@ _recon.run_sim_recon(
                             ${!job.cropOnly && job.vfsSeqPath ? `
                                 <button class="view-seq-btn">VIEW SEQ</button>
                             ` : ''}
-                            <span class="error-icon" title="${this._escapeHtml(job.error || 'error')}">⚠</span>
+                            <span class="error-icon" title="${this._escapeAttr(this._jobErrorTooltip(job))}">⚠</span>
                             <button class="remove-job-btn" title="Remove scan"><i class="bi bi-x-lg" aria-hidden="true"></i></button>
                         </div>
                     ` : ''}

@@ -3201,6 +3201,19 @@ os.makedirs('/phantom/averaged', exist_ok=True)
     } catch (e) { console.error(e);} finally { this.resampleToFovBtn.disabled = false; }
   }
 
+  /** Let the phantom list grow when a group is expanded so sub-phantoms are not clipped. */
+  _syncPhantomVolumeListHeight() {
+    const el = this.phantomVolumeListContainer;
+    if (!el) return;
+    if (this.expandedGroups.size > 0) {
+      el.style.maxHeight = "none";
+      el.style.overflowY = "visible";
+    } else {
+      el.style.maxHeight = "90px";
+      el.style.overflowY = "auto";
+    }
+  }
+
   updateVolumeList() {
     const scanEl = this.scanVolumeListContainer;
     const phantomEl = this.phantomVolumeListContainer;
@@ -3455,6 +3468,7 @@ os.makedirs('/phantom/averaged', exist_ok=True)
       });
       phantoms.forEach(p => phantomEl.appendChild(createRow(p.vol, p.index)));
     }
+    this._syncPhantomVolumeListHeight();
 
     if (scanEl) {
       if (scans.length > 0) {

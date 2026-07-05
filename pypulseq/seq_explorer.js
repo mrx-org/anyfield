@@ -84,6 +84,12 @@ const SEQ_TEMPLATES = {
                 <span>show console</span>
             </label>`;
     },
+    errorDisplay() {
+        return `<div id="seq-error-display" class="seq-error-message" style="display: none;" role="alert">
+                <div class="seq-error-text"></div>
+                <button type="button" class="seq-error-dismiss" title="Dismiss" aria-label="Dismiss error"><i class="bi bi-x-lg" aria-hidden="true"></i></button>
+            </div>`;
+    },
     mainLayout(showConsoleHtml) {
         return `<div id="seq-plot-output" class="seq-plot-container">
                 <div id="seq-mpl-actual-target" class="mpl-figure-container">
@@ -117,7 +123,7 @@ const SEQ_TEMPLATES = {
                                 <option value="chartgpu" selected>ChartGPU</option>
                             </select>
                         </div>
-                        <div id="seq-error-display" class="seq-error-message" style="display: none;"></div>
+                        ${SEQ_TEMPLATES.errorDisplay()}
                         <div id="seq-params-controls"></div>
                     </div>
                 </div>
@@ -184,7 +190,7 @@ const SEQ_TEMPLATES = {
     paramsSection() {
         return `<div id="seq-params-section">
                 ${SEQ_TEMPLATES.protocolHeader({ btnClass: true, mobileRun: true })}
-                <div id="seq-error-display" class="seq-error-message" style="display: none;"></div>
+                ${SEQ_TEMPLATES.errorDisplay()}
                 <div id="seq-params-controls"></div>
             </div>`;
     },
@@ -297,6 +303,8 @@ export class SequenceExplorer {
         this._seqChartGpuAdapter = null;
         /** @type {(() => void) | null} removes WebGPU device uncapturederror/lost listeners */
         this._seqChartGpuRemoveDeviceListeners = null;
+        /** Full Python traceback from the last failed executeFunction (silent scan prep reads this). */
+        this._lastExecutionError = null;
         
         // Initialize UI
         if (containerId) {
@@ -348,6 +356,7 @@ export class SequenceExplorer {
 
         this.updateShareButtonVisibility();
         this._bindMobileScanButtons(this.paramsTarget);
+        this._bindErrorDisplay(this.paramsTarget);
     }
 
     _bindMobileScanButtons(root) {
@@ -1217,6 +1226,7 @@ os.path.exists(${JSON.stringify(vfs)})
         
         // Initialize plotting infrastructure
         this.initPlottingInfrastructure();
+        this._bindErrorDisplay(this.container);
     }
     
     initPlottingInfrastructure() {
@@ -1388,13 +1398,38 @@ plt.rcParams['font.size'] = 8`;
         const errorDisplay = root ? root.querySelector('#seq-error-display') : null;
         if (errorDisplay) {
             if (type === 'error') {
-                errorDisplay.textContent = message;
+                const textEl = errorDisplay.querySelector('.seq-error-text');
+                if (textEl) textEl.textContent = message;
+                else errorDisplay.textContent = message;
                 errorDisplay.style.display = 'block';
+                this._bindErrorDisplay(root);
             } else if (type === 'success') {
-                // Clear error display on success
-                errorDisplay.style.display = 'none';
-                errorDisplay.textContent = '';
+                this.clearErrorDisplay(root);
             }
+        }
+    }
+
+    clearErrorDisplay(root = null) {
+        const paramsRoot = root || this.paramsTarget || this.container;
+        const errorDisplay = paramsRoot ? paramsRoot.querySelector('#seq-error-display') : null;
+        if (!errorDisplay) return;
+        errorDisplay.style.display = 'none';
+        const textEl = errorDisplay.querySelector('.seq-error-text');
+        if (textEl) textEl.textContent = '';
+        else errorDisplay.textContent = '';
+    }
+
+    _bindErrorDisplay(root) {
+        if (!root || root.dataset.seqErrorBound) return;
+        const errorDisplay = root.querySelector('#seq-error-display');
+        if (!errorDisplay) return;
+        root.dataset.seqErrorBound = '1';
+        const btn = errorDisplay.querySelector('.seq-error-dismiss');
+        if (btn) {
+            btn.addEventListener('click', (e) => {
+                e.stopPropagation();
+                this.clearErrorDisplay(root);
+            });
         }
     }
     
@@ -4024,11 +4059,8 @@ json.dumps(_result)
         executeBtn.textContent = silent ? 'Generating...' : 'Plotting...';
         
         // Clear any previous error display
-        const errorDisplay = paramsRoot.querySelector('#seq-error-display');
-        if (errorDisplay) {
-            errorDisplay.style.display = 'none';
-            errorDisplay.textContent = '';
-        }
+        this._lastExecutionError = null;
+        this.clearErrorDisplay(paramsRoot);
         
         try {
             const pyodide = this.config.pyodide;
@@ -4180,6 +4212,7 @@ json.dumps(_result)
             if (!silent) {
                 this.showStatus(resultObj.message || 'Function executed successfully', 'success');
             }
+            this._lastExecutionError = null;
 
             // SIM prep: silent execute with protocolName — push Pulseq seq.definitions FOV (m → mm) to Niivue.
             // Scan pipeline runs this *before* generateFovMaskNifti() so mask voxel size × matrix matches seq FOV.
@@ -4259,8 +4292,10 @@ json.dumps(out)
 
         } catch (error) {
             console.error('Error executing function:', error);
+            const rawError = error.message || String(error);
+            this._lastExecutionError = rawError;
             // Extract the most useful error message from the stack trace
-            let errorMsg = error.message || String(error);
+            let errorMsg = rawError;
             // Try to extract the actual assertion/error message from pypulseq
             const assertMatch = errorMsg.match(/AssertionError: ([^\n]+)/);
             const runtimeMatch = errorMsg.match(/RuntimeError: Error executing function '[^']+': ([^\n]+)/);
