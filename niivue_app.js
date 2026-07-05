@@ -1194,6 +1194,7 @@ export class NiivueModule {
     
     await this.nv.attachTo(this.canvasId);
     installFrameAwareContrastDrag(this.nv);
+    installFrameAwareBriConReset(this.nv);
     this.nv.opts.fontMinPx = 11;
     this.nv.opts.fontSizeScaling = 0.4;
     if (typeof this.nv.textSizePoints === "function") this.nv.textSizePoints();
@@ -1392,10 +1393,12 @@ export class NiivueModule {
         }
     });
 
-    // Double-click to toggle maximize canvas
-    this.canvas.addEventListener("dblclick", () => {
+    // Capture phase: block Niivue dblclick → resetBriCon (robust min/max reset).
+    this.canvas.addEventListener("dblclick", (e) => {
+        e.preventDefault();
+        e.stopImmediatePropagation();
         this.toggleMaximize();
-    });
+    }, true);
     
     // Double-tap detection for touch (only when touch was a tap, not a drag)
     let lastTapTime = 0;
@@ -4123,13 +4126,8 @@ function getPreviewPeerNv(sourceNv) {
   return null;
 }
 
+/** Refresh preview/compare histogram UI after layout resize; keep existing cal_min/cal_max. */
 export function syncPreviewViewerClims() {
-  for (const mod of [window.scanPreview, window.scanCompare?.module]) {
-    const nv = mod?.nv;
-    const vol = nv?.volumes?.[0];
-    if (!nv || !vol?.img) continue;
-    if (volumeIs4D(vol)) syncVolumeClimsToCurrent4DFrame(vol, nv);
-  }
   window.jointHist?.refresh?.();
 }
 
