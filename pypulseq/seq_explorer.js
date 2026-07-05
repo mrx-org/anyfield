@@ -3301,11 +3301,16 @@ json.dumps(functions)
                             if (displayFileName.endsWith('.py')) {
                                 displayFileName = displayFileName.slice(0, -3);
                             }
-                            return functions.map(func => `
-                                <div class="seq-function-item" data-file="${fileName}" data-function="${func.name}" ${func.doc ? `title="${func.doc.replace(/"/g, '&quot;')}"` : ''}>
+                            return functions.map(func => {
+                                // Protocols (prot_*) inherit from the seq_* above them; indent them
+                                // slightly so the hierarchy is visible in the tree.
+                                const isProtFunc = !isProtocol && /^(?:\d+_)?prot_/.test(String(func.name || ''));
+                                return `
+                                <div class="seq-function-item${isProtFunc ? ' is-prot-func' : ''}" data-file="${fileName}" data-function="${func.name}" ${func.doc ? `title="${func.doc.replace(/"/g, '&quot;')}"` : ''}>
                                     <span class="seq-file-function-name">${isProtocol ? displayFileName : `${displayFileName}:${func.name}`}</span>
                                 </div>
-                            `).join('');
+                            `;
+                            }).join('');
                         }).join('')}
                     </div>
                 </div>

@@ -241,8 +241,8 @@ body {
 }
 
 .seq-source-items {
-    margin-left: 1rem;
-    padding-left: 0.5rem;
+    margin-left: 0.3rem;
+    padding-left: 0.4rem;
     border-left: 2px solid var(--border);
 }
 
@@ -265,6 +265,18 @@ body {
 
 .seq-function-item.selected {
     background: rgba(59, 130, 246, 0.2);
+    border-left: 3px solid var(--accent);
+}
+
+/* Protocols inherit from the seq_* above them: minimal indent + subtle guide,
+   with a tighter vertical rhythm so the group takes less space. */
+.seq-function-item.is-prot-func {
+    margin: 0.05rem 0 0.05rem 0.6rem;
+    padding: 0.25rem 0.5rem 0.25rem 0.5rem;
+    border-left: 1px solid rgba(255, 255, 255, 0.14);
+}
+
+.seq-function-item.is-prot-func.selected {
     border-left: 3px solid var(--accent);
 }
 
