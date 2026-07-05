@@ -80,7 +80,7 @@ def seq_TSE_2D(
     """
     if system is None:
         system = pp.Opts(
-            max_grad=28, grad_unit='mT/m', max_slew=150, slew_unit='T/m/s',
+            max_grad=40, grad_unit='mT/m', max_slew=200, slew_unit='T/m/s',
             rf_ringdown_time=20e-6, rf_dead_time=100e-6,
             adc_dead_time=20e-6, grad_raster_time=10e-6
         )
@@ -104,12 +104,19 @@ def seq_TSE_2D(
 
     G_flag = (int(RO_grad_on), int(PE_grad_on))
 
+    # Read gradient + ADC alignment.
+    # Size the read ramp so the required delay is >= adc_dead_time, then set the
+    # delay to the exact half-dwell-corrected value.
+    ro_rise_time = np.ceil(
+        (system.adc_dead_time + 0.5 * dwell) / system.grad_raster_time
+    ) * system.grad_raster_time
+    adc_delay = ro_rise_time - 0.5 * dwell
     gx = pp.make_trapezoid(
-        channel='x', rise_time=0.5 * dwell,
+        channel='x', rise_time=ro_rise_time,
         flat_area=Nread / fov[0] * G_flag[0], flat_time=Nread * dwell, system=system)
     adc = pp.make_adc(
         num_samples=Nread, duration=Nread * dwell, phase_offset=90 * np.pi / 180,
-        delay=0 * gx.rise_time, system=system)
+        delay=adc_delay, system=system)
     gx_pre0 = pp.make_trapezoid(
         channel='x', area=+((1.0 + r_spoil) * gx.area / 2), duration=1.5e-3, system=system)
     gx_prewinder = pp.make_trapezoid(

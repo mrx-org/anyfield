@@ -36,6 +36,7 @@ def seq_gre(
     alpha: float = 4,                    # flip angle
     TR: float = 12e-3,                    # Repetition time
     TE: float = 5e-3,                     # Echo time
+    dwell: float = 30e-6,                 # ADC dwell time [s]; flat_time = Nread*dwell
     rf_spoiling_inc: float = 84 ,         # RF spoiling increment
     plot: bool = False,
     write_seq: bool = False,
@@ -96,9 +97,9 @@ def seq_gre(
     # Create a new sequence object
 
     system = pp.Opts(
-        max_grad=28,
+        max_grad=40,
         grad_unit='mT/m',
-        max_slew=150,
+        max_slew=200,
         slew_unit='T/m/s',
         rf_ringdown_time=20e-6,
         rf_dead_time=100e-6,
@@ -124,7 +125,15 @@ def seq_gre(
     # Define other gradients and ADC events
     delta_kx = 1 / fov_xy[0]
     delta_ky = 1 / fov_xy[1]
-    gx = pp.make_trapezoid(channel='x', flat_area=Nread * delta_kx, flat_time=3.2e-3, system=system)
+    # Readout defined by the ADC dwell: flat_time = Nread*dwell. Round dwell to the
+    # gradient raster so flat_time is valid on both the gradient and ADC rasters (no
+    # "adc dwell RASTER" timing errors); the k-step per sample stays exactly delta_kx.
+    dwell = max(
+        system.grad_raster_time,
+        round(dwell / system.grad_raster_time) * system.grad_raster_time,
+    )
+    flat_time = Nread * dwell
+    gx = pp.make_trapezoid(channel='x', flat_area=Nread * delta_kx, flat_time=flat_time, system=system)
     adc = pp.make_adc(num_samples=Nread, duration=gx.flat_time, delay=gx.rise_time, system=system)
 
     gx_pre = pp.make_trapezoid(channel='x', area=-gx.area / 2-0.5*delta_kx, duration=1e-3, system=system)
