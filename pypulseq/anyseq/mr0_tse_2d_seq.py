@@ -47,7 +47,7 @@ def seq_TSE_2D(
     shots=10,
     dumshots=1,
     dumref=1,
-    dwell=50e-6 * 2,
+    dwell=20e-6,
     dTE=0.0,
 ):
     """
@@ -221,7 +221,7 @@ if __name__ == '__main__':
     shots = 2
     dumshots = 0
     dumref = 1
-    dwell = 50e-6 * 2
+    dwell = 20e-6
 
     seq = seq_TSE_2D(
         fov=(fov_xy, fov_xy, slice_thickness),
@@ -285,7 +285,7 @@ def prot_TSE_2D(
     shots=10,
     dumshots=1,
     dumref=1,
-    dwell=50e-6 * 2,
+    dwell=20e-6,
     dTE=0.0,
 ):
     kwargs = locals().copy()
@@ -310,7 +310,7 @@ def prot_TSE_2D_FLAIR(
     shots=10,
     dumshots=1,
     dumref=1,
-    dwell=50e-6 * 2,
+    dwell=20e-6,
     dTE=0.0,
 ):
     kwargs = locals().copy()
@@ -335,7 +335,7 @@ def prot_TSE_2D_asym_ex(
     shots=10,
     dumshots=1,
     dumref=1,
-    dwell=50e-6 * 2,
+    dwell=20e-6,
     dTE=0.00065,
 ):
     """Same as prot_TSE_2D but with asymmetric excitation enabled by default (dTE = 0.0087 s)."""
