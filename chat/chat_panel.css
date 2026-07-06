@@ -62,8 +62,72 @@
     padding: 0.5rem 0.65rem;
     border-radius: 8px;
     line-height: 1.45;
-    white-space: pre-wrap;
     word-break: break-word;
+}
+
+.chat-msg-user,
+.chat-msg-system,
+.chat-msg-actions,
+.chat-msg-context {
+    white-space: pre-wrap;
+}
+
+.chat-msg-assistant.chat-md :first-child {
+    margin-top: 0;
+}
+
+.chat-msg-assistant.chat-md :last-child {
+    margin-bottom: 0;
+}
+
+.chat-msg-assistant.chat-md p,
+.chat-msg-assistant.chat-md ul,
+.chat-msg-assistant.chat-md ol {
+    margin: 0.35em 0;
+}
+
+.chat-msg-assistant.chat-md ul,
+.chat-msg-assistant.chat-md ol {
+    padding-left: 1.25rem;
+}
+
+.chat-msg-assistant.chat-md h1,
+.chat-msg-assistant.chat-md h2,
+.chat-msg-assistant.chat-md h3 {
+    margin: 0.5em 0 0.25em;
+    font-size: 1em;
+    font-weight: 600;
+}
+
+.chat-msg-assistant.chat-md code {
+    font-family: ui-monospace, monospace;
+    font-size: 0.92em;
+    background: rgba(255, 255, 255, 0.08);
+    padding: 0.1em 0.35em;
+    border-radius: 4px;
+}
+
+.chat-msg-assistant.chat-md pre {
+    margin: 0.35em 0;
+    padding: 0.45rem 0.55rem;
+    border-radius: 6px;
+    background: rgba(0, 0, 0, 0.25);
+    overflow-x: auto;
+}
+
+.chat-msg-assistant.chat-md pre code {
+    background: none;
+    padding: 0;
+}
+
+.chat-msg-assistant.chat-md a {
+    color: var(--accent, #3b82f6);
+}
+
+.chat-msg-assistant.chat-md .katex-display {
+    margin: 0.45em 0;
+    overflow-x: auto;
+    overflow-y: hidden;
 }
 
 .chat-msg-user {

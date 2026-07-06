@@ -80,6 +80,57 @@ function fillAgentPrompt(template, vars) {
     ));
 }
 
+let markdownReady = null;
+
+const KATEX_DELIMITERS = [
+    { left: '$$', right: '$$', display: true },
+    { left: '\\[', right: '\\]', display: true },
+    { left: '$', right: '$', display: false },
+    { left: '\\(', right: '\\)', display: false },
+];
+
+function ensureKatexCss() {
+    if (document.getElementById('chat-katex-css')) return;
+    const link = document.createElement('link');
+    link.id = 'chat-katex-css';
+    link.rel = 'stylesheet';
+    link.href = 'https://cdn.jsdelivr.net/npm/katex@0.16.11/dist/katex.min.css';
+    document.head.appendChild(link);
+}
+
+function loadMarkdown() {
+    if (!markdownReady) {
+        markdownReady = Promise.all([
+            import('https://esm.run/marked@12.0.0'),
+            import('https://esm.run/dompurify@3.2.4'),
+            import('https://esm.run/katex@0.16.11/contrib/auto-render'),
+        ]).then(([markedMod, purifyMod, autoRenderMod]) => {
+            ensureKatexCss();
+            return {
+                marked: markedMod.marked,
+                DOMPurify: purifyMod.default,
+                renderMathInElement: autoRenderMod.default || autoRenderMod.renderMathInElement,
+            };
+        });
+    }
+    return markdownReady;
+}
+
+async function formatAssistantMarkdown(text) {
+    const { marked, DOMPurify, renderMathInElement } = await loadMarkdown();
+    const html = DOMPurify.sanitize(marked.parse(String(text || '')));
+    const wrap = document.createElement('div');
+    wrap.innerHTML = html;
+    if (typeof renderMathInElement === 'function') {
+        renderMathInElement(wrap, {
+            delimiters: KATEX_DELIMITERS,
+            throwOnError: false,
+            ignoredTags: ['script', 'noscript', 'style', 'textarea', 'pre', 'code'],
+        });
+    }
+    return wrap.innerHTML;
+}
+
 function normalizeActions(actions) {
     if (!Array.isArray(actions)) return [];
     return actions.filter((a) => a && CHAT_ACTION_TYPES.has(a.type));
@@ -501,10 +552,15 @@ Changes apply to the protocol panel in the footer automatically.</div>
         chatLog('agent trace', entry);
     }
 
-    function appendMessage(role, content, className = '') {
+    async function appendMessage(role, content, className = '') {
         const el = document.createElement('div');
         el.className = `chat-msg chat-msg-${role}${className ? ` ${className}` : ''}`;
-        el.textContent = content;
+        if (role === 'assistant' && !className) {
+            el.classList.add('chat-md');
+            el.innerHTML = await formatAssistantMarkdown(content);
+        } else {
+            el.textContent = content;
+        }
         messagesEl.appendChild(el);
         messagesEl.scrollTop = messagesEl.scrollHeight;
     }
@@ -639,7 +695,7 @@ Changes apply to the protocol panel in the footer automatically.</div>
         const reply = extractReply(data);
         history.push({ role: 'assistant', content: reply });
         if (!internal) {
-            appendMessage('assistant', reply);
+            await appendMessage('assistant', reply);
         }
         return data;
     }
@@ -733,7 +789,7 @@ Changes apply to the protocol panel in the footer automatically.</div>
             if (finalData) finalReply = extractReply(finalData);
         }
 
-        appendMessage('assistant', finalReply || '(no reply)');
+        await appendMessage('assistant', finalReply || '(no reply)');
     }
 
     async function pingBackend() {
@@ -747,6 +803,7 @@ Changes apply to the protocol panel in the footer automatically.</div>
             if (data.agent_prompts) {
                 agentPrompts = { ...DEFAULT_AGENT_PROMPTS, ...data.agent_prompts };
             }
+            loadMarkdown().catch(() => {});
             statusEl.textContent = 'backend ok';
             statusEl.classList.add('is-ok');
             statusEl.classList.remove('is-error');
@@ -768,7 +825,7 @@ Changes apply to the protocol panel in the footer automatically.</div>
         try {
             await runAgentLoop(text, { bootstrap: !sessionBootstrapped });
         } catch (err) {
-            appendMessage('system', `Error: ${err.message || err}`, 'chat-msg-system');
+            await appendMessage('system', `Error: ${err.message || err}`, 'chat-msg-system');
         } finally {
             sendBtn.disabled = false;
             inputEl.focus();
