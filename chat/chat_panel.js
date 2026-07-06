@@ -5,7 +5,80 @@
 
 const DEFAULT_CHAT_API = 'http://127.0.0.1:8765';
 const CHAT_ACTION_TYPES = new Set(['select_sequence', 'set_param']);
-const STATE_PREFIX = '[Anyfield state]';
+const CONTEXT_UPDATE_PREFIX = '[Anyfield context update]';
+const CONTEXT_WAIT_MS = 20000;
+const CONTEXT_REFRESH_WAIT_MS = 5000;
+const MAX_AGENT_LOOPS = 3;
+const FAT_WATER_PPM = 3.5;
+const DEFAULT_GYRO_MHZ_T = 42.5764;
+const DEFAULT_AGENT_PROMPTS = {
+    after_select: (
+        'You just selected a new sequence (see the context update above).\n'
+        + 'User request: {user_request}\n\n'
+        + 'Do any parameters on this sequence need adjustment to fulfill that request? '
+        + 'Use selected.params and scanner.physics. Emit set_param actions if needed.'
+    ),
+    final_answer: (
+        'The client applied these protocol changes: {applied_actions}\n'
+        + 'Original user request: {user_request}\n\n'
+        + 'Write one concise final reply summarizing what you changed and answering the user. '
+        + 'You performed these changes yourself — do not ask the user to switch sequences. '
+        + 'Do not emit an action block.'
+    ),
+};
+
+function normalizeParamType(type) {
+    if (!type || type === 'None' || type === 'NoneType') return 'unknown';
+    return type;
+}
+
+/** Infer param type for chat context when seqExplorer reports NoneType/unknown. */
+function inferTypeFromValue(raw) {
+    if (raw === null || raw === undefined) return null;
+    if (typeof raw === 'boolean') return 'bool';
+    if (typeof raw === 'number') return Number.isInteger(raw) ? 'int' : 'float';
+    if (Array.isArray(raw)) return 'list';
+    if (typeof raw === 'string') {
+        const s = raw.trim();
+        if (!s) return 'str';
+        if (s === 'true' || s === 'false') return 'bool';
+        if (s.startsWith('[')) return 'list';
+        if (/^-?\d+$/.test(s)) return 'int';
+        if (/^-?\d+(\.\d+)?([eE][+-]?\d+)?$/.test(s)) return 'float';
+        return 'str';
+    }
+    return null;
+}
+
+function inferTypeFromName(name) {
+    const n = String(name || '').toLowerCase();
+    if (/^n_|^num_|^shots$|^dum|^r_spoil|^nread|^nphase$|^fa_ref$|^fa$/.test(n)) return 'int';
+    if (/times$|_s$|^te$|^tr$|^ti|^dwell|^dte$|^slice_thickness$|^alpha$/.test(n)) return 'float';
+    if (/^show_|^test_|^timing_|^pe_grad|^ro_grad|^v141|^plot|^write_/.test(n)) return 'bool';
+    if (/^experiment_id$|^petype$|^seq_filename$/.test(n)) return 'str';
+    if (/inversion_times|^fov/.test(n)) return 'list';
+    return null;
+}
+
+function effectiveParamType(param, raw) {
+    const fromName = inferTypeFromName(param.name);
+    const fromValue = inferTypeFromValue(raw);
+    const normalized = normalizeParamType(param.type);
+
+    if (normalized !== 'unknown') {
+        // UI inputs stringify numbers — do not let that become type "str" in context.
+        if (normalized === 'str' && fromName && fromName !== 'str') return fromName;
+        if (normalized === 'str' && fromValue && fromValue !== 'str') return fromValue;
+        return normalized;
+    }
+    return fromName || fromValue || 'unknown';
+}
+
+function fillAgentPrompt(template, vars) {
+    return String(template || '').replace(/\{(\w+)\}/g, (_, key) => (
+        vars[key] !== undefined && vars[key] !== null ? String(vars[key]) : ''
+    ));
+}
 
 function normalizeActions(actions) {
     if (!Array.isArray(actions)) return [];
@@ -33,17 +106,22 @@ function chatApiBase() {
     return DEFAULT_CHAT_API;
 }
 
-function parseParamValue(param, raw) {
-    if (param.type === 'bool') return !!raw;
-    if (param.type === 'int') {
+function resolveParamValue(param, raw, type = null) {
+    if (raw === null || raw === undefined) return null;
+    const t = type || effectiveParamType(param, raw);
+    if (t === 'bool') return !!raw;
+    if (t === 'int') {
+        if (typeof raw === 'number') return Number.isFinite(raw) ? Math.trunc(raw) : raw;
         const n = parseInt(String(raw), 10);
         return Number.isFinite(n) ? n : raw;
     }
-    if (param.type === 'float') {
+    if (t === 'float') {
+        if (typeof raw === 'number') return Number.isFinite(raw) ? raw : raw;
         const n = parseFloat(String(raw));
         return Number.isFinite(n) ? n : raw;
     }
-    if (param.type === 'list' || param.type === 'ndarray') {
+    if (t === 'list' || t === 'ndarray') {
+        if (Array.isArray(raw)) return raw;
         const s = String(raw).trim();
         if (s.startsWith('[')) {
             try {
@@ -57,53 +135,139 @@ function parseParamValue(param, raw) {
     return raw;
 }
 
+function parseParamValue(param, raw) {
+    return resolveParamValue(param, raw);
+}
+
 function sequenceShortLabel(fileName, functionName) {
     const stem = String(fileName || '').split('.').pop()?.replace(/\.py$/i, '') || fileName;
     return `${stem}:${functionName}`;
 }
 
-/** Infer B0 (T) from phantom name tokens like 3T, 1.5T, 1-5T, 0.5T, 7T. */
 function inferB0FromPhantomName(name) {
     const s = String(name || '');
     if (!s) return null;
-
     const decimal = s.match(/(\d+\.\d+)\s*-?\s*T\b/i);
     if (decimal) return parseFloat(decimal[1]);
-
     const hyphenHalf = s.match(/(\d+)-5T\b/i);
     if (hyphenHalf) return parseFloat(hyphenHalf[1]) + 0.5;
-
     const integer = s.match(/(?:^|[^.\d])(\d+)\s*-?\s*T\b/i);
     if (integer) return parseFloat(integer[1]);
-
     return null;
 }
 
-function buildPhantomContext() {
-    const nv = window.nvModule;
-    const group = nv?.getActivePhantomGroup?.();
-    if (!group) return null;
+function catalogEntryKey(entry) {
+    return `${entry.file}:${entry.function}`;
+}
 
-    const name = group.jsonName || group.jsonFileName || 'phantom';
-    let B0_T = null;
-    let gyro_MHz_T = null;
-    const raw = nv?.getPhantomJsonContent?.(group);
+function catalogKeysFromCatalog(catalog) {
+    return catalog.map(catalogEntryKey).sort();
+}
+
+function computeCatalogDiff(prevKeys, nextKeys) {
+    const prev = new Set(prevKeys || []);
+    const next = new Set(nextKeys);
+    return {
+        added: nextKeys.filter((k) => !prev.has(k)),
+        removed: [...prev].filter((k) => !next.has(k)).sort(),
+    };
+}
+
+/** General MRI timing hints derived from B0 and phantom tissue properties. */
+function computeScannerPhysics(parsed, B0_T, gyro_MHz_T) {
+    const physics = {};
+    if (B0_T != null && gyro_MHz_T != null) {
+        physics.larmor_MHz = Math.round(gyro_MHz_T * B0_T * 1000) / 1000;
+        const hz = FAT_WATER_PPM * gyro_MHz_T * B0_T;
+        physics.fat_water_delta_hz = Math.round(hz * 10) / 10;
+        if (hz > 0) {
+            physics.opposed_phase_te_s = Math.round((1 / (2 * hz)) * 100000) / 100000;
+        }
+    }
+    const tissues = parsed?.tissues;
+    if (tissues && typeof tissues === 'object') {
+        const tissues_s = {};
+        const ir_null_ti_s = {};
+        for (const [key, t] of Object.entries(tissues)) {
+            if (!t || typeof t !== 'object') continue;
+            const entry = {};
+            for (const prop of ['T1', 'T2']) {
+                if (typeof t[prop] === 'number') entry[prop] = t[prop];
+            }
+            if (Object.keys(entry).length) tissues_s[key] = entry;
+            if (typeof t.T1 === 'number') {
+                ir_null_ti_s[key] = Math.round(t.T1 * Math.LN2 * 100000) / 100000;
+            }
+        }
+        if (Object.keys(tissues_s).length) physics.tissues_s = tissues_s;
+        if (Object.keys(ir_null_ti_s).length) {
+            physics.ir_null_ti_s = ir_null_ti_s;
+            physics.legend = {
+                tissues_s: 'T1/T2 relaxation times in seconds',
+                ir_null_ti_s: 'IR inversion-null time in seconds (= tissue T1 * ln(2)); use for TI/TI_s, not tissues_s.T1',
+                opposed_phase_te_s: 'Echo time for fat-water opposed phase in seconds',
+                fat_water_delta_hz: 'Fat-water chemical shift in Hz',
+            };
+        }
+    }
+    return physics;
+}
+
+/** Scanner / phantom context — always an object (never null). */
+function buildScannerContext() {
+    const nv = window.nvModule;
+    const base = {
+        name: 'unknown',
+        json_file: null,
+        B0_T: null,
+        gyro_MHz_T: DEFAULT_GYRO_MHZ_T,
+        physics: {},
+    };
+    if (!nv) return base;
+
+    let group = nv.getActivePhantomGroup?.() ?? null;
+    let raw = group ? nv.getPhantomJsonContent?.(group) : null;
+    let jsonFile = group?.jsonFileName || group?.jsonName || null;
+
+    if (!raw && nv.getSelectedJsonForSim) {
+        const simJson = nv.getSelectedJsonForSim(group);
+        if (simJson?.content?.trim()) {
+            raw = simJson.content;
+            jsonFile = simJson.fileName || jsonFile;
+        }
+    }
+
+    if (!raw && nv.volumeGroups?.length) {
+        group = nv.volumeGroups.find(
+            (g) => g.jsonContent || g.jsonFileName || g.jsonName,
+        ) ?? group;
+        if (group) {
+            raw = nv.getPhantomJsonContent?.(group) || group.jsonContent || null;
+            jsonFile = group.jsonFileName || group.jsonName || jsonFile;
+        }
+    }
+
+    const name = group?.jsonName || group?.jsonFileName || jsonFile || base.name;
+    let parsed = null;
+    let B0_T = inferB0FromPhantomName(name);
+    let gyro_MHz_T = DEFAULT_GYRO_MHZ_T;
+
     if (raw) {
         try {
-            const parsed = JSON.parse(raw);
-            B0_T = parsed?.system?.B0 ?? null;
-            gyro_MHz_T = parsed?.system?.gyro ?? null;
+            parsed = JSON.parse(raw);
+            B0_T = parsed?.system?.B0 ?? B0_T;
+            gyro_MHz_T = parsed?.system?.gyro ?? gyro_MHz_T;
         } catch (_) {
             /* ignore parse errors */
         }
     }
-    if (B0_T == null) B0_T = inferB0FromPhantomName(name);
 
     return {
         name,
-        json_file: group.jsonFileName || null,
+        json_file: jsonFile,
         B0_T,
         gyro_MHz_T,
+        physics: computeScannerPhysics(parsed, B0_T, gyro_MHz_T),
     };
 }
 
@@ -118,50 +282,114 @@ function buildSequenceCatalog(ex) {
     return catalog;
 }
 
-function formatStateBlock(selected) {
-    return `${STATE_PREFIX}\n${JSON.stringify({ selected }, null, 2)}`;
-}
-
-function formatUserMessageWithState(text, selected) {
-    const stateBlock = formatStateBlock(selected);
-    return text ? `${stateBlock}\n\n${text}` : stateBlock;
+function buildParamEntries(ex) {
+    if (!ex?.functionParams) return [];
+    return ex.functionParams.map((param) => {
+        const { hasValue, value } = ex._readCurrentParamValue(param);
+        const raw = hasValue ? value : param.default;
+        const type = effectiveParamType(param, raw);
+        return {
+            name: param.name,
+            type,
+            value: resolveParamValue(param, raw, type),
+        };
+    });
 }
 
 function buildSelectedState(ex) {
     const sel = ex?.selectedSequence;
     if (!sel) return null;
 
-    const params = {};
-    if (ex.functionParams) {
-        for (const param of ex.functionParams) {
-            const { hasValue, value } = ex._readCurrentParamValue(param);
-            if (hasValue) {
-                params[param.name] = parseParamValue(param, value);
-            }
-        }
-    }
-
     return {
         file: sel.fileName,
         function: sel.functionName,
         label: sequenceShortLabel(sel.fileName, sel.functionName),
-        params,
+        params: buildParamEntries(ex),
     };
 }
 
-function fingerprintSelectedState(selected) {
-    if (!selected) return null;
-    return JSON.stringify(selected);
-}
-
-function buildChatContext(stateChanged = true) {
+function snapshotContext() {
     const ex = window.seqExplorer;
     return {
         selected: buildSelectedState(ex),
-        sequence_catalog: buildSequenceCatalog(ex),
-        phantom: buildPhantomContext(),
-        pyodide_ready: !!ex?.config?.pyodide,
-        state_changed: !!stateChanged,
+        catalog: buildSequenceCatalog(ex),
+        scanner: buildScannerContext(),
+    };
+}
+
+function buildApiContext(snapshot) {
+    return {
+        selected: snapshot.selected,
+        catalog: snapshot.catalog,
+        scanner: snapshot.scanner,
+    };
+}
+
+function fingerprintCatalog(catalog) {
+    return JSON.stringify(catalogKeysFromCatalog(catalog || []));
+}
+
+function fingerprintScanner(scanner) {
+    return JSON.stringify(scanner || {});
+}
+
+function fingerprintSelected(selected) {
+    return JSON.stringify(selected ?? null);
+}
+
+function fingerprintSnapshot(snapshot) {
+    return {
+        catalog: fingerprintCatalog(snapshot.catalog),
+        scanner: fingerprintScanner(snapshot.scanner),
+        selected: fingerprintSelected(snapshot.selected),
+    };
+}
+
+function applyModelKnown(modelKnown, fp) {
+    if (fp.catalog != null) modelKnown.catalog = fp.catalog;
+    if (fp.scanner != null) modelKnown.scanner = fp.scanner;
+    if ('selected' in fp) modelKnown.selected = fp.selected;
+    if (fp.bootstrapped) modelKnown.bootstrapped = true;
+}
+
+/** Diff live state vs what the model was last told (user UI or agent actions). */
+function buildContextDelta(snapshot, modelKnown) {
+    if (!modelKnown.bootstrapped) {
+        return { content: null, updates: {} };
+    }
+
+    const delta = {};
+    const updates = {};
+
+    const catalogFp = fingerprintCatalog(snapshot.catalog);
+    if (catalogFp !== modelKnown.catalog) {
+        const prevKeys = modelKnown.catalog ? JSON.parse(modelKnown.catalog) : [];
+        const diff = computeCatalogDiff(prevKeys, catalogKeysFromCatalog(snapshot.catalog));
+        if (diff.added.length || diff.removed.length) {
+            delta.catalog = diff;
+            updates.catalog = catalogFp;
+        }
+    }
+
+    const scannerFp = fingerprintScanner(snapshot.scanner);
+    if (scannerFp !== modelKnown.scanner) {
+        delta.scanner = snapshot.scanner;
+        updates.scanner = scannerFp;
+    }
+
+    const selectedFp = fingerprintSelected(snapshot.selected);
+    if (selectedFp !== modelKnown.selected) {
+        delta.selected = snapshot.selected;
+        updates.selected = selectedFp;
+    }
+
+    if (!Object.keys(delta).length) {
+        return { content: null, updates: {} };
+    }
+
+    return {
+        content: `${CONTEXT_UPDATE_PREFIX}\n${JSON.stringify(delta, null, 2)}`,
+        updates,
     };
 }
 
@@ -195,8 +423,24 @@ export async function runChatActions(actions) {
                     break;
                 }
                 case 'set_param': {
-                    ex.updateParamValue(action.name, action.value);
-                    applied.push(formatActionSummary(action));
+                    const params = ex.functionParams || [];
+                    const param = params.find((p) => p.name === action.name);
+                    if (!param) {
+                        throw new Error(
+                            `parameter "${action.name}" not on current sequence — select sequence first`,
+                        );
+                    }
+                    let value = action.value;
+                    const paramType = effectiveParamType(param, value);
+                    if (
+                        (paramType === 'list' || paramType === 'ndarray')
+                        && value != null
+                        && !Array.isArray(value)
+                    ) {
+                        value = [value];
+                    }
+                    ex.updateParamValue(action.name, value);
+                    applied.push(formatActionSummary({ ...action, value }));
                     break;
                 }
             }
@@ -240,8 +484,22 @@ Changes apply to the protocol panel in the footer automatically.</div>
 
     /** @type {{ role: string, content: string }[]} */
     const history = [];
-    /** Fingerprint of selected state last appended to a new user message. */
-    let lastSentStateFingerprint = null;
+    const modelKnown = {
+        bootstrapped: false,
+        catalog: null,
+        scanner: null,
+        selected: null,
+    };
+    let frozenBootstrapContext = null;
+    let sessionBootstrapped = false;
+    let maxAgentLoops = MAX_AGENT_LOOPS;
+    let agentPrompts = { ...DEFAULT_AGENT_PROMPTS };
+    let agentLoopTrace = [];
+
+    function recordAgentTrace(entry) {
+        agentLoopTrace.push({ ...entry, at: Date.now() });
+        chatLog('agent trace', entry);
+    }
 
     function appendMessage(role, content, className = '') {
         const el = document.createElement('div');
@@ -251,15 +509,249 @@ Changes apply to the protocol panel in the footer automatically.</div>
         messagesEl.scrollTop = messagesEl.scrollHeight;
     }
 
+    async function waitForContextReady(maxMs) {
+        const deadline = Date.now() + maxMs;
+        while (Date.now() < deadline) {
+            const snap = snapshotContext();
+            const catalogOk = snap.catalog.length > 0;
+            const selectedOk = !!snap.selected;
+            const scannerOk = !window.nvModule?.volumeGroups?.length
+                || !!window.nvModule.getActivePhantomGroup?.()
+                || snap.scanner?.B0_T != null
+                || snap.scanner?.name !== 'unknown';
+            if (catalogOk && selectedOk && scannerOk) return snap;
+            await new Promise((resolve) => setTimeout(resolve, 250));
+        }
+        const snap = snapshotContext();
+        const missing = [];
+        if (!snap.catalog.length) missing.push('sequence catalog');
+        if (!snap.selected) missing.push('selected sequence');
+        if (window.nvModule?.volumeGroups?.length
+            && !window.nvModule.getActivePhantomGroup?.()
+            && snap.scanner?.name === 'unknown'
+            && snap.scanner?.B0_T == null) {
+            missing.push('phantom/scanner');
+        }
+        if (missing.length) {
+            throw new Error(`Still loading: ${missing.join(', ')}. Try again in a moment.`);
+        }
+        return snap;
+    }
+
+    async function postChatRequest(userContent, snapshot, { bootstrap = false, agentMeta = null } = {}) {
+        history.push({ role: 'user', content: userContent });
+        const requestBody = {
+            messages: history,
+            context: buildApiContext(snapshot),
+        };
+        if (bootstrap || frozenBootstrapContext) {
+            requestBody.bootstrap_context = frozenBootstrapContext || buildApiContext(snapshot);
+        }
+        if (agentMeta) {
+            requestBody.agent_meta = { ...agentMeta, trace: agentLoopTrace };
+        }
+        chatLog('request', requestBody);
+
+        const res = await fetch(`${chatApiBase()}/chat`, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify(requestBody),
+        });
+        if (!res.ok) {
+            history.pop();
+            const detail = await res.text();
+            throw new Error(detail || res.statusText);
+        }
+        return res.json();
+    }
+
+    function extractReply(data) {
+        return String(data?.message || '').trim() || '(no reply)';
+    }
+
+    /** Push a context delta into history and advance modelKnown — no LLM call. */
+    async function recordContextDelta() {
+        const snapshot = snapshotContext();
+        const { content, updates } = buildContextDelta(snapshot, modelKnown);
+        if (!content) return false;
+        history.push({ role: 'user', content });
+        applyModelKnown(modelKnown, updates);
+        chatLog('context delta recorded', content);
+        return true;
+    }
+
+    /**
+     * One LLM turn. Internal turns update history only; visible turns also update the UI
+     * (used for the single final reply at the end of runAgentLoop).
+     */
+    async function deliverToModel({
+        userText = '',
+        bootstrap = false,
+        internal = false,
+        agentMeta = null,
+    } = {}) {
+        const snapshot = await waitForContextReady(
+            bootstrap ? CONTEXT_WAIT_MS : CONTEXT_REFRESH_WAIT_MS,
+        );
+
+        if (bootstrap) {
+            if (sessionBootstrapped) {
+                throw new Error('Internal error: bootstrap called twice');
+            }
+            frozenBootstrapContext = buildApiContext(snapshot);
+        }
+
+        let userContent = userText;
+        let pendingUpdates = null;
+
+        if (!bootstrap) {
+            const { content: deltaBlock, updates } = buildContextDelta(snapshot, modelKnown);
+            if (deltaBlock) {
+                pendingUpdates = updates;
+                userContent = userText ? `${deltaBlock}\n\n${userText}` : deltaBlock;
+            } else if (internal && !userText) {
+                return null;
+            }
+        }
+
+        if (!userContent.trim()) {
+            throw new Error('Empty message');
+        }
+
+        const data = await postChatRequest(userContent, snapshot, { bootstrap, agentMeta });
+        chatLog('response', data);
+
+        if (data?.actions?.length) {
+            recordAgentTrace({
+                phase: agentMeta?.phase || (internal ? 'internal' : 'user'),
+                model_actions: data.actions,
+                reply: extractReply(data),
+            });
+        }
+
+        if (bootstrap) {
+            applyModelKnown(modelKnown, { ...fingerprintSnapshot(snapshot), bootstrapped: true });
+            sessionBootstrapped = true;
+        } else if (pendingUpdates) {
+            applyModelKnown(modelKnown, pendingUpdates);
+        }
+
+        const reply = extractReply(data);
+        history.push({ role: 'assistant', content: reply });
+        if (!internal) {
+            appendMessage('assistant', reply);
+        }
+        return data;
+    }
+
+    async function runAgentLoop(initialUserText, { bootstrap = false } = {}) {
+        agentLoopTrace = [];
+        const appliedAll = [];
+        let finalReply = null;
+        let data = await deliverToModel({
+            userText: initialUserText,
+            bootstrap,
+            internal: true,
+            agentMeta: { phase: 'initial', user_request: initialUserText },
+        });
+        if (data) finalReply = extractReply(data);
+
+        let loops = 0;
+
+        while (loops < maxAgentLoops && data) {
+            const actions = normalizeActions(data.actions || []);
+            if (!actions.length) break;
+
+            const selects = actions.filter((a) => a.type === 'select_sequence');
+            const params = actions.filter((a) => a.type === 'set_param');
+
+            if (selects.length) {
+                const { applied, errors } = await runChatActions(selects);
+                if (applied.length) {
+                    appliedAll.push(...applied);
+                    appendMessage('system', `Applied: ${applied.join('; ')}`, 'chat-msg-actions');
+                    recordAgentTrace({ phase: 'apply_select', applied, errors });
+                }
+                if (errors.length) {
+                    appendMessage('system', errors.join('\n'), 'chat-msg-system');
+                }
+                if (!applied.length) break;
+
+                if (params.length) {
+                    await recordContextDelta();
+                    const { applied: pApplied, errors: pErrors } = await runChatActions(params);
+                    if (pApplied.length) {
+                        appliedAll.push(...pApplied);
+                        appendMessage('system', `Applied: ${pApplied.join('; ')}`, 'chat-msg-actions');
+                        recordAgentTrace({ phase: 'apply_params', applied: pApplied, errors: pErrors });
+                    }
+                    if (pErrors.length) {
+                        appendMessage('system', pErrors.join('\n'), 'chat-msg-system');
+                    }
+                    await recordContextDelta();
+                    break;
+                }
+
+                loops += 1;
+                data = await deliverToModel({
+                    internal: true,
+                    userText: fillAgentPrompt(agentPrompts.after_select, {
+                        user_request: initialUserText,
+                    }),
+                    agentMeta: { phase: 'after_select', loop: loops, user_request: initialUserText },
+                });
+                if (data) finalReply = extractReply(data);
+                continue;
+            }
+
+            const { applied, errors } = await runChatActions(actions);
+            if (applied.length) {
+                appliedAll.push(...applied);
+                appendMessage('system', `Applied: ${applied.join('; ')}`, 'chat-msg-actions');
+                recordAgentTrace({ phase: 'apply_params', applied, errors });
+            }
+            if (errors.length) {
+                appendMessage('system', errors.join('\n'), 'chat-msg-system');
+            }
+            await recordContextDelta();
+            break;
+        }
+
+        if (appliedAll.length) {
+            const finalData = await deliverToModel({
+                internal: true,
+                userText: fillAgentPrompt(agentPrompts.final_answer, {
+                    user_request: initialUserText,
+                    applied_actions: appliedAll.join('; '),
+                }),
+                agentMeta: {
+                    phase: 'final_answer',
+                    applied: appliedAll,
+                    user_request: initialUserText,
+                },
+            });
+            if (finalData) finalReply = extractReply(finalData);
+        }
+
+        appendMessage('assistant', finalReply || '(no reply)');
+    }
+
     async function pingBackend() {
         try {
             const res = await fetch(`${chatApiBase()}/health`, { cache: 'no-store' });
             if (!res.ok) throw new Error(String(res.status));
+            const data = await res.json();
+            if (Number.isFinite(data.max_agent_loops) && data.max_agent_loops > 0) {
+                maxAgentLoops = data.max_agent_loops;
+            }
+            if (data.agent_prompts) {
+                agentPrompts = { ...DEFAULT_AGENT_PROMPTS, ...data.agent_prompts };
+            }
             statusEl.textContent = 'backend ok';
             statusEl.classList.add('is-ok');
             statusEl.classList.remove('is-error');
         } catch (_) {
-            statusEl.textContent = 'backend offline';
+            statusEl.textContent = 'offline';
             statusEl.classList.add('is-error');
             statusEl.classList.remove('is-ok');
         }
@@ -273,47 +765,8 @@ Changes apply to the protocol panel in the footer automatically.</div>
         sendBtn.disabled = true;
         appendMessage('user', text);
 
-        const selected = buildSelectedState(window.seqExplorer);
-        const fp = fingerprintSelectedState(selected);
-        const stateChanged = fp !== lastSentStateFingerprint;
-        const includeState = stateChanged && selected;
-        const userContent = includeState
-            ? formatUserMessageWithState(text, selected)
-            : text;
-        if (includeState) {
-            lastSentStateFingerprint = fp;
-        }
-        history.push({ role: 'user', content: userContent });
-
-        const requestBody = {
-            messages: history,
-            context: buildChatContext(includeState),
-        };
-        chatLog('request', requestBody);
-
         try {
-            const res = await fetch(`${chatApiBase()}/chat`, {
-                method: 'POST',
-                headers: { 'Content-Type': 'application/json' },
-                body: JSON.stringify(requestBody),
-            });
-            if (!res.ok) {
-                const detail = await res.text();
-                throw new Error(detail || res.statusText);
-            }
-            const data = await res.json();
-            chatLog('response', data);
-            const reply = String(data.message || '').trim() || '(no reply)';
-            appendMessage('assistant', reply);
-            history.push({ role: 'assistant', content: reply });
-
-            const { applied, errors } = await runChatActions(data.actions || []);
-            if (applied.length) {
-                appendMessage('system', `Applied: ${applied.join('; ')}`, 'chat-msg-actions');
-            }
-            if (errors.length) {
-                appendMessage('system', errors.join('\n'), 'chat-msg-system');
-            }
+            await runAgentLoop(text, { bootstrap: !sessionBootstrapped });
         } catch (err) {
             appendMessage('system', `Error: ${err.message || err}`, 'chat-msg-system');
         } finally {
