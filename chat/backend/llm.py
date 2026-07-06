@@ -13,6 +13,25 @@ log = get_logger()
 _JSON_BLOCK_RE = re.compile(r"```(?:json)?\s*(\{[\s\S]*?\})\s*```", re.IGNORECASE)
 
 
+def _generation_kwargs() -> dict[str, Any]:
+    raw = os.getenv("LLM_GENERATION", "").strip()
+    if not raw:
+        return {"temperature": 0.3}
+    try:
+        parsed = json.loads(raw)
+    except json.JSONDecodeError as exc:
+        log.warning("invalid LLM_GENERATION JSON, using temperature=0.3: %s", exc)
+        return {"temperature": 0.3}
+    if not isinstance(parsed, dict):
+        log.warning("LLM_GENERATION must be a JSON object, using temperature=0.3")
+        return {"temperature": 0.3}
+    return parsed
+
+
+def generation_kwargs() -> dict[str, Any]:
+    return dict(_generation_kwargs())
+
+
 def _client() -> OpenAI:
     base_url = os.getenv("LLM_BASE_URL", "http://127.0.0.1:8080/v1").rstrip("/")
     if not base_url.endswith("/v1"):
@@ -51,7 +70,6 @@ def _format_bootstrap_context(context: dict[str, Any]) -> str:
 
 
 def _estimate_tokens(text: str) -> int:
-    """Rough heuristic (~4 chars/token); llama.cpp n_tokens is authoritative."""
     return max(1, len(text) // 4)
 
 
@@ -86,20 +104,22 @@ def chat_completion(
     api_messages = _build_api_messages(messages, bootstrap_context)
     payload_text = json.dumps(api_messages, ensure_ascii=False)
     est_tokens = _estimate_tokens(payload_text)
+    gen = _generation_kwargs()
 
     log.info(
-        "LLM request model=%s api_messages=%d est_prompt_tokens~%d frozen_bootstrap=%s",
+        "LLM request model=%s api_messages=%d est_prompt_tokens~%d frozen_bootstrap=%s generation=%s",
         model,
         len(api_messages),
         est_tokens,
         bootstrap_context is not None,
+        json.dumps(gen, ensure_ascii=False),
     )
     log.debug("LLM full payload:\n%s", json.dumps(api_messages, indent=2, ensure_ascii=False))
 
     response = client.chat.completions.create(
         model=model,
         messages=api_messages,
-        temperature=0.3,
+        **gen,
     )
     raw = (response.choices[0].message.content or "").strip()
     actions = _parse_actions(raw)

@@ -34,6 +34,7 @@ Open http://localhost:8000/ → header chat view.
 | `LLM_BASE_URL` | `http://127.0.0.1:8080/v1` | OpenAI-compatible base URL |
 | `LLM_MODEL` | `local` | Model name (llama.cpp alias) |
 | `LLM_API_KEY` | `local` | API key (local servers often ignore) |
+| `LLM_GENERATION` | `{"temperature": 0.3}` | JSON object forwarded to `chat.completions.create` (any API-supported keys) |
 | `CHAT_HOST` | `127.0.0.1` | Bind address |
 | `CHAT_PORT` | `8765` | Bind port |
 | `CORS_ORIGINS` | `http://localhost:8000,…` | Allowed Anyfield origins |
@@ -45,6 +46,8 @@ Open http://localhost:8000/ → header chat view.
 
 Edit prompts in `prompts.py` (`SYSTEM_PROMPT`, `AGENT_AFTER_SELECT`, `AGENT_FINAL_ANSWER`); restart backend to apply.
 
+Tune generation via `LLM_GENERATION` JSON in `.env` (e.g. `max_tokens`, `top_p`, etc.).
+
 ## API
 
 ### `GET /health`
@@ -55,6 +58,7 @@ Panel init: backend reachability, agent loop limit, follow-up prompt templates.
 {
   "status": "ok",
   "max_agent_loops": 3,
+  "generation": {"temperature": 0.3},
   "agent_prompts": {
     "after_select": "…",
     "final_answer": "…"

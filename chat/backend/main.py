@@ -12,7 +12,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel, ConfigDict, Field
 import uvicorn
 
-from llm import chat_completion
+from llm import chat_completion, generation_kwargs
 from log_config import setup_logging
 
 load_dotenv()
@@ -98,6 +98,7 @@ def health() -> dict[str, Any]:
     return {
         "status": "ok",
         "max_agent_loops": int(os.getenv("CHAT_MAX_AGENT_LOOPS", "3")),
+        "generation": generation_kwargs(),
         "agent_prompts": {
             "after_select": AGENT_AFTER_SELECT,
             "final_answer": AGENT_FINAL_ANSWER,
