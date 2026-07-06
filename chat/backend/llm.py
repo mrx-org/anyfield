@@ -43,36 +43,11 @@ def _strip_json_block(text: str) -> str:
     return cleaned.strip()
 
 
-def _format_sequence_catalog(catalog: list[dict[str, Any]]) -> str:
-    if not catalog:
-        return "(catalog empty — sequences may still be loading)"
-    lines = []
-    for entry in catalog:
-        file_key = entry.get("file") or "?"
-        func = entry.get("function") or "?"
-        lines.append(f"{file_key}:{func}")
-    return "\n".join(lines)
-
-
-def _build_system_content(context: dict[str, Any] | None) -> str:
-    ctx = context or {}
-    parts = [SYSTEM_PROMPT.rstrip()]
-
-    catalog = ctx.get("sequence_catalog") or []
-    parts.append("\n--- Sequence catalog ---")
-    parts.append(_format_sequence_catalog(catalog))
-
-    phantom = ctx.get("phantom")
-    parts.append("\n--- Phantom ---")
-    if phantom:
-        parts.append(json.dumps(phantom, indent=2, default=str))
-    else:
-        parts.append("(no phantom loaded)")
-
-    py_ready = ctx.get("pyodide_ready", False)
-    parts.append(f"\npyodide_ready: {py_ready}")
-
-    return "\n".join(parts)
+def _format_bootstrap_context(context: dict[str, Any]) -> str:
+    return (
+        "\n\n--- Anyfield context (JSON) ---\n"
+        + json.dumps(context, indent=2, ensure_ascii=False, default=str)
+    )
 
 
 def _estimate_tokens(text: str) -> int:
@@ -82,9 +57,12 @@ def _estimate_tokens(text: str) -> int:
 
 def _build_api_messages(
     messages: list[dict[str, str]],
-    context: dict[str, Any] | None,
+    bootstrap_context: dict[str, Any] | None = None,
 ) -> list[dict[str, str]]:
-    system_content = _build_system_content(context)
+    system_content = SYSTEM_PROMPT
+    if bootstrap_context:
+        system_content += _format_bootstrap_context(bootstrap_context)
+
     api_messages: list[dict[str, str]] = [{"role": "system", "content": system_content}]
 
     for msg in messages:
@@ -100,23 +78,21 @@ def _build_api_messages(
 
 def chat_completion(
     messages: list[dict[str, str]],
-    context: dict[str, Any] | None = None,
+    bootstrap_context: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
-    """Call the LLM and return {message, actions}."""
     client = _client()
     model = os.getenv("LLM_MODEL", "local")
 
-    api_messages = _build_api_messages(messages, context)
+    api_messages = _build_api_messages(messages, bootstrap_context)
     payload_text = json.dumps(api_messages, ensure_ascii=False)
     est_tokens = _estimate_tokens(payload_text)
 
     log.info(
-        "LLM request model=%s api_messages=%d est_prompt_tokens~%d state_changed=%s catalog=%d",
+        "LLM request model=%s api_messages=%d est_prompt_tokens~%d frozen_bootstrap=%s",
         model,
         len(api_messages),
         est_tokens,
-        (context or {}).get("state_changed", True),
-        len((context or {}).get("sequence_catalog") or []),
+        bootstrap_context is not None,
     )
     log.debug("LLM full payload:\n%s", json.dumps(api_messages, indent=2, ensure_ascii=False))
 
