@@ -1,8 +1,10 @@
 # Chat backend
 
-FastAPI service for the Anyfield chat panel. Forwards chat + context to an OpenAI-compatible LLM and returns text plus optional **actions** for the browser.
+FastAPI service for the Anyfield chat panel. Forwards chat history + frozen bootstrap context to an OpenAI-compatible LLM; returns text and optional **actions** for the browser agent loop.
 
 Not the MRI simulation stack — only powers `../chat_panel.js`.
+
+**Protocol & agent-loop design:** [insights/SPEC_chat_assistant.md](../../insights/SPEC_chat_assistant.md)
 
 ## Quick start
 
@@ -23,7 +25,7 @@ Anyfield (repo root):
 python -m http.server 8000
 ```
 
-Open http://localhost:8000/ → header chat view (message bubble).
+Open http://localhost:8000/ → header chat view.
 
 ## Configuration
 
@@ -35,34 +37,57 @@ Open http://localhost:8000/ → header chat view (message bubble).
 | `CHAT_HOST` | `127.0.0.1` | Bind address |
 | `CHAT_PORT` | `8765` | Bind port |
 | `CORS_ORIGINS` | `http://localhost:8000,…` | Allowed Anyfield origins |
-| `LOG_LEVEL` | `INFO` | Use `DEBUG` for full LLM I/O |
+| `LOG_LEVEL` | `INFO` | Use `DEBUG` for full LLM I/O (`.env.example` ships `DEBUG`) |
 | `LOG_FILE` | `logs/chat.log` | Rotating log path |
 | `LOG_MAX_BYTES` | `2097152` | Max log file size before rotation |
 | `LOG_BACKUP_COUNT` | `3` | Rotated log copies to keep |
+| `CHAT_MAX_AGENT_LOOPS` | `3` | Max post-select agent rounds per user message (via `/health`) |
+
+Edit prompts in `prompts.py` (`SYSTEM_PROMPT`, `AGENT_AFTER_SELECT`, `AGENT_FINAL_ANSWER`); restart backend to apply.
 
 ## API
 
 ### `GET /health`
 
+Panel init: backend reachability, agent loop limit, follow-up prompt templates.
+
 ```json
-{"status": "ok", "service": "anyfield-chat-backend"}
+{
+  "status": "ok",
+  "max_agent_loops": 3,
+  "agent_prompts": {
+    "after_select": "…",
+    "final_answer": "…"
+  }
+}
 ```
+
+Client merges `agent_prompts` over built-in defaults when offline/unreachable.
 
 ### `POST /chat`
 
-Request body: `messages`, `context` (see [SPEC_chat_assistant.md](../../insights/SPEC_chat_assistant.md)).
+Request body:
 
-Response: `message`, optional `actions` (applied in browser via `runChatActions()`).
+- `messages` — full chat history (user + assistant turns sent to the LLM)
+- `context` — **live** snapshot `{ selected, catalog, scanner }` (logging; `selected` in INFO logs is current UI state)
+- `bootstrap_context` — **frozen** turn-1 `{ selected, catalog, scanner }` (re-sent every request; appended to the system prompt for KV-cache stability)
+- `agent_meta` — optional client agent-loop metadata + `trace` (logging)
+
+Response: `{ "message": "…", "actions": [ … ] }`. Actions are applied in the browser (`runChatActions` in `chat_panel.js`).
 
 ## Actions
 
 | Type | Fields | Client |
 |------|--------|--------|
-| `select_sequence` | `file`, `function` | `selectSequenceByFileAndFunction` |
-| `set_param` | `name`, `value` | `updateParamValue` |
+| `select_sequence` | `file`, `function` | `seqExplorer.selectSequenceByFileAndFunction` |
+| `set_param` | `name`, `value` | `seqExplorer.updateParamValue` |
 
 ## Logging
 
-Full message list at INFO; LLM payload and raw output at DEBUG. Console + `logs/chat.log` (gitignored).
+At INFO: each POST logs live `selected`, frozen-bootstrap flag, context-update presence, last user message, agent trace when present.
+
+At DEBUG: turn-1 bootstrap JSON; full LLM request payload and raw response.
+
+Console + `logs/chat.log` (gitignored). Warns if turn 2+ arrives without `bootstrap_context`.
 
 Browser debug: `window.ANYFIELD_CHAT_DEBUG = true` or `localStorage.anyfield_chat_debug = '1'`.
