@@ -80,6 +80,10 @@ System lines (`Applied: …`) show what the client executed; they are not sent t
 
 Configure loop depth via `CHAT_MAX_AGENT_LOOPS` in `chat/backend/.env`. Edit follow-up templates in `prompts.py` (`AGENT_AFTER_SELECT`, `AGENT_FINAL_ANSWER`); restart backend.
 
+Tune LLM sampling via `LLM_GENERATION` JSON in `.env` (passed through to the OpenAI-compatible API; exposed read-only on `/health` as `generation`).
+
+Assistant replies render as Markdown in the panel (`marked` + KaTeX for `$…$` / `$$…$$` math; same stack as Credits for prose).
+
 ## Actions
 
 | Type | Fields | Client |
