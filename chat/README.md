@@ -12,6 +12,8 @@ Browser panel + FastAPI backend for the Anyfield sequence assistant (MRI Q&A, se
 
 **Runbook (env, API, logging):** [backend/README.md](backend/README.md)
 
+**Security & threat model:** [SECURITY.md](SECURITY.md)
+
 ## Quick start
 
 1. Start LLM (OpenAI-compatible, e.g. llama.cpp on `:8080/v1`, model alias `local`).

@@ -84,7 +84,7 @@ Configure loop depth via `CHAT_MAX_AGENT_LOOPS` in `chat/backend/.env`. Edit fol
 
 Tune LLM sampling via `LLM_GENERATION` JSON in `.env` (passed through to the OpenAI-compatible API; exposed read-only on `/health` as `generation`).
 
-Assistant replies render as Markdown in the panel (`marked` + KaTeX for `$…$` / `$$…$$` math; same stack as Credits for prose).
+Assistant replies render as Markdown in the panel (`marked` + KaTeX for `$…$` / `$$…$$` math). See [chat/SECURITY.md](../chat/SECURITY.md) for the threat model and sanitization policy.
 
 ## Actions
 

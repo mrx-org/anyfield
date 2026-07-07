@@ -6,6 +6,8 @@ Not the MRI simulation stack — only powers `../chat_panel.js`.
 
 **Protocol & agent-loop design:** [insights/SPEC_chat_assistant.md](../../insights/SPEC_chat_assistant.md)
 
+**Security & threat model:** [../SECURITY.md](../SECURITY.md)
+
 ## Quick start
 
 ```bash
