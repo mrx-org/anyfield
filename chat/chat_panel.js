@@ -126,9 +126,15 @@ async function formatAssistantMarkdown(text) {
             delimiters: KATEX_DELIMITERS,
             throwOnError: false,
             ignoredTags: ['script', 'noscript', 'style', 'textarea', 'pre', 'code'],
+            katexOptions: {
+                trust: false,
+                strict: 'warn',
+            },
         });
     }
-    return wrap.innerHTML;
+    return DOMPurify.sanitize(wrap.innerHTML, {
+        ADD_ATTR: ['class', 'style', 'aria-hidden', 'aria-label', 'role', 'xmlns', 'encoding'],
+    });
 }
 
 function normalizeActions(actions) {
