@@ -89,6 +89,37 @@ const KATEX_DELIMITERS = [
     { left: '\\(', right: '\\)', display: false },
 ];
 
+const MATH_PLACEHOLDER = (id) => `\uE000MATH${id}\uE001`;
+
+/** Pull math out before marked — CommonMark eats \\f, \\t, \\r inside \\frac, \\times, \\text, etc. */
+function isolateMathForMarkdown(text) {
+    const slots = [];
+    const stashBlock = (match) => {
+        const id = slots.length;
+        slots.push(match);
+        return `\n\n${MATH_PLACEHOLDER(id)}\n\n`;
+    };
+    const stashInline = (match) => {
+        const id = slots.length;
+        slots.push(match);
+        return MATH_PLACEHOLDER(id);
+    };
+    let out = String(text || '');
+    out = out.replace(/\$\$[\s\S]*?\$\$/g, stashBlock);
+    out = out.replace(/\\\[([\s\S]*?)\\\]/g, stashBlock);
+    out = out.replace(/\\\(([\s\S]*?)\\\)/g, stashInline);
+    out = out.replace(/(?<!\$)\$(?!\$)([^\$\n]+?)\$(?!\$)/g, stashInline);
+    return { text: out, slots };
+}
+
+function restoreMathPlaceholders(html, slots) {
+    let out = html;
+    for (let i = 0; i < slots.length; i += 1) {
+        out = out.split(MATH_PLACEHOLDER(i)).join(slots[i]);
+    }
+    return out;
+}
+
 function ensureKatexCss() {
     if (document.getElementById('chat-katex-css')) return;
     const link = document.createElement('link');
@@ -118,7 +149,11 @@ function loadMarkdown() {
 
 async function formatAssistantMarkdown(text) {
     const { marked, DOMPurify, renderMathInElement } = await loadMarkdown();
-    const html = DOMPurify.sanitize(marked.parse(String(text || '')));
+    const { text: mdText, slots } = isolateMathForMarkdown(text);
+    const html = restoreMathPlaceholders(
+        DOMPurify.sanitize(marked.parse(mdText)),
+        slots,
+    );
     const wrap = document.createElement('div');
     wrap.innerHTML = html;
     if (typeof renderMathInElement === 'function') {

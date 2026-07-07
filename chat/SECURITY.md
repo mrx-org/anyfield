@@ -36,14 +36,15 @@ The chat **backend** URL (`http://127.0.0.1:8765`) is separate; the panel uses `
 
 Only **assistant** bubbles (visible final replies) use HTML rendering:
 
-1. **marked** — GFM markdown → HTML.
-2. **DOMPurify** — sanitize marked output.
-3. **KaTeX auto-render** — `$…$`, `$$…$$`, `\(...\)`, `\[...\]` with `trust: false`.
-4. **DOMPurify again** — sanitize final DOM; `ADD_ATTR` keeps KaTeX layout attrs (`class`, `style`, `aria-*`, `xmlns`, `encoding`).
+1. **Math isolation** — extract `$…$` / `$$…$$` / `\(...\)` / `\[...\]` before marked (CommonMark backslash escapes break `\frac`, `\times`, `\text`, `\right`, etc.).
+2. **marked** — GFM markdown → HTML on the remainder; math placeholders restored.
+3. **DOMPurify** — sanitize marked output.
+4. **KaTeX auto-render** — `$…$`, `$$…$$`, `\(...\)`, `\[...\]` with `trust: false`.
+5. **DOMPurify again** — sanitize final DOM; `ADD_ATTR` keeps KaTeX layout attrs (`class`, `style`, `aria-*`, `xmlns`, `encoding`).
 
 User messages, system lines, and errors use `textContent`.
 
-Compared with a single sanitize pass and raw `innerHTML`, the second pass re-checks the full tree after KaTeX mutates the DOM. `trust: false` blocks KaTeX `\href{javascript:…}`. Residual risk: `style` is allowed on any surviving node in pass 2 (acceptable for local demo; tighten with a KaTeX-only hook later if needed).
+Pass 1 strips scripts/handlers from marked HTML. KaTeX runs with `trust: false`. Pass 2 re-checks the full tree after KaTeX mutates the DOM.
 
 ### Residual markdown risks (low in default setup)
 
