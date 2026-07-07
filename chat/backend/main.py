@@ -20,10 +20,12 @@ log = setup_logging()
 
 app = FastAPI(title="Anyfield Chat Backend", version="0.0.2")
 
-_cors_origins = os.getenv(
+_default_frontend = os.getenv("ANYFIELD_FRONTEND_URL", "http://localhost:8000").rstrip("/")
+_default_cors = os.getenv(
     "CORS_ORIGINS",
-    "http://localhost:8000,http://127.0.0.1:8000",
-).split(",")
+    f"{_default_frontend},http://127.0.0.1:8000",
+)
+_cors_origins = _default_cors.split(",")
 
 app.add_middleware(
     CORSMiddleware,
@@ -97,6 +99,7 @@ def health() -> dict[str, Any]:
 
     return {
         "status": "ok",
+        "frontend_url": _default_frontend,
         "max_agent_loops": int(os.getenv("CHAT_MAX_AGENT_LOOPS", "3")),
         "generation": generation_kwargs(),
         "agent_prompts": {

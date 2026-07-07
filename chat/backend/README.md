@@ -37,7 +37,8 @@ Open http://localhost:8000/ → header chat view.
 | `LLM_GENERATION` | `{"temperature": 0.3}` | JSON object forwarded to `chat.completions.create` (any API-supported keys) |
 | `CHAT_HOST` | `127.0.0.1` | Bind address |
 | `CHAT_PORT` | `8765` | Bind port |
-| `CORS_ORIGINS` | `http://localhost:8000,…` | Allowed Anyfield origins |
+| `ANYFIELD_FRONTEND_URL` | `http://localhost:8000` | Anyfield static app origin; default CORS allowlist when `CORS_ORIGINS` unset |
+| `CORS_ORIGINS` | `{ANYFIELD_FRONTEND_URL},http://127.0.0.1:8000` | Comma-separated browser origins allowed to call `/chat` |
 | `LOG_LEVEL` | `INFO` | Use `DEBUG` for full LLM I/O (`.env.example` ships `DEBUG`) |
 | `LOG_FILE` | `logs/chat.log` | Rotating log path |
 | `LOG_MAX_BYTES` | `2097152` | Max log file size before rotation |
@@ -57,6 +58,7 @@ Panel init: backend reachability, agent loop limit, follow-up prompt templates.
 ```json
 {
   "status": "ok",
+  "frontend_url": "http://localhost:8000",
   "max_agent_loops": 3,
   "generation": {"temperature": 0.3},
   "agent_prompts": {
