@@ -76,6 +76,8 @@ Per user message, the client runs hidden LLM turns (`internal: true`) and shows 
 
 System lines (`Applied: …`) show what the client executed; they are not sent to the model as user text.
 
+After `select_sequence`, the client waits for `functionParams` to match the new selection before sending a context delta (avoids stale param names from the previous sequence).
+
 `set_param` is rejected if the name is not on the current sequence. Unknown action types are dropped client-side.
 
 Configure loop depth via `CHAT_MAX_AGENT_LOOPS` in `chat/backend/.env`. Edit follow-up templates in `prompts.py` (`AGENT_AFTER_SELECT`, `AGENT_FINAL_ANSWER`); restart backend.

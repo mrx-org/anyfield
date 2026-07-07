@@ -359,6 +359,28 @@ function buildSelectedState(ex) {
     };
 }
 
+/** Wait until selectedSequence and functionParams describe the same protocol. */
+async function waitForSelectedParamsSync(fileName, functionName, maxMs = CONTEXT_REFRESH_WAIT_MS) {
+    const deadline = Date.now() + maxMs;
+    while (Date.now() < deadline) {
+        const ex = window.seqExplorer;
+        const sel = ex?.selectedSequence;
+        const schema = ex?.functionParams || [];
+        if (
+            sel?.fileName === fileName
+            && sel?.functionName === functionName
+            && schema.length > 0
+        ) {
+            const schemaNames = schema.map((p) => p.name).sort().join('\0');
+            const entryNames = buildParamEntries(ex).map((p) => p.name).sort().join('\0');
+            if (schemaNames === entryNames) return true;
+        }
+        await new Promise((resolve) => setTimeout(resolve, 50));
+    }
+    chatLog('selected params sync timeout', { fileName, functionName });
+    return false;
+}
+
 function snapshotContext() {
     const ex = window.seqExplorer;
     return {
@@ -470,6 +492,7 @@ export async function runChatActions(actions) {
                 case 'select_sequence': {
                     const ok = await ex.selectSequenceByFileAndFunction(action.file, action.function);
                     if (!ok) throw new Error(`sequence not found: ${action.file}:${action.function}`);
+                    await waitForSelectedParamsSync(action.file, action.function);
                     applied.push(formatActionSummary(action));
                     break;
                 }
