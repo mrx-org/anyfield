@@ -1,0 +1,705 @@
+﻿<!DOCTYPE html>
+<!-- Serve from 22_niivue repo root:
+     cd 22_niivue && python -u -m http.server 8000
+     http://localhost:8000/pypulseq/seq_check_web/
+     Optional handoff: ?seqId=ID with localStorage["seq_handoff:ID"] -->
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>seq_check - sequence plot</title>
+    <style>
+        :root {
+            --bg: #0a0e1a;
+            --bg-elevated: #0f1424;
+            --bg-panel: #141b2d;
+            --panel: var(--bg-elevated);
+            --text: #e8ecff;
+            --muted: #a9b3da;
+            --border: rgba(255, 255, 255, 0.1);
+        }
+        * { box-sizing: border-box; }
+        body {
+            margin: 0;
+            font-family: system-ui, -apple-system, Segoe UI, Roboto, sans-serif;
+            background: var(--bg);
+            color: var(--text);
+            min-height: 100vh;
+            overflow-x: clip;
+        }
+        header {
+            padding: 1rem 1.25rem;
+            border-bottom: 1px solid var(--border);
+            display: flex;
+            flex-direction: column;
+            align-items: stretch;
+            gap: 0.55rem;
+        }
+        .header-row {
+            display: flex;
+            flex-wrap: wrap;
+            align-items: center;
+            gap: 0.65rem 1rem;
+            width: 100%;
+        }
+        h1 {
+            margin: 0;
+            font-size: 1.1rem;
+            font-weight: 600;
+        }
+        #status {
+            font-size: 0.85rem;
+            color: var(--muted);
+            flex: 1 1 10rem;
+            min-width: 0;
+            max-width: 100%;
+            overflow-wrap: anywhere;
+        }
+        label.btn,
+        button.btn {
+            display: inline-flex;
+            align-items: center;
+            gap: 0.4rem;
+            padding: 0.45rem 0.85rem;
+            border-radius: 6px;
+            border: 1px solid var(--border);
+            background: var(--bg-panel);
+            color: var(--text);
+            cursor: pointer;
+            font-size: 0.85rem;
+            font-family: inherit;
+        }
+        label.btn:hover,
+        button.btn:hover:not(:disabled) {
+            border-color: rgba(255, 255, 255, 0.25);
+        }
+        button.btn:disabled,
+        label.btn.btn--disabled {
+            opacity: 0.45;
+            color: var(--muted);
+            cursor: not-allowed;
+            pointer-events: none;
+        }
+        button.btn:disabled {
+            cursor: wait;
+        }
+        input[type="file"] { display: none; }
+        main {
+            padding: 1rem clamp(0.65rem, 3vw, 1.25rem) 2rem;
+            width: 100%;
+            max-width: 100%;
+            overflow-x: clip;
+        }
+        .plot-row {
+            display: flex;
+            flex-direction: row;
+            flex-wrap: wrap;
+            gap: 1rem;
+            align-items: stretch;
+            width: 100%;
+            max-width: 100%;
+            min-width: 0;
+            min-height: 0;
+        }
+        .plot-row--seq-k {
+            min-height: min(72vh, 640px);
+        }
+        .plot-row--psf {
+            margin-top: 1rem;
+        }
+        .plot-row--fig4 {
+            margin-top: 1rem;
+        }
+        .plot-col {
+            flex: 1 1 100%;
+            min-width: 0;
+            max-width: 100%;
+            display: flex;
+            flex-direction: column;
+            min-height: 0;
+        }
+        @media (min-width: 1280px) {
+            .plot-row--seq-k .plot-col-seq {
+                flex: 1.35 1 0;
+                max-width: 58%;
+            }
+            .plot-row--seq-k .plot-col-k {
+                flex: 1 1 0;
+                max-width: 42%;
+            }
+        }
+        .plot-col-k-grid {
+            display: flex;
+            flex-direction: column;
+            gap: 0.75rem;
+            flex: 1 1 auto;
+            min-height: 0;
+            min-width: 0;
+            max-width: 100%;
+            width: 100%;
+            align-items: stretch;
+        }
+        @media (min-width: 1500px) {
+            .plot-col-k-grid {
+                flex-direction: row;
+            }
+        }
+        .kspace-ref-stack,
+        .kspace-sim-stack {
+            flex: 1 1 auto;
+            min-width: 0;
+            max-width: 100%;
+            width: 100%;
+            display: flex;
+            flex-direction: column;
+            min-height: 0;
+        }
+        .kspace-panel-title {
+            margin: 0 0 0.35rem;
+            font-size: 0.88rem;
+            font-weight: 600;
+            color: var(--muted);
+        }
+        .kspace-panel-title:not(:first-child) {
+            margin-top: 0.5rem;
+        }
+        .kspace-panel-title--recon {
+            display: flex;
+            flex-wrap: wrap;
+            align-items: center;
+            justify-content: space-between;
+            gap: 0.35rem 0.65rem;
+        }
+        .recon-frame-nav {
+            display: inline-flex;
+            align-items: center;
+            gap: 0.35rem;
+            font-size: 0.78rem;
+            font-weight: 500;
+        }
+        .recon-frame-btn {
+            display: inline-flex;
+            align-items: center;
+            justify-content: center;
+            width: 1.45rem;
+            height: 1.45rem;
+            padding: 0;
+            border-radius: 4px;
+            border: 1px solid var(--border);
+            background: var(--bg-panel);
+            color: var(--text);
+            cursor: pointer;
+            font-size: 0.85rem;
+            line-height: 1;
+            font-family: inherit;
+        }
+        .recon-frame-btn:hover:not(:disabled) {
+            border-color: rgba(255, 255, 255, 0.25);
+        }
+        .recon-frame-btn:disabled {
+            opacity: 0.35;
+            cursor: not-allowed;
+        }
+        .recon-frame-mode {
+            min-width: 4.75rem;
+            text-align: center;
+            color: var(--text);
+        }
+        .plot-col h2 {
+            margin: 0 0 0.5rem;
+            font-size: 0.95rem;
+            font-weight: 600;
+            color: var(--muted);
+        }
+        .plot-col .hint {
+            font-size: 0.78rem;
+            color: var(--muted);
+            margin: 0 0 0.4rem;
+            line-height: 1.35;
+        }
+        #seq-waveforms {
+            flex: 1 1 auto;
+            min-height: clamp(220px, 50vh, 560px);
+            max-width: 100%;
+            min-width: 0;
+            display: flex;
+            flex-direction: column;
+            border: 1px solid var(--border);
+            border-radius: 8px;
+            background: var(--panel);
+            padding: 0.5rem;
+            overflow: hidden;
+        }
+        .plot-chart-square {
+            flex: 0 0 auto;
+            width: 100%;
+            max-width: 100%;
+            min-width: 0;
+            aspect-ratio: 1;
+            height: auto;
+            max-height: clamp(160px, min(34vh, 42vw), 340px);
+            border: 1px solid var(--border);
+            border-radius: 8px;
+            background: var(--panel);
+            overflow: hidden;
+            position: relative;
+            isolation: isolate;
+        }
+        #kspace-xy,
+        #kspace-yz,
+        #fig6-sim-kspace {
+            flex: 0 0 auto;
+        }
+        #fig4-kspace,
+        .fig4-split-host {
+            width: 100%;
+            max-width: 100%;
+            min-width: 0;
+            min-height: 0;
+        }
+        .fig4-split,
+        .fig4-split-host {
+            display: flex;
+            flex-direction: column;
+            gap: 0.75rem;
+            width: 100%;
+            max-width: 100%;
+            min-width: 0;
+            align-items: stretch;
+        }
+        @media (min-width: 900px) {
+            .fig4-split {
+                flex-direction: row;
+            }
+        }
+        .fig4-panel {
+            flex: 1 1 0;
+            min-width: 0;
+            display: flex;
+            flex-direction: column;
+        }
+        .fig4-panel-title {
+            font-size: 0.78rem;
+            color: var(--muted);
+            margin: 0 0 0.35rem;
+            line-height: 1.35;
+        }
+        .fig4-panel-subtitle {
+            font-size: 0.7rem;
+            color: var(--muted);
+            opacity: 0.8;
+            margin: 0 0 0.4rem;
+            line-height: 1.35;
+        }
+        .fig4-chart-mount {
+            flex: 1 1 auto;
+        }
+        .psf-split {
+            display: flex;
+            flex-direction: column;
+            gap: 0.75rem;
+            width: 100%;
+            max-width: 100%;
+            min-width: 0;
+            align-items: stretch;
+        }
+        @media (min-width: 900px) {
+            .psf-split {
+                flex-direction: row;
+            }
+        }
+        .psf-panel {
+            flex: 1 1 0;
+            min-width: 0;
+            display: flex;
+            flex-direction: column;
+        }
+        .psf-panel-title {
+            font-size: 0.78rem;
+            color: var(--muted);
+            margin: 0 0 0.35rem;
+        }
+        .psf-chart-mount {
+            width: 100%;
+            max-width: 100%;
+            min-width: 0;
+            min-height: clamp(140px, 28vw, 200px);
+            height: clamp(160px, 32vh, 280px);
+            border: 1px solid var(--border);
+            border-radius: 8px;
+            background: var(--panel);
+            overflow: hidden;
+            position: relative;
+            isolation: isolate;
+            touch-action: none;
+            cursor: grab;
+        }
+        .psf-chart-mount:active {
+            cursor: grabbing;
+        }
+        .plot-row--psf-signal {
+            margin-top: 1rem;
+        }
+        .psf-signal-chart-mount {
+            width: 100%;
+            max-width: 100%;
+            min-width: 0;
+            min-height: clamp(160px, 30vw, 220px);
+            height: clamp(180px, 34vh, 300px);
+            border: 1px solid var(--border);
+            border-radius: 8px;
+            background: var(--panel);
+            overflow: hidden;
+            position: relative;
+            isolation: isolate;
+            touch-action: none;
+            cursor: grab;
+        }
+        .psf-signal-chart-mount:active {
+            cursor: grabbing;
+        }
+        #psf-meta {
+            margin: 0.35rem 0 0;
+            font-size: 0.72rem;
+        }
+        .psf-legend {
+            display: flex;
+            flex-wrap: wrap;
+            gap: 0.65rem 1rem;
+            margin-top: 0.45rem;
+            font-size: 0.72rem;
+            color: var(--muted);
+        }
+        .psf-legend-item {
+            display: inline-flex;
+            align-items: center;
+            gap: 0.35rem;
+        }
+        .psf-legend-item i {
+            display: inline-block;
+            width: 1.1rem;
+            height: 0.22rem;
+            border-radius: 1px;
+            box-shadow: 0 0 4px currentColor;
+        }
+        .psf-scale-row {
+            display: flex;
+            flex-wrap: wrap;
+            align-items: center;
+            gap: 0.65rem 1rem;
+            margin: 0 0 0.5rem;
+            font-size: 0.82rem;
+            color: var(--muted);
+            max-width: 100%;
+        }
+        .psf-scale-row label {
+            display: inline-flex;
+            align-items: center;
+            gap: 0.35rem;
+            cursor: pointer;
+            color: var(--text);
+        }
+        .psf-scale-row input[type="radio"] {
+            accent-color: #61afef;
+            margin: 0;
+        }
+        #recon-niivue {
+            flex: 1 1 auto;
+            width: 100%;
+            max-width: 100%;
+            min-width: 0;
+            min-height: clamp(140px, 26vw, 200px);
+            max-height: clamp(160px, min(34vh, 40vw), 340px);
+            display: flex;
+            flex-direction: column;
+            border: 1px solid var(--border);
+            border-radius: 8px;
+            background: #0a0e1a;
+            overflow: hidden;
+            position: relative;
+            isolation: isolate;
+        }
+        #recon-niivue .seq-check-niivue-stack {
+            flex: 1 1 auto;
+            min-height: 0;
+            height: 100%;
+        }
+        #recon-meta {
+            margin: 0;
+            font-size: 0.75rem;
+            color: var(--muted);
+            line-height: 1.35;
+        }
+        .seq-chartgpu-stack {
+            display: flex;
+            flex-direction: column;
+            flex: 1 1 auto;
+            gap: 0.35rem;
+            width: 100%;
+            min-height: 0;
+        }
+        .seq-chartgpu-panel {
+            display: flex;
+            flex-direction: column;
+            flex: 0.85 1 0;
+            min-height: 72px;
+            width: 100%;
+            border: 1px solid var(--border);
+            border-radius: 6px;
+            background: var(--bg-elevated);
+            overflow: hidden;
+        }
+        .seq-chartgpu-panel:last-child {
+            flex: 2.639 1 0;
+            min-height: 182px;
+        }
+        .seq-chartgpu-panel > canvas {
+            flex: 1 1 auto;
+            min-height: 0;
+            width: 100% !important;
+            height: 100% !important;
+            display: block !important;
+        }
+        .plot-panel-mount {
+            min-height: 120px;
+            max-width: 100%;
+            min-width: 0;
+            overflow: hidden;
+        }
+        .plot-chart-square.plot-panel-mount,
+        #kspace-xy,
+        #kspace-yz,
+        #fig6-sim-kspace {
+            min-height: 0;
+        }
+        .seq-chartgpu-fallback {
+            padding: 1rem;
+            color: var(--muted);
+            font-size: 0.85rem;
+            line-height: 1.45;
+            max-width: 100%;
+            overflow-wrap: anywhere;
+        }
+        .error { color: #ff8a8a; }
+        .header-group {
+            display: flex;
+            flex-wrap: wrap;
+            align-items: center;
+            gap: 0.55rem;
+            font-size: 0.8rem;
+            color: var(--muted);
+            max-width: 100%;
+        }
+        .header-group label {
+            cursor: pointer;
+            display: inline-flex;
+            align-items: center;
+            gap: 0.25rem;
+        }
+        .header-group input[type="radio"],
+        .header-group input[type="checkbox"] {
+            accent-color: #61afef;
+            margin: 0;
+            flex-shrink: 0;
+        }
+        .header-group--grid .grid-field {
+            display: inline-flex;
+            align-items: center;
+            gap: 0.2rem;
+            cursor: default;
+        }
+        .header-group--grid .grid-field span {
+            font-size: 0.72rem;
+            opacity: 0.85;
+        }
+        .header-group--grid input[type="number"] {
+            width: 4.25rem;
+            padding: 0.15rem 0.35rem;
+            border-radius: 4px;
+            border: 1px solid var(--border);
+            background: var(--bg-panel);
+            color: var(--text);
+            font: inherit;
+            font-size: 0.78rem;
+            font-variant-numeric: tabular-nums;
+        }
+        .header-group--grid input[type="number"]:disabled {
+            opacity: 0.45;
+            cursor: not-allowed;
+        }
+        .header-group--grid input[type="number"]:not(:disabled):focus {
+            outline: none;
+            border-color: rgba(97, 175, 239, 0.55);
+        }
+        .header-row--grid {
+            row-gap: 0.45rem;
+        }
+        .grid-field-hint {
+            font-size: 0.72rem;
+            color: #ffcc66;
+            overflow-wrap: anywhere;
+        }
+        .grid-field-hint[hidden] {
+            display: none;
+        }
+        .header-sep {
+            width: 1px;
+            height: 1.1em;
+            background: var(--border);
+            flex-shrink: 0;
+            align-self: center;
+        }
+        .header-row--controls {
+            row-gap: 0.45rem;
+        }
+        @media (max-width: 720px) {
+            header {
+                padding: 0.75rem clamp(0.65rem, 3vw, 1rem);
+            }
+            .header-row--primary #status {
+                flex: 1 1 100%;
+            }
+            .header-row--controls .header-sep {
+                display: none;
+            }
+            .header-group label {
+                font-size: 0.78rem;
+            }
+            #seq-waveforms {
+                min-height: clamp(200px, 45vh, 420px);
+            }
+            .plot-row--seq-k {
+                min-height: 0;
+            }
+        }
+        @media (max-width: 480px) {
+            h1 {
+                font-size: 1rem;
+            }
+            label.btn,
+            button.btn {
+                font-size: 0.8rem;
+                padding: 0.4rem 0.65rem;
+            }
+            .plot-chart-square {
+                max-height: clamp(140px, 52vw, 280px);
+            }
+            .psf-chart-mount {
+                height: clamp(140px, 40vw, 220px);
+            }
+        }
+    </style>
+</head>
+<body>
+    <header>
+        <div class="header-row header-row--primary">
+            <h1>seq_check</h1>
+            <label class="btn" id="btn-upload-seq" aria-disabled="false">
+                Upload .seq
+                <input type="file" id="seq-file" accept=".seq,.SEQ" />
+            </label>
+            <button type="button" class="btn" id="btn-gre-example" title="Load GRE example from pulseq-frame/test-seqs">
+                GRE example
+            </button>
+            <span id="status">Starting backend…</span>
+        </div>
+        <div class="header-row header-row--controls">
+            <div class="header-group">
+                <label><input type="checkbox" id="chkDarkSeqPlot" checked />Dark seq plot</label>
+                <label><input type="checkbox" id="chkRainbowAdc" />Rainbow ADC</label>
+                <label><input type="checkbox" id="chkDynamicRecon" />Dynamic recon</label>
+            </div>
+        </div>
+        <div class="header-row header-row--grid">
+            <div class="header-group header-group--grid" id="grid-fov-group">
+                <span>FOV mm</span>
+                <label class="grid-field"><span>x</span><input type="number" id="grid-fov-x-mm" min="0.001" step="any" disabled title="Field of view x [mm]" /></label>
+                <label class="grid-field"><span>y</span><input type="number" id="grid-fov-y-mm" min="0.001" step="any" disabled title="Field of view y [mm]" /></label>
+                <span id="grid-fov-hint" class="grid-field-hint" hidden></span>
+            </div>
+        </div>
+        <div class="header-row header-row--grid">
+            <div class="header-group header-group--grid" id="grid-matrix-group">
+                <span>Matrix</span>
+                <label class="grid-field"><span>x</span><input type="number" id="grid-nx" min="1" step="1" disabled title="Readout matrix size" /></label>
+                <label class="grid-field"><span>y</span><input type="number" id="grid-ny" min="1" step="1" disabled title="Phase matrix size" /></label>
+                <span id="grid-matrix-hint" class="grid-field-hint" hidden></span>
+            </div>
+        </div>
+    </header>
+    <main>
+        <div class="plot-row plot-row--seq-k">
+            <div class="plot-col plot-col-seq">
+                <h2>Sequence waveforms</h2>
+                <div id="seq-waveforms"></div>
+            </div>
+            <div class="plot-col plot-col-k">
+                <h2>K-space &amp; sim recon</h2>
+                <div class="plot-col-k-grid">
+                    <div class="kspace-ref-stack">
+                        <h3 class="kspace-panel-title">kx–ky</h3>
+                        <div id="kspace-xy" class="plot-chart-square plot-panel-mount"></div>
+                        <h3 class="kspace-panel-title">ky–kz</h3>
+                        <div id="kspace-yz" class="plot-chart-square plot-panel-mount"></div>
+                    </div>
+                    <div id="kspace-sim-stack" class="kspace-sim-stack">
+                        <h3 class="kspace-panel-title">simulated k-space (magnitude)</h3>
+                        <div id="fig6-sim-kspace" class="plot-chart-square plot-panel-mount"></div>
+                        <h3 class="kspace-panel-title kspace-panel-title--recon">
+                            <span>NUFFT recon of simulated k-space</span>
+                            <span class="recon-frame-nav">
+                                <button type="button" class="recon-frame-btn" id="recon-frame-prev" aria-label="Show magnitude" disabled>←</button>
+                                <span id="recon-frame-mode" class="recon-frame-mode">magnitude</span>
+                                <button type="button" class="recon-frame-btn" id="recon-frame-next" aria-label="Show phase" disabled>→</button>
+                            </span>
+                        </h3>
+                        <div id="recon-niivue" class="plot-panel-mount" aria-label="NUFFT magnitude and phase">
+                            <div class="seq-chartgpu-fallback">NUFFT recon of simulated k-space appears after you upload a .seq or run GRE example.</div>
+                        </div>
+                        <p id="recon-meta" class="hint" hidden></p>
+                    </div>
+                </div>
+            </div>
+        </div>
+        <div class="plot-row plot-row--psf-signal">
+            <div class="plot-col">
+                <h2>Unencoded signals</h2>
+                <p class="hint">Trajex complex signal per tissue after T2′ decay (Gray Matter, White Matter, CSF, Fat) — input to PSF NUFFT. Drag/wheel on x only.</p>
+                <div id="psf-signal-chart" class="psf-signal-chart-mount plot-panel-mount"></div>
+            </div>
+        </div>
+        <div id="sim-row" class="plot-row plot-row--psf">
+            <div class="plot-col">
+                <h2>PSF profiles</h2>
+                <div id="psf-scale-row" class="psf-scale-row">
+                    <span>PSF scale:</span>
+                    <label><input type="radio" name="psfScale" value="absolute" /> absolute</label>
+                    <label><input type="radio" name="psfScale" value="normalized" checked /> normalized</label>
+                </div>
+                <div id="psf-charts"></div>
+                <p id="psf-meta" class="hint" hidden></p>
+            </div>
+        </div>
+        <div class="plot-row plot-row--fig4">
+            <div class="plot-col">
+                <h2>ADC k-space comparison</h2>
+                <div id="fig4-kspace" class="fig4-split-host"></div>
+            </div>
+        </div>
+    </main>
+
+    <script type="module">
+        import { bootSeqCheckApp } from './seq_check_app.js';
+        try {
+            await bootSeqCheckApp(document);
+            } catch (e) {
+                console.error(e);
+            const st = document.getElementById('status');
+            if (st) {
+                st.textContent = `Startup failed: ${e?.message || e}`;
+                st.classList.add('error');
+            }
+        }
+    </script>
+</body>
+</html>

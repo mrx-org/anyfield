@@ -1,5 +1,14 @@
 # Release notes
 
+## v2.2.3
+
+- **seq_check_web** — new standalone browser tool at `pypulseq/seq_check_web/` for validating Pulseq `.seq` files without the full Anyfield scanner UI. Upload a sequence (or load the GRE example), then inspect waveforms, k-space, PSF profiles, and a windowed NUFFT recon in one page.
+- **Waveforms + k-space** — ChartGPU sequence plots (with dark-theme toggle, rainbow ADC, and time calipers) plus kx–ky / ky–kz reference panels synced to the waveform zoom window; shared plotting logic lives in `seq_plot.js` (`setupSeqCheckKspacePanels`, injected caliper CSS for pages that do not load `seq_explorer.css`).
+- **ADC k-space comparison** — side-by-side trajex vs pypulseq `calculate_kspace` against the reference trajectory.
+- **sim k-space + NUFFT recon** — optional rapisim cache via conseq/trajex; sim k-space panel and Niivue magnitude/phase recon driven by Pyodide `pynufft` (dynamic recon follows the ADC time window).
+- **PSF profiles** — per-tissue line profiles from tool-trajex `signal=True` (Gray/White/CSF), with T2′ decay and 1D adjoint NUFFT in Pyodide; ChartGPU panels with absolute/normalized scale and FWHM metrics.
+- **Pyodide worker** — Python backend (pypulseq, pynufft, plot utils) runs in a dedicated Web Worker so the UI stays responsive during load and recon.
+
 ## v2.2.2
 
 - **Shareable phantom + FOV state** — capsule and light-URL shares now reproduce the full planning state: the bifti phantom (by cache id), the sim backend, the FOV box (non-oversampled recon-grid `fov_affine` + `fov_matrix`, restored via the existing affine→slider inverse), and the scan-resolution sliders (base `phantom_matrix`, `phantom_oversample`, `recon_matrix`). Only the phantom id is embedded, never the phantom JSON.

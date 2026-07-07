@@ -354,6 +354,98 @@ export function buildCaliperAnnotations(caliper) {
 }
 
 /**
+ * Inject the caliper readout + dialog CSS once, for host pages that do not load
+ * `seq_explorer.css` (e.g. the seq_check_web tools). Rules mirror `seq_explorer.css` and use
+ * CSS-variable fallbacks so they look right without the app theme. Inserted as the first node of
+ * <head> so any page-level stylesheet still wins.
+ */
+export function ensureSeqCaliperStyles() {
+    if (typeof document === 'undefined') return;
+    const STYLE_ID = 'seq-caliper-injected-styles';
+    if (document.getElementById(STYLE_ID)) return;
+    const style = document.createElement('style');
+    style.id = STYLE_ID;
+    style.textContent = `
+.seq-caliper-readout {
+    flex: 0 0 auto;
+    padding: 2px 6px;
+    margin-bottom: 0.2rem;
+    font-size: 0.78rem;
+    font-variant-numeric: tabular-nums;
+    color: var(--text-muted, #9aa4bf);
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    text-align: right;
+    pointer-events: auto;
+    user-select: none;
+    cursor: pointer;
+}
+.seq-caliper-dialog-overlay {
+    position: fixed;
+    inset: 0;
+    z-index: 10000;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    background: rgba(0, 0, 0, 0.45);
+}
+.seq-caliper-dialog {
+    display: flex;
+    flex-direction: column;
+    gap: 0.6rem;
+    min-width: 220px;
+    padding: 1rem 1.1rem;
+    border-radius: 8px;
+    background: var(--panel-bg, #1c2030);
+    color: var(--text, #e6eaf5);
+    border: 1px solid var(--border, #333a52);
+    box-shadow: 0 8px 30px rgba(0, 0, 0, 0.5);
+    font-size: 0.85rem;
+}
+.seq-caliper-dialog-title {
+    font-weight: 600;
+    margin-bottom: 0.1rem;
+}
+.seq-caliper-dialog label {
+    display: flex;
+    flex-direction: column;
+    gap: 0.2rem;
+    font-variant-numeric: tabular-nums;
+}
+.seq-caliper-dialog input {
+    padding: 4px 6px;
+    border-radius: 4px;
+    border: 1px solid var(--border, #333a52);
+    background: var(--input-bg, #10131f);
+    color: inherit;
+    font: inherit;
+}
+.seq-caliper-dialog-btns {
+    display: flex;
+    justify-content: flex-end;
+    gap: 0.5rem;
+    margin-top: 0.3rem;
+}
+.seq-caliper-dialog-btns button {
+    padding: 4px 12px;
+    border-radius: 4px;
+    border: 1px solid var(--border, #333a52);
+    background: var(--input-bg, #10131f);
+    color: inherit;
+    cursor: pointer;
+}
+.seq-caliper-dialog-btns .seq-cal-ok {
+    background: var(--accent, #4c6ef5);
+    border-color: var(--accent, #4c6ef5);
+    color: #fff;
+}
+`;
+    const head = document.head || document.documentElement;
+    head.insertBefore(style, head.firstChild);
+}
+
+/**
  * Normalize series objects from Python JSON for ChartGPU.create (camelCase, scatter sizes).
  * @param {unknown[]} seriesIn
  */
@@ -884,6 +976,18 @@ export function normalizeKspaceChartGpuSeries(seriesIn) {
     const normalized = normalizeChartGpuSeries(seriesIn);
     return normalized.map((s, i) => {
         const src = seriesIn[i];
+        if (src?.kspaceRole === 'fov-box') {
+            const color = src?.lineStyle?.color || src?.color || 'rgba(255, 255, 255, 0.65)';
+            const width = src?.lineStyle?.width ?? 1.5;
+            return {
+                ...s,
+                type: 'line',
+                color,
+                lineStyle: { color, width, opacity: src?.lineStyle?.opacity ?? 1 },
+                showSymbol: false,
+                sampling: 'none',
+            };
+        }
         if (src?.kspaceRole === 'adc' || src?.type === 'scatter') {
             const adcColor = src?.kspaceColor || KSPACE_COLOR_MARKER;
             return {
@@ -1863,6 +1967,9 @@ export async function renderSeqChartGpuAfterPlot(host, plotRoot, pyodide, plotCo
     const stack = plotContainer.querySelector('#seq-chartgpu-stack');
     // External caliper readout (t1 / t2 / dt) placed just above the waveform stack.
     if (stack && stack.parentElement) {
+        // Host pages that don't load seq_explorer.css (e.g. seq_check_web) still need the
+        // readout + dialog styling; inject it once (inserted first so page CSS can override).
+        ensureSeqCaliperStyles();
         const caliperReadout = document.createElement('div');
         caliperReadout.id = 'seq-caliper-readout';
         caliperReadout.className = 'seq-caliper-readout';
