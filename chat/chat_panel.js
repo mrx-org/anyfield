@@ -15,14 +15,23 @@ const DEFAULT_AGENT_PROMPTS = {
     after_select: (
         'You just selected a new sequence (see the context update above).\n'
         + 'User request: {user_request}\n\n'
-        + 'Do any parameters on this sequence need adjustment to fulfill that request? '
-        + 'Use selected.params and scanner.physics. Emit set_param actions if needed.'
+        + 'Use only parameter names from the updated selected.params. '
+        + 'Keep existing non-null defaults (especially TI/TI_s) unless the user asked to change them. '
+        + 'Do not copy ir_ideal_null_ti_s into TI/TI_s by default — physics hints are for reasoning, not auto-fill. '
+        + 'Param types in context may be wrong; infer units from names and defaults (_s → seconds). '
+        + 'For list/ndarray params use JSON arrays in set_param. '
+        + 'Change only what the request requires. Emit set_param actions if needed.'
     ),
     final_answer: (
-        'The client applied these protocol changes: {applied_actions}\n'
-        + 'Original user request: {user_request}\n\n'
-        + 'Write one concise final reply summarizing what you changed and answering the user. '
-        + 'You performed these changes yourself — do not ask the user to switch sequences. '
+        'You (the assistant) already applied these protocol changes in the workbench:\n'
+        + '{applied_actions}\n\n'
+        + 'User\'s original request: {user_request}\n\n'
+        + 'Write one short, natural reply in **first person** (e.g. "I switched to … and set …"). '
+        + 'The user did not change the protocol — you did on their behalf. '
+        + 'Never say "you set", "you selected", or "you changed". '
+        + 'Do not mention the client, file paths, function names, or label strings. '
+        + 'Use a friendly sequence name (GRE, TSE 2D FLAIR). '
+        + 'Only claim parameters that appear in the applied list above. '
         + 'Do not emit an action block.'
     ),
 };
@@ -279,7 +288,7 @@ function computeScannerPhysics(parsed, B0_T, gyro_MHz_T) {
     const tissues = parsed?.tissues;
     if (tissues && typeof tissues === 'object') {
         const tissues_s = {};
-        const ir_null_ti_s = {};
+        const ir_ideal_null_ti_s = {};
         for (const [key, t] of Object.entries(tissues)) {
             if (!t || typeof t !== 'object') continue;
             const entry = {};
@@ -288,17 +297,21 @@ function computeScannerPhysics(parsed, B0_T, gyro_MHz_T) {
             }
             if (Object.keys(entry).length) tissues_s[key] = entry;
             if (typeof t.T1 === 'number') {
-                ir_null_ti_s[key] = Math.round(t.T1 * Math.LN2 * 100000) / 100000;
+                ir_ideal_null_ti_s[key] = Math.round(t.T1 * Math.LN2 * 100000) / 100000;
             }
         }
         if (Object.keys(tissues_s).length) physics.tissues_s = tissues_s;
-        if (Object.keys(ir_null_ti_s).length) {
-            physics.ir_null_ti_s = ir_null_ti_s;
+        if (Object.keys(ir_ideal_null_ti_s).length) {
+            physics.ir_ideal_null_ti_s = ir_ideal_null_ti_s;
             physics.legend = {
-                tissues_s: 'T1/T2 relaxation times in seconds',
-                ir_null_ti_s: 'IR inversion-null time in seconds (= tissue T1 * ln(2)); use for TI/TI_s, not tissues_s.T1',
-                opposed_phase_te_s: 'Echo time for fat-water opposed phase in seconds',
-                fat_water_delta_hz: 'Fat-water chemical shift in Hz',
+                tissues_s: 'Phantom T1/T2 in seconds (simulation values).',
+                ir_ideal_null_ti_s: (
+                    'Ideal IR null TI = T1×ln(2) assuming perfect 180° inversion only. '
+                    + 'Bundled protocols often use a different TI (e.g. FLAIR TI_s≈2.3 s). '
+                    + 'Prefer selected.params for TI/TI_s; do not override protocol defaults from this field alone.'
+                ),
+                opposed_phase_te_s: 'First fat–water opposed-phase TE (ideal, single pair) in seconds.',
+                fat_water_delta_hz: 'Fat–water chemical shift Δf in Hz (3.5 ppm approximation).',
             };
         }
     }
