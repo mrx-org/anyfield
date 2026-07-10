@@ -31,9 +31,11 @@ Browser (chat/chat_panel.js)
 
 ## UI
 
-Fourth header view (message bubble): full-width chat panel in `slot-main`. Planning, compare, and sequence plot modes unchanged.
+Fourth header view (message bubble): chat panel beside the **scan preview** (magnitude pane) in `slot-main`. Planning, compare, and sequence plot modes unchanged.
 
-Integration: `index.html` `ViewManager` — `chat` mode, header button, `initChatPanel`. While in chat view, incidental `setMode('planning')` from the Niivue sidebar is blocked unless the user clicks a header view button (`_viewModeExplicit`).
+Integration: `index.html` `ViewManager` — `chat` mode, header button, `initChatPanel`. Niivue sidebar tab clicks and **VIEW SCAN** do not leave chat mode (preview updates in place); header view buttons and explicit actions (e.g. view seq, compare) still switch modes.
+
+Chat message list scrolls to the latest message when re-entering chat view.
 
 Debug:
 
@@ -56,7 +58,9 @@ Status line: `backend ok` / `offline`.
 
 - `larmor_MHz`, `fat_water_delta_hz`, `opposed_phase_te_s`
 - `tissues_s` — per-tissue T1/T2 (seconds)
-- `ir_null_ti_s` — IR null time per tissue (= T1 × ln 2); see `physics.legend`
+- `ir_ideal_null_ti_s` — ideal IR null TI (= T1 × ln 2, perfect 180° inversion only); bundled protocol TI often differs — see `physics.legend` and prefer `selected.params`
+
+System prompt instructs the model to treat `scanner.physics` as hints (not prescriptions), respect protocol TI defaults, and use friendly sequence names in user-facing replies (not `file`/`function` paths).
 
 Client tracks fingerprints (`modelKnown`); deltas cover catalog add/remove, scanner replace, selected replace.
 
@@ -99,8 +103,8 @@ No auto-plot / execute.
 
 Backend (`chat/backend/.env`, default `LOG_LEVEL=INFO`):
 
-- INFO: live context per POST, agent `agent_meta` + trace, last user message
-- DEBUG: turn-1 bootstrap JSON, full LLM payload and raw response
+- INFO: live context per POST, agent `agent_meta` + trace, last user message, LLM token summary
+- DEBUG: turn-1 bootstrap JSON, full LLM payload and raw response, full `usage` object, model reasoning text when present
 - Warns if turn 2+ POST lacks `bootstrap_context`
 
 Log file: `chat/backend/logs/chat.log` (gitignored).
