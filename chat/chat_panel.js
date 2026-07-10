@@ -610,6 +610,20 @@ Changes apply to the protocol panel in the footer automatically.</div>
     const sendBtn = host.querySelector('#chat-send');
     const statusEl = host.querySelector('#chat-status');
 
+    function scrollMessagesToEnd() {
+        if (!messagesEl) return;
+        messagesEl.scrollTop = messagesEl.scrollHeight;
+    }
+
+    const mainSlot = document.getElementById('slot-main');
+    if (mainSlot) {
+        new MutationObserver(() => {
+            if (host.parentElement === mainSlot) {
+                requestAnimationFrame(scrollMessagesToEnd);
+            }
+        }).observe(mainSlot, { childList: true });
+    }
+
     /** @type {{ role: string, content: string }[]} */
     const history = [];
     const modelKnown = {
@@ -639,7 +653,7 @@ Changes apply to the protocol panel in the footer automatically.</div>
             el.textContent = content;
         }
         messagesEl.appendChild(el);
-        messagesEl.scrollTop = messagesEl.scrollHeight;
+        scrollMessagesToEnd();
     }
 
     async function waitForContextReady(maxMs) {
