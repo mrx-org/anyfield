@@ -2711,7 +2711,8 @@ data
         if (job && job.status === 'done' && window.nvModule) {
             // Planning view only on explicit VIEW SCAN (syncFov=true). Auto-load after SCAN/CROP
             // keeps the current mode (e.g. plot.seq) so the user switches manually.
-            if (syncFov && window.viewManager && window.viewManager.currentMode !== 'planning') {
+            if (syncFov && window.viewManager && window.viewManager.currentMode !== 'planning'
+                && window.viewManager.currentMode !== 'chat') {
                 window.viewManager.setMode('planning');
             }
 

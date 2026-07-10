@@ -126,6 +126,21 @@
         #slot-main:not(.planning-hist-visible) #nv-joint-hist-row {
             display: none !important;
         }
+        #slot-main.chat-with-preview-layout {
+            flex-direction: row !important;
+        }
+        #slot-main.chat-with-preview-layout > .chat-panel-host {
+            flex: 1.15;
+            min-width: 0;
+            min-height: 0;
+            border-right: 1px solid var(--border);
+        }
+        #slot-main.chat-with-preview-layout > #nv-preview-bc-stack {
+            flex: 1;
+            min-width: 0;
+            min-height: 0;
+            border-left: none;
+        }
         .footer-wrapper.footer-pending {
             display: none !important;
         }
@@ -412,7 +427,6 @@
                 this.currentMode = null;
                 this.maximizedViewer = null; // null | nvViewer | nvScanPreview | nvCompare
                 this.compareActive = false;
-                this._viewModeExplicit = false;
                 this.slots = {
                     sidebar: document.getElementById('slot-sidebar'),
                     main: document.getElementById('slot-main'),
@@ -440,36 +454,23 @@
             }
 
             bindViewModeButtons() {
-                const go = (mode, fn) => {
-                    this._viewModeExplicit = true;
-                    if (fn) fn();
-                    else this.setMode(mode);
-                };
                 document.getElementById('view-mode-planning-btn')?.addEventListener('click', () => {
-                    go('planning', () => {
-                        if (this.compareActive) this.deactivateCompareColumn();
-                        this.setMode('planning');
-                    });
+                    if (this.compareActive) this.deactivateCompareColumn();
+                    this.setMode('planning');
                 });
                 document.getElementById('view-mode-compare-btn')?.addEventListener('click', () => {
-                    go('planning', () => {
-                        this.setMode('planning');
-                        this.activateCompareColumn();
-                    });
+                    this.setMode('planning');
+                    this.activateCompareColumn();
                 });
                 document.getElementById('view-mode-sequence-btn')?.addEventListener('click', () => {
-                    go('sequence', () => {
-                        if (this.currentMode !== 'sequence') {
-                            this.setMode('sequence');
-                        }
-                        this.seq?.executeFunction?.();
-                    });
+                    if (this.currentMode !== 'sequence') {
+                        this.setMode('sequence');
+                    }
+                    this.seq?.executeFunction?.();
                 });
                 document.getElementById('view-mode-chat-btn')?.addEventListener('click', () => {
-                    go('chat', () => {
-                        if (this.compareActive) this.deactivateCompareColumn();
-                        this.setMode('chat');
-                    });
+                    if (this.compareActive) this.deactivateCompareColumn();
+                    this.setMode('chat');
                 });
                 this.syncViewModeButtons();
             }
@@ -637,16 +638,13 @@
             }
 
             setMode(mode, autoPlot = false) {
-                if (this.currentMode === 'chat' && mode !== 'chat' && !this._viewModeExplicit) {
-                    return;
-                }
-                this._viewModeExplicit = false;
                 console.log('Switching to mode:', mode);
                 this.currentMode = mode;
                 
                 // Clear slots
                 this.slots.sidebar.innerHTML = '';
                 this.slots.main.innerHTML = '';
+                this.slots.main.classList.remove('chat-with-preview-layout');
                 this.slots.tree.innerHTML = '';
                 this.slots.scan.innerHTML = '';
                 this.slots.params.innerHTML = '';
@@ -667,10 +665,16 @@
                     this.applyViewerLayout();
                 } else if (mode === 'chat') {
                     this.maximizedViewer = null;
+                    if (this.cache.nvCompare) {
+                        this.cache.nvCompare.classList.add('compare-pane-hidden');
+                        this.cache.nvCompare.style.display = 'none';
+                    }
                     this.slots.main.style.display = 'flex';
-                    this.slots.main.style.flexDirection = 'column';
+                    this.slots.main.style.flexDirection = 'row';
                     this.slots.main.classList.remove('planning-hist-visible');
+                    this.slots.main.classList.add('chat-with-preview-layout');
                     this.moveToSlot('chatPanel', 'main');
+                    this.moveToSlot('nvPreviewBcStack', 'main');
                     this.slots.main.classList.remove('scrollable');
                 } else if (mode === 'sequence') {
                     this.slots.main.classList.remove('planning-hist-visible');

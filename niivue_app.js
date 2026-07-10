@@ -372,7 +372,8 @@ export class NiivueModule {
       }
       buttons.forEach(btn => {
         btn.onclick = () => {
-          if (window.viewManager && window.viewManager.currentMode !== 'planning') {
+          if (window.viewManager && window.viewManager.currentMode !== 'planning'
+              && window.viewManager.currentMode !== 'chat') {
             window.viewManager.setMode('planning');
           }
           const slotSidebar = this.containerControls.closest('#slot-sidebar');
@@ -1279,7 +1280,8 @@ export class NiivueModule {
             // Two fingers = FOV rotation; clear single-finger state so leftover finger doesn't start drag
             this.touchPendingFovDrag = false;
             e.preventDefault();
-            if (window.viewManager && window.viewManager.currentMode !== 'planning') {
+            if (window.viewManager && window.viewManager.currentMode !== 'planning'
+                && window.viewManager.currentMode !== 'chat') {
                 window.viewManager.setMode('planning');
             }
             this.savedDragMode = this.nv.opts.dragMode;
@@ -1854,7 +1856,8 @@ os.makedirs('/phantom/averaged', exist_ok=True)
   }
 
   handleMouseDown(e) {
-         if (window.viewManager && window.viewManager.currentMode !== 'planning') {
+         if (window.viewManager && window.viewManager.currentMode !== 'planning'
+             && window.viewManager.currentMode !== 'chat') {
             window.viewManager.setMode('planning');
          }
 
@@ -1989,7 +1992,8 @@ os.makedirs('/phantom/averaged', exist_ok=True)
   }
 
   handleWheel(e) {
-          if (window.viewManager && window.viewManager.currentMode !== 'planning') {
+          if (window.viewManager && window.viewManager.currentMode !== 'planning'
+              && window.viewManager.currentMode !== 'chat') {
               window.viewManager.setMode('planning');
           }
 
@@ -3374,7 +3378,8 @@ os.makedirs('/phantom/averaged', exist_ok=True)
             return;
           }
           if (!isScan) return;
-          if (window.viewManager?.currentMode !== 'planning') {
+          if (window.viewManager?.currentMode !== 'planning'
+              && window.viewManager?.currentMode !== 'chat') {
             window.viewManager.setMode('planning');
           }
           this.selectedVolume = this.selectedVolume === vol ? null : vol;
