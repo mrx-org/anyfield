@@ -737,6 +737,40 @@ html.pro-user #paper-plot-btn {
     margin: 1rem 0;
 }
 
+.credits-content .info-logos {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: center;
+    justify-content: center;
+    gap: 1rem 1.5rem;
+    margin: 0.85rem 0 0.25rem;
+    padding: 0.5rem 0;
+}
+
+.credits-content .info-logo {
+    height: 34px;
+    width: auto;
+    max-width: 150px;
+    object-fit: contain;
+    opacity: 0.95;
+}
+
+.credits-content .info-logo-bmftr {
+    max-width: 190px;
+}
+
+.credits-content .info-logo-uker {
+    max-width: 200px;
+}
+
+.credits-content .info-logo-konwihr {
+    max-width: 120px;
+}
+
+.credits-content .info-logo-fau {
+    max-width: 110px;
+}
+
 #col-scan {
     padding: 12px;
 }

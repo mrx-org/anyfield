@@ -1,6 +1,6 @@
 # Licences, Credits & Dependencies
 
-This application is licensed under [MIT](https://opensource.org/licenses/MIT).
+This application is licensed under the [GNU Affero General Public License v3.0 (AGPL-3.0)](https://www.gnu.org/licenses/agpl-3.0.html).
 
 This application uses the following open-source software. We are grateful to their authors and communities.
 
