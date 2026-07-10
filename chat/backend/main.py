@@ -62,6 +62,8 @@ class ChatRequest(BaseModel):
 class ChatResponse(BaseModel):
     message: str
     actions: list[dict[str, Any]] = Field(default_factory=list)
+    usage: dict[str, Any] | None = None
+    reasoning: str | None = None
 
 
 def _blocks_in_message(content: str) -> list[str]:
@@ -166,7 +168,17 @@ def chat(req: ChatRequest) -> ChatResponse:
         result.get("message", "")[:120],
         result.get("actions"),
     )
-    return ChatResponse(**result)
+    if result.get("reasoning"):
+        log.debug(
+            "chat response reasoning (%d chars) included in payload for client trace",
+            len(result["reasoning"]),
+        )
+    return ChatResponse(
+        message=result["message"],
+        actions=result.get("actions") or [],
+        usage=result.get("usage"),
+        reasoning=result.get("reasoning"),
+    )
 
 
 if __name__ == "__main__":

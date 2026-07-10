@@ -689,6 +689,26 @@ Changes apply to the protocol panel in the footer automatically.</div>
         return String(data?.message || '').trim() || '(no reply)';
     }
 
+    function traceLlmResponse(data, agentMeta, internal) {
+        const entry = {
+            phase: agentMeta?.phase || (internal ? 'internal' : 'user'),
+            reply: extractReply(data),
+        };
+        if (data?.usage && typeof data.usage === 'object') {
+            entry.usage = data.usage;
+        }
+        if (data?.reasoning) {
+            const text = String(data.reasoning);
+            entry.reasoning = text.length > 4000
+                ? `${text.slice(0, 4000)}… (${text.length} chars total)`
+                : text;
+        }
+        if (data?.actions?.length) {
+            entry.model_actions = data.actions;
+        }
+        recordAgentTrace(entry);
+    }
+
     /** Push a context delta into history and advance modelKnown — no LLM call. */
     async function recordContextDelta() {
         const snapshot = snapshotContext();
@@ -740,14 +760,7 @@ Changes apply to the protocol panel in the footer automatically.</div>
 
         const data = await postChatRequest(userContent, snapshot, { bootstrap, agentMeta });
         chatLog('response', data);
-
-        if (data?.actions?.length) {
-            recordAgentTrace({
-                phase: agentMeta?.phase || (internal ? 'internal' : 'user'),
-                model_actions: data.actions,
-                reply: extractReply(data),
-            });
-        }
+        traceLlmResponse(data, agentMeta, internal);
 
         if (bootstrap) {
             applyModelKnown(modelKnown, { ...fingerprintSnapshot(snapshot), bootstrapped: true });

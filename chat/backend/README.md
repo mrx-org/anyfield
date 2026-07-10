@@ -92,9 +92,11 @@ Response: `{ "message": "…", "actions": [ … ] }`. Actions are applied in the
 
 ## Logging
 
-At INFO: each POST logs live `selected`, frozen-bootstrap flag, context-update presence, last user message, agent trace when present.
+At INFO: each POST logs live `selected`, frozen-bootstrap flag, context-update presence, last user message, agent trace when present; LLM token counts summary.
 
-At DEBUG: turn-1 bootstrap JSON; full LLM request payload and raw response.
+At DEBUG: turn-1 bootstrap JSON; full LLM request payload and raw response; full `usage` object (incl. reasoning token breakdown when the server provides it); model reasoning text when present.
+
+`POST /chat` may include optional `usage` and `reasoning` on the response (for client agent trace). Reasoning is omitted when the model does not emit it.
 
 Console + `logs/chat.log` (gitignored). Warns if turn 2+ arrives without `bootstrap_context`.
 

@@ -73,6 +73,48 @@ def _estimate_tokens(text: str) -> int:
     return max(1, len(text) // 4)
 
 
+def _usage_to_dict(usage: Any) -> dict[str, Any]:
+    if usage is None:
+        return {}
+    if hasattr(usage, "model_dump"):
+        return usage.model_dump(mode="json", exclude_none=True)
+    if isinstance(usage, dict):
+        return {k: v for k, v in usage.items() if v is not None}
+    out: dict[str, Any] = {}
+    for key in (
+        "prompt_tokens",
+        "completion_tokens",
+        "total_tokens",
+        "completion_tokens_details",
+        "prompt_tokens_details",
+    ):
+        val = getattr(usage, key, None)
+        if val is not None:
+            out[key] = (
+                val.model_dump(mode="json", exclude_none=True)
+                if hasattr(val, "model_dump")
+                else val
+            )
+    return out
+
+
+def _extract_reasoning(message: Any) -> str | None:
+    """Best-effort reasoning text from OpenAI-compatible message objects."""
+    if message is None:
+        return None
+    for key in ("reasoning_content", "reasoning"):
+        val = getattr(message, key, None)
+        if val is not None and str(val).strip():
+            return str(val).strip()
+    extra = getattr(message, "model_extra", None) or {}
+    if isinstance(extra, dict):
+        for key in ("reasoning_content", "reasoning"):
+            val = extra.get(key)
+            if val is not None and str(val).strip():
+                return str(val).strip()
+    return None
+
+
 def _build_api_messages(
     messages: list[dict[str, str]],
     bootstrap_context: dict[str, Any] | None = None,
@@ -121,22 +163,33 @@ def chat_completion(
         messages=api_messages,
         **gen,
     )
-    raw = (response.choices[0].message.content or "").strip()
+    choice_message = response.choices[0].message
+    raw = (choice_message.content or "").strip()
     actions = _parse_actions(raw)
     message = _strip_json_block(raw) or raw
+    reasoning = _extract_reasoning(choice_message)
 
-    usage = getattr(response, "usage", None)
-    if usage:
+    usage_dict = _usage_to_dict(getattr(response, "usage", None))
+    if usage_dict:
         log.info(
             "LLM usage prompt_tokens=%s completion_tokens=%s total=%s",
-            getattr(usage, "prompt_tokens", "?"),
-            getattr(usage, "completion_tokens", "?"),
-            getattr(usage, "total_tokens", "?"),
+            usage_dict.get("prompt_tokens", "?"),
+            usage_dict.get("completion_tokens", "?"),
+            usage_dict.get("total_tokens", "?"),
         )
+        log.debug("LLM usage detail: %s", json.dumps(usage_dict, ensure_ascii=False))
+
+    if reasoning:
+        log.debug("LLM reasoning (%d chars):\n%s", len(reasoning), reasoning)
 
     log.info("LLM response chars=%d actions=%d", len(raw), len(actions))
     log.debug("LLM raw response:\n%s", raw)
     if actions:
         log.info("parsed actions: %s", json.dumps(actions, ensure_ascii=False))
 
-    return {"message": message, "actions": actions}
+    return {
+        "message": message,
+        "actions": actions,
+        "usage": usage_dict or None,
+        "reasoning": reasoning,
+    }
