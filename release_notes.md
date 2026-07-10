@@ -1,5 +1,11 @@
 # Release notes
 
+## v3.0.0
+
+- **PyPulseq 1.5** — main app and `seq_check_web` pin `pypulseq==1.5.0.post1` (Pyodide / `sources.toml` / seq_check worker). Supports RF/ADC `ppm` offsets, soft delays, and other 1.5 sequence features.
+- **MRzeroCore 1.0** — simulation backends (mr0sim, rapisim, Modal HTTP) target MRzeroCore 1.x; k-space sign is now consistent across simulators (MRzeroCore 1.0 flipped sign vs 0.x).
+- **Unified sim recon** — removed the temporary rapisim-specific `fftn` / `conj(k)` workaround in `scan_zero/recon.py`. All sim backends share one adjoint recon: Cartesian `ifftn`, non-Cartesian PyNUFFT + Pipe-Menon DCF. Dropped the flip+roll `_display_align_3d` export step that mirrored images RL/AP; Cartesian keeps `fftshift` after `ifftn`, NUFFT adjoint is written as-is (same voxel grid).
+
 ## v2.2.3
 
 - **seq_check_web** — new standalone browser tool at `pypulseq/seq_check_web/` for validating Pulseq `.seq` files without the full Anyfield scanner UI. Upload a sequence (or load the GRE example), then inspect waveforms, k-space, PSF profiles, and a windowed NUFFT recon in one page.

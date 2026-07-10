@@ -25,10 +25,6 @@ For non-Cartesian trajectories, density compensation is applied before the
 adjoint NUFFT using a short Pipe-Menon style fixed-point iteration on PyNUFFT's
 interpolation / gridding operators. This stays general across radial / spiral
 style trajectories while remaining Pyodide-friendly.
-
-Rapisim (``sim_backend="rapisim"``): Cartesian recon uses ``fftn`` instead of
-``ifftn``; non-Cartesian recon conjugates k-space samples before adjoint NUFFT
-(``_backend_kspace_fix``) until MR0 and rapisim agree on FT sign.
 """
 from __future__ import annotations
 
@@ -249,14 +245,6 @@ def _scatter_cartesian_kspace(
     return ksp.astype(np.complex64)
 
 
-def _display_align_3d(vol: np.ndarray) -> np.ndarray:
-    """Flip + roll for NIfTI display alignment (magnitude, phase, etc.)."""
-    out = np.ascontiguousarray(np.flip(vol, axis=(0, 1, 2)))
-    for _ax in (0, 1, 2):
-        out = np.roll(out, 1, axis=_ax)
-    return np.ascontiguousarray(out)
-
-
 def _save_image_mag_phase_nifti(
     reco: np.ndarray,
     ref_img: nib.Nifti1Image,
@@ -266,8 +254,8 @@ def _save_image_mag_phase_nifti(
     dz_mm: float,
 ) -> str:
     """Write 4D NIfTI: frame 0 = |img|, frame 1 = angle(img) in radians."""
-    mag3d = _display_align_3d(np.abs(reco).astype(np.float32))
-    phase3d = _display_align_3d(np.angle(reco).astype(np.float32))
+    mag3d = np.ascontiguousarray(np.abs(reco).astype(np.float32))
+    phase3d = np.ascontiguousarray(np.angle(reco).astype(np.float32))
     vol4d = np.stack([mag3d, phase3d], axis=-1)
     out = nib.Nifti1Image(vol4d, ref_img.affine)
     out.header.set_zooms((dx_mm, dy_mm, dz_mm, 1.0))
@@ -305,18 +293,15 @@ def _recon_cartesian_ifft(
     fov_y_m: float,
     fov_z_m: float,
     offset_n: tuple[float, float, float] | None = None,
-    use_fftn: bool = False,
 ) -> np.ndarray:
     """
-    Scatter ``signal_1d`` onto centered Cartesian k-space bins, then ``ifftn`` or ``fftn``.
+    Scatter ``signal_1d`` onto centered Cartesian k-space bins, then ``ifftn``.
 
     Integer bin index ``n_adj = k * FOV - offset_n`` maps to numpy's unshifted FFT order via
     ``i = n % N`` (same convention as ``numpy.fft``).
 
-    ``fftshift`` is applied on the image so DC / anatomy align with display (PyNUFFT adjoint
-    was already effectively centered; raw ``ifftn`` leaves energy in array corners).
-
-    ``use_fftn=True`` selects ``fftn`` (rapisim sign convention workaround until simulators align).
+    ``fftshift`` centers DC on the FOV-mask voxel grid (PyNUFFT adjoint leaves the same
+    unshifted order; both paths converge after shift before NIfTI export).
     """
     ksp = _scatter_cartesian_kspace(
         signal_1d,
@@ -329,10 +314,7 @@ def _recon_cartesian_ifft(
         fov_z_m,
         offset_n=offset_n,
     )
-    if use_fftn:
-        reco = np.fft.fftn(ksp, norm="ortho")
-    else:
-        reco = np.fft.ifftn(ksp, norm="ortho")
+    reco = np.fft.ifftn(ksp, norm="ortho")
     reco = np.fft.fftshift(reco, axes=(0, 1, 2))
     return reco.astype(np.complex64)
 
@@ -402,17 +384,6 @@ def _kspace_log_volume(
     return vol, (dx_mm, dy_mm, dz_mm)
 
 
-def _is_rapisim_backend(sim_backend: str) -> bool:
-    return str(sim_backend).strip().lower() == "rapisim"
-
-
-def _backend_kspace_fix(signal: np.ndarray, sim_backend: str) -> np.ndarray:
-    """Conjugate k-space samples for rapisim (NUFFT path; Cartesian uses fftn/ifftn)."""
-    if _is_rapisim_backend(sim_backend):
-        return np.conj(signal.astype(np.complex64, copy=False))
-    return signal
-
-
 def _recon_full_nufft(
     signal_1d: np.ndarray,
     tr: np.ndarray,
@@ -423,7 +394,6 @@ def _recon_full_nufft(
     omega_scale_y: float,
     omega_scale_z: float,
     apply_dcf: bool = False,
-    sim_backend: str = "mr0",
 ) -> tuple[np.ndarray, np.ndarray | None]:
     """PyNUFFT adjoint using a 2D plan for singleton-z and 3D otherwise."""
     kxy = tr[:, :2]
@@ -440,7 +410,7 @@ def _recon_full_nufft(
     )
     om = np.column_stack([om2[:, 0], om2[:, 1], oz])
     n = min(signal_1d.size, om.shape[0])
-    signal_n = _backend_kspace_fix(signal_1d[:n], sim_backend)
+    signal_n = signal_1d[:n].astype(np.complex64, copy=False)
     om_n = om[:n]
     a = NUFFT()
     use_2d_plan = int(nz) == 1 and (
@@ -460,18 +430,13 @@ def _recon_full_nufft(
         reco = np.asarray(reco).reshape(nx, ny, 1)
     else:
         reco = np.asarray(reco).reshape(nx, ny, nz)
-    return reco, dcf
+    return reco.astype(np.complex64), dcf
 
 
 def _to_py_list(x: Any) -> Any:
     if hasattr(x, "to_py"):
         return x.to_py()
     return x
-
-
-def _cartesian_use_fftn(sim_backend: str) -> bool:
-    """Rapisim k-space uses the opposite FT sign vs MR0 until simulators are aligned."""
-    return _is_rapisim_backend(sim_backend)
 
 
 def run_sim_recon(
@@ -481,7 +446,6 @@ def run_sim_recon(
     out_path: str = DEFAULT_OUT_PATH,
     output_mode: str = "image",
     matrix: Sequence[int] | None = None,
-    sim_backend: str = "mr0",
 ) -> str:
     """
     Gridding adjoint (NUFFT) magnitude recon on the ref mask grid, or k-space debug output.
@@ -501,9 +465,6 @@ def run_sim_recon(
         ``"kspace_log"``: ``log(abs(kspace)+1)`` on recon grid or acquisition matrix.
     matrix
         Optional ``[Nread, Nphase, nz]`` from seq definitions (non-Cartesian fallback).
-    sim_backend
-        ``"mr0"`` (default) or ``"rapisim"``. Rapisim uses ``fftn`` (Cartesian) or conjugated
-        k-space before PyNUFFT adjoint (spiral / non-Cartesian) until simulators align on FT sign.
 
     Returns
     -------
@@ -636,7 +597,6 @@ def run_sim_recon(
         nib.save(out, out_path)
         return out_path
 
-    cart_fftn = _cartesian_use_fftn(sim_backend)
     reco: np.ndarray | None = None
     if tr_np is not None and axis_ok is not None and all(axis_ok):
         n_cart = min(int(signal.size), int(tr_np.shape[0]))
@@ -650,14 +610,10 @@ def run_sim_recon(
             fov_y_m,
             fov_z_m,
             offset_n=offsets_xyz,
-            use_fftn=cart_fftn,
         )
-        _ft = "fftn" if cart_fftn else "ifftn"
         _log_recon(
             "[recon] transform used: kx=FFT, ky=FFT, kz=FFT "
-            "(numpy.fft.%s — Cartesian scatter + central crop to recon grid + separable FFT, "
-            "sim_backend=%s)"
-            % (_ft, sim_backend)
+            "(numpy.fft.ifftn — Cartesian scatter + central crop to recon grid + separable FFT)"
         )
 
     elif tr_np is not None and axis_ok is not None and not all(axis_ok):
@@ -677,7 +633,6 @@ def run_sim_recon(
                 kmax_y,
                 kmax_z,
                 apply_dcf=True,
-                sim_backend=sim_backend,
             )
             if dcf is None:
                 raise RuntimeError("Pipe-Menon DCF failed to produce weights.")
@@ -690,13 +645,9 @@ def run_sim_recon(
                     float(np.max(dcf)),
                 )
             )
-            _nufft_note = (
-                "pynufft joint 3D NUFFT + Pipe-Menon density compensation"
-                + (" + conj(k) for rapisim" if _is_rapisim_backend(sim_backend) else "")
-            )
             _log_recon(
-                "[recon] transform used: kx=PyNUFFT, ky=PyNUFFT, kz=PyNUFFT (%s, sim_backend=%s)"
-                % (_nufft_note, sim_backend)
+                "[recon] transform used: kx=PyNUFFT, ky=PyNUFFT, kz=PyNUFFT "
+                "(pynufft joint 3D NUFFT + Pipe-Menon density compensation)"
             )
 
     if reco is None:
@@ -727,7 +678,7 @@ def run_sim_recon(
             om = np.stack([kxg.ravel(), kyg.ravel(), kzg.ravel()], axis=-1)
 
         n = min(signal.size, om.shape[0])
-        signal_n = _backend_kspace_fix(signal[:n], sim_backend)
+        signal_n = signal[:n].astype(np.complex64, copy=False)
         om_n = om[:n]
 
         a = NUFFT()
@@ -743,11 +694,9 @@ def run_sim_recon(
             if axis_ok is not None
             else "pynufft synthetic ω trajectory"
         )
-        if _is_rapisim_backend(sim_backend):
-            _fallback_note += " + conj(k) for rapisim"
         _log_recon(
-            "[recon] transform used: kx=PyNUFFT, ky=PyNUFFT, kz=PyNUFFT (%s, sim_backend=%s)"
-            % (_fallback_note, sim_backend)
+            "[recon] transform used: kx=PyNUFFT, ky=PyNUFFT, kz=PyNUFFT (%s)"
+            % _fallback_note
         )
     _log_recon("[recon] output: 4D NIfTI frame 0 = |img|, frame 1 = angle(img) [rad]")
     return _save_image_mag_phase_nifti(reco, ref_img, out_path, dx_mm, dy_mm, dz_mm)

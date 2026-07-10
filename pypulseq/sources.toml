@@ -20,33 +20,33 @@
 type = "folder"
 name = "anyseq"
 path = "https://github.com/mrx-org/anyfield/tree/main/pypulseq/anyseq"
-dependencies = ["numpy", "matplotlib", "pypulseq==1.4.2.post2"]
+dependencies = ["numpy", "matplotlib", "pypulseq==1.5.0.post1"]
 micropip_no_deps = ["pypulseq"]
 
 [[sources]]
 type = "folder"
 name = "builtin"
 path = "https://github.com/mrx-org/anyfield/tree/main/pypulseq/built_in_seq"
-dependencies = ["numpy", "matplotlib", "pypulseq==1.4.2.post2"]
+dependencies = ["numpy", "matplotlib", "pypulseq==1.5.0.post1"]
 micropip_no_deps = ["pypulseq"]
 
 [[sources]]
 type = "module"
 name = "mrseq.scripts"
 path = "mrseq.scripts"
-dependencies = ["numpy>=2.0.0", "pypulseq==1.4.2.post2", "mrseq", "ismrmrd==1.14.2"]
+dependencies = ["numpy>=2.0.0", "pypulseq==1.5.0.post1", "mrseq", "ismrmrd==1.14.2"]
 micropip_no_deps = ["pypulseq", "mrseq"]
 
 [[sources]]
 type = "folder"
 name = "pypulseq_examples"
 path = "https://github.com/imr-framework/pypulseq/tree/master/examples/scripts"
-dependencies = ["numpy", "pypulseq==1.4.2.post2"]
+dependencies = ["numpy", "pypulseq==1.5.0.post1"]
 micropip_no_deps = ["pypulseq"]
 
 [[sources]]
 type = "file"
 name = "MRzero"
 path = "https://raw.githubusercontent.com/MRsources/MRzero-Core/refs/heads/main/documentation/playground_mr0/mr0_EPI_2D_seq.ipynb"
-dependencies = ["pypulseq==1.4.2.post2"]
+dependencies = ["pypulseq==1.5.0.post1"]
 micropip_no_deps = ["pypulseq"]

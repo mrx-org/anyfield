@@ -41,7 +41,7 @@ async function handleInit(gen) {
     await pyodide.loadPackage(['numpy', 'matplotlib', 'micropip'], { checkIntegrity: false });
     const micropip = pyodide.pyimport('micropip');
     await Promise.all([
-        micropip.install(['pypulseq==1.4.2.post2']),
+        micropip.install(['pypulseq==1.5.0.post1']),
         micropip.install('pynufft'),
     ]);
     try {

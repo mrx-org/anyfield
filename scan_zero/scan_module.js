@@ -718,7 +718,6 @@ export class ScanModule {
                 backendId: backend.id,
                 backendLabel: backend.label,
                 toolUrl: backend.toolUrl,
-                reconBackend: backend.reconBackend,
                 useGpu: backend.useGpu === true,
                 transport: backend.transport || 'ws',
                 httpBaseUrl: backend.httpBaseUrl || null,
@@ -2141,7 +2140,6 @@ for i in range(ktraj.shape[0]):
             const useRecon = typeof nvMod.isScanReconEnabled === 'function'
                 ? nvMod.isScanReconEnabled()
                 : nvMod.scanRecon?.checked !== false;
-            const simBackend = job.simulation?.reconBackend || 'mr0';
             const recoOutPath = typeof nvMod.simReconOutPath === 'function'
                 ? nvMod.simReconOutPath(job.id)
                 : '/tmp/__sim_pipeline_reco.nii';
@@ -2164,7 +2162,6 @@ except Exception:
                 nvMod.pyodide.globals.set('sim_ref_bytes', reconRef);
                 nvMod.pyodide.globals.set('sim_output_mode', useRecon ? 'image' : 'kspace_log');
                 nvMod.pyodide.globals.set('sim_seq_path', job.vfsSeqPath || '');
-                nvMod.pyodide.globals.set('sim_backend', simBackend);
                 nvMod.pyodide.globals.set('sim_reco_out_path', recoOutPath);
                 const recoPathRes = await nvMod.pyodide.runPythonAsync(`
 import types
@@ -2189,7 +2186,6 @@ if "output_mode" not in _src:
 _recon = types.ModuleType("_scan_recon_live")
 _recon.__dict__["__file__"] = "/scan_zero/recon.py"
 exec(compile(_src, "/scan_zero/recon.py", "exec"), _recon.__dict__)
-_backend = sim_backend.to_py() if hasattr(sim_backend, 'to_py') else str(sim_backend)
 _out = sim_reco_out_path.to_py() if hasattr(sim_reco_out_path, 'to_py') else str(sim_reco_out_path)
 _recon.run_sim_recon(
     sim_signal_pairs,
@@ -2198,7 +2194,6 @@ _recon.run_sim_recon(
     out_path=_out,
     output_mode=sim_output_mode,
     matrix=_matrix,
-    sim_backend=_backend,
 )
                 `);
                 const recoPath = (recoPathRes && recoPathRes.toJs) ? recoPathRes.toJs() : recoPathRes;
@@ -2398,8 +2393,6 @@ _recon.run_sim_recon(
                 ? nvMod.isScanReconEnabled()
                 : nvMod.scanRecon?.checked !== false;
             const _t6 = performance.now();
-            const simBackend = job.simulation?.reconBackend
-                || (String(simToolUrl || '').includes('rapisim') ? 'rapisim' : 'mr0');
             const recoOutPath = typeof nvMod.simReconOutPath === "function"
                 ? nvMod.simReconOutPath(job.id)
                 : "/tmp/__sim_pipeline_reco.nii";
@@ -2420,7 +2413,6 @@ except Exception:
                 nvMod.pyodide.globals.set("sim_ref_bytes", reconRef);
                 nvMod.pyodide.globals.set("sim_output_mode", useRecon ? "image" : "kspace_log");
                 nvMod.pyodide.globals.set("sim_seq_path", job.vfsSeqPath || "");
-                nvMod.pyodide.globals.set("sim_backend", simBackend);
                 nvMod.pyodide.globals.set("sim_reco_out_path", recoOutPath);
                 const recoPathRes = await nvMod.pyodide.runPythonAsync(`
 import types
@@ -2445,7 +2437,6 @@ if "output_mode" not in _src:
 _recon = types.ModuleType("_scan_recon_live")
 _recon.__dict__["__file__"] = "/scan_zero/recon.py"
 exec(compile(_src, "/scan_zero/recon.py", "exec"), _recon.__dict__)
-_backend = sim_backend.to_py() if hasattr(sim_backend, 'to_py') else str(sim_backend)
 _out = sim_reco_out_path.to_py() if hasattr(sim_reco_out_path, 'to_py') else str(sim_reco_out_path)
 _recon.run_sim_recon(
     sim_signal_pairs,
@@ -2454,7 +2445,6 @@ _recon.run_sim_recon(
     out_path=_out,
     output_mode=sim_output_mode,
     matrix=_matrix,
-    sim_backend=_backend,
 )
                 `);
                 const recoPath = (recoPathRes && recoPathRes.toJs) ? recoPathRes.toJs() : recoPathRes;

@@ -262,7 +262,7 @@
     <div class="lab-shell">
         <header>
             <div class="header-content">
-                <div class="header-title">Any-Field <span class="header-subtitle">Scanner</span><span class="app-version" aria-label="Version v2.2.3">v2.2.3</span></div>
+                <div class="header-title">Any-Field <span class="header-subtitle">Scanner</span><span class="app-version" aria-label="Version v3.0.0">v3.0.0</span></div>
                 <div class="header-actions">
                     <div class="header-view-modes" role="group" aria-label="Main view mode">
                         <button type="button" id="view-mode-planning-btn" class="credits-btn view-mode-btn" title="Planning view (main + preview)" aria-label="Planning view, main and preview">
@@ -684,11 +684,11 @@
                     });
                     await py.loadPackage(['numpy', 'micropip', 'matplotlib', 'scipy']);
                     const plotUtilsCode = await plotUtilsFetch;
-                    // Pin pypulseq: conseq rejects Pulseq file format 1.5.x; 1.4.2.post2 writes an older version line.
+                    // Pin pypulseq for reproducible .seq format and API.
                     // deps=False: numpy already loaded; matplotlib/scipy loaded on demand — skips ~3s of transitive dep downloads.
                     await py.runPythonAsync(`
 import micropip
-await micropip.install('pypulseq==1.4.2.post2', deps=False)
+await micropip.install('pypulseq==1.5.0.post1', deps=False)
 `);
                     await patchSequencePlotFromCode(py, plotUtilsCode);
                     return py;

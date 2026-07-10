@@ -1650,7 +1650,7 @@ plt.rcParams['font.size'] = 8`;
      * @returns {string}
      */
     getInstalledPyPulseqVersion() {
-        const fallbackVersion = '1.4.2.post2';
+        const fallbackVersion = '1.5.0.post1';
         const root = this.consoleTarget || this.container || document;
         const versionEl = root ? root.querySelector('#seq-pypulseq-version') : null;
         const version = versionEl?.textContent?.trim();
@@ -1659,6 +1659,18 @@ plt.rcParams['font.size'] = 8`;
             return normalize(fallbackVersion);
         }
         return normalize(version);
+    }
+
+    /** Full local PyPulseq label for UI notes (e.g. ``1.5.0post1``). */
+    getLocalPyPulseqVersionLabel() {
+        const fallbackVersion = '1.5.0.post1';
+        const root = this.consoleTarget || this.container || document;
+        const versionEl = root ? root.querySelector('#seq-pypulseq-version') : null;
+        let version = versionEl?.textContent?.trim();
+        if (!version || version === 'loading...' || version === 'unknown') {
+            version = fallbackVersion;
+        }
+        return String(version).replace(/\.post(\d+)$/i, 'post$1');
     }
 
     /**
@@ -3981,7 +3993,7 @@ json.dumps(_result)
                     inputCell.appendChild(uploadRow);
                     const noteText = document.createElement('div');
                     noteText.className = 'seq-file-note';
-                    noteText.textContent = `We are currently restricted to Pulseq version ${this.getInstalledPyPulseqVersion()}`;
+                    noteText.textContent = `Local pypulseq version is ${this.getLocalPyPulseqVersionLabel()}`;
                     inputCell.appendChild(noteText);
                 }
             } else {
