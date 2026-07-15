@@ -1,5 +1,9 @@
 # Release notes
 
+## v3.0.1
+
+- **Browser persistence cleanup** — simulation backend no longer stored in `localStorage`; each session starts on the default mr0 T4 (m). Removed unused Paper Plot `paperPlot:lastLayout` autosave (layouts remain export/import via JSON only). Sequence tree collapse state (`seq-tree-collapse-*`) is still persisted.
+
 ## v3.0.0
 
 - **PyPulseq 1.5** — main app and `seq_check_web` pin `pypulseq==1.5.0.post1` (Pyodide / `sources.toml` / seq_check worker). Supports RF/ADC `ppm` offsets, soft delays, and other 1.5 sequence features.
