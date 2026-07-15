@@ -170,8 +170,6 @@ export function formatScanDisplayTitle(volName, job = null) {
     return String(volName || '').replace(/\.nii(\.gz)?$/i, '');
 }
 
-const SIM_BACKEND_STORAGE_KEY = 'anyfield.simBackendId';
-
 /** Footer swipe layout (viewport ≤768px or OPTIONS → Compact). */
 export function isCompactFooterLayout() {
     if (typeof window === 'undefined') return false;
@@ -204,20 +202,9 @@ export class ScanModule {
         this._simPipelineJob = null;
         this._toolWsInflight = 0;
         this._toolWsWaiters = [];
-        this._selectedSimBackendId = this._loadSimBackendId();
+        this._selectedSimBackendId = DEFAULT_SIM_BACKEND_ID;
 
         this.setupEventListeners();
-    }
-
-    _loadSimBackendId() {
-        const fallback = DEFAULT_SIM_BACKEND_ID;
-        if (typeof window === 'undefined' || !window.localStorage) return fallback;
-        try {
-            const stored = String(window.localStorage.getItem(SIM_BACKEND_STORAGE_KEY) || '').trim();
-            return SIM_BACKENDS[stored] ? stored : fallback;
-        } catch (_) {
-            return fallback;
-        }
     }
 
     getSelectedSimBackendId() {
@@ -229,9 +216,6 @@ export class ScanModule {
         const id = String(backendId || '').trim();
         if (!SIM_BACKENDS[id]) throw new Error(`Unknown sim backend: ${backendId}`);
         this._selectedSimBackendId = id;
-        try {
-            window.localStorage?.setItem(SIM_BACKEND_STORAGE_KEY, id);
-        } catch (_) { /* ignore */ }
         this._syncScanControlLabels();
     }
 

@@ -46,6 +46,177 @@ def extract_pep723_block(code, block_type='script'):
     return None
 
 
+def _ast_eval_simple_default(node):
+    """Evaluate a simple literal default expression from a function parameter AST node."""
+    import math
+    import operator as op_mod
+
+    np_constants = {
+        'pi': math.pi,
+        'e': math.e,
+        'inf': math.inf,
+        'nan': float('nan'),
+        'pi_2': math.pi / 2,
+    }
+
+    if node is None:
+        return None
+
+    if isinstance(node, ast.Constant):
+        return node.value
+    if isinstance(node, (ast.Tuple, ast.List)):
+        return [_ast_eval_simple_default(el) for el in node.elts]
+    if isinstance(node, ast.UnaryOp):
+        value = _ast_eval_simple_default(node.operand)
+        return -value if isinstance(node.op, ast.USub) else +value
+    if isinstance(node, ast.BinOp):
+        left = _ast_eval_simple_default(node.left)
+        right = _ast_eval_simple_default(node.right)
+        ops = {
+            ast.Add: op_mod.add,
+            ast.Sub: op_mod.sub,
+            ast.Mult: op_mod.mul,
+            ast.Div: op_mod.truediv,
+            ast.Pow: op_mod.pow,
+            ast.Mod: op_mod.mod,
+        }
+        fn = ops.get(type(node.op))
+        if fn is None:
+            raise ValueError
+        return fn(left, right)
+    if isinstance(node, ast.Attribute):
+        if isinstance(node.value, ast.Name) and node.value.id in ('np', 'numpy', 'math'):
+            value = getattr(math, node.attr, np_constants.get(node.attr))
+            if value is None:
+                raise ValueError
+            return value
+    if isinstance(node, ast.Name):
+        if node.id in ('True', 'False', 'None'):
+            return {'True': True, 'False': False, 'None': None}[node.id]
+        if node.id in np_constants:
+            return np_constants[node.id]
+    raise ValueError(f'Cannot evaluate: {ast.dump(node)}')
+
+
+def _ast_default_type_name(value):
+    if isinstance(value, bool):
+        return 'bool'
+    if isinstance(value, int):
+        return 'int'
+    if isinstance(value, float):
+        return 'float'
+    if isinstance(value, str):
+        return 'str'
+    if isinstance(value, (list, tuple)):
+        return 'list'
+    return type(value).__name__
+
+
+def _ast_param_type_from_annotation(arg):
+    if arg.annotation is None:
+        return None
+    try:
+        ann_src = ast.unparse(arg.annotation)
+    except Exception:
+        return None
+    if 'Annotated' in ann_src:
+        if '"file"' in ann_src or "'file'" in ann_src:
+            return 'file'
+        if '"url"' in ann_src or "'url'" in ann_src:
+            return 'url'
+    return None
+
+
+def _ast_param_dict_from_arg(arg, default_node):
+    name = arg.arg
+    val, type_name = None, 'None'
+
+    if default_node is not None:
+        try:
+            val = _ast_eval_simple_default(default_node)
+            if isinstance(val, (list, tuple)):
+                val = list(val)
+            type_name = _ast_default_type_name(val)
+        except Exception:
+            try:
+                val = ast.unparse(default_node)
+                type_name = 'unknown'
+            except Exception:
+                val = None
+
+    annotated_type = _ast_param_type_from_annotation(arg)
+    if annotated_type is not None:
+        type_name = annotated_type
+
+    return {'name': name, 'default': val, 'type': type_name}
+
+
+def _ast_function_params(func_args, skip_system=True):
+    """Build UI parameter dicts from a function ``arguments`` AST node (incl. keyword-only)."""
+    params = []
+
+    positional_args = func_args.args
+    positional_defaults = func_args.defaults
+    n_pos = len(positional_args)
+    n_defaults = len(positional_defaults)
+    default_map = {n_pos - n_defaults + i: positional_defaults[i] for i in range(n_defaults)}
+
+    for i, arg in enumerate(positional_args):
+        if skip_system and arg.arg == 'system':
+            continue
+        params.append(_ast_param_dict_from_arg(arg, default_map.get(i)))
+
+    for i, arg in enumerate(func_args.kwonlyargs):
+        if skip_system and arg.arg == 'system':
+            continue
+        default_node = func_args.kw_defaults[i] if i < len(func_args.kw_defaults) else None
+        params.append(_ast_param_dict_from_arg(arg, default_node))
+
+    return params
+
+
+def _ast_format_arg(arg, default_node=None):
+    arg_str = arg.arg
+    if arg.annotation:
+        try:
+            arg_str += f': {ast.unparse(arg.annotation)}'
+        except Exception:
+            pass
+    if default_node is not None:
+        try:
+            arg_str += f' = {ast.unparse(default_node)}'
+        except Exception:
+            pass
+    return arg_str
+
+
+def _ast_format_function_signature(func_args):
+    """Format ``(plot, *, fov=..., n_read=...)`` including keyword-only parameters after ``*``."""
+    parts = []
+
+    positional = list(func_args.args)
+    defaults = func_args.defaults
+    n_pos = len(positional)
+    n_defaults = len(defaults)
+    default_map = {n_pos - n_defaults + i: defaults[i] for i in range(n_defaults)}
+    for i, arg in enumerate(positional):
+        parts.append(_ast_format_arg(arg, default_map.get(i)))
+
+    if func_args.vararg:
+        parts.append(f'*{func_args.vararg.arg}')
+    elif func_args.kwonlyargs:
+        parts.append('*')
+
+    for i, arg in enumerate(func_args.kwonlyargs):
+        default_node = func_args.kw_defaults[i] if i < len(func_args.kw_defaults) else None
+        parts.append(_ast_format_arg(arg, default_node))
+
+    if func_args.kwarg:
+        parts.append(f'**{func_args.kwarg.arg}')
+
+    return f'({", ".join(parts)})'
+
+
 def _pep_install_from_toml_data(data):
     """PEP 723 install fields only — scanner metadata lives in `_anyfield_json`."""
     tool = data.get('tool', {}) or {}
@@ -333,30 +504,8 @@ class SourceManager:
                     
                     # Extract docstring
                     docstring = ast.get_docstring(node) or ''
-                    
-                    # Build signature string
-                    args = []
-                    for arg in node.args.args:
-                        arg_str = arg.arg
-                        if arg.annotation:
-                            try:
-                                arg_str += f": {ast.unparse(arg.annotation)}"
-                            except:
-                                pass
-                        args.append(arg_str)
-                    
-                    # Handle defaults
-                    defaults = node.args.defaults
-                    if defaults:
-                        for i, default in enumerate(defaults):
-                            idx = len(args) - len(defaults) + i
-                            try:
-                                default_val = ast.unparse(default)
-                                args[idx] += f" = {default_val}"
-                            except:
-                                pass
-                    
-                    signature = f"({', '.join(args)})"
+
+                    signature = _ast_format_function_signature(node.args)
                     
                     functions.append({
                         'name': func_name,
@@ -417,91 +566,7 @@ class SourceManager:
 
         # Extract docstring
         doc = ast.get_docstring(func_node) or ''
-
-        # Build arg-index → default-node mapping
-        args_list = func_node.args.args
-        defaults = func_node.args.defaults
-        n = len(args_list)
-        d = len(defaults)
-        default_map = {n - d + i: defaults[i] for i in range(d)}
-
-        # numpy constant substitutions (covers common seq defaults)
-        NP = {'pi': math.pi, 'e': math.e, 'inf': math.inf, 'nan': float('nan'),
-              'pi_2': math.pi / 2}
-
-        def _eval(node):
-            """Recursively evaluate a simple AST expression."""
-            if isinstance(node, ast.Constant):
-                return node.value
-            if isinstance(node, (ast.Tuple, ast.List)):
-                return [_eval(el) for el in node.elts]
-            if isinstance(node, ast.UnaryOp):
-                v = _eval(node.operand)
-                return -v if isinstance(node.op, ast.USub) else +v
-            if isinstance(node, ast.BinOp):
-                lv, rv = _eval(node.left), _eval(node.right)
-                ops = {ast.Add: op_mod.add, ast.Sub: op_mod.sub,
-                       ast.Mult: op_mod.mul, ast.Div: op_mod.truediv,
-                       ast.Pow: op_mod.pow, ast.Mod: op_mod.mod}
-                fn = ops.get(type(node.op))
-                if fn is None:
-                    raise ValueError
-                return fn(lv, rv)
-            if isinstance(node, ast.Attribute):
-                if isinstance(node.value, ast.Name) and node.value.id in ('np', 'numpy', 'math'):
-                    v = getattr(math, node.attr, NP.get(node.attr))
-                    if v is None:
-                        raise ValueError
-                    return v
-            if isinstance(node, ast.Name):
-                if node.id in ('True', 'False', 'None'):
-                    return {'True': True, 'False': False, 'None': None}[node.id]
-                if node.id in NP:
-                    return NP[node.id]
-            raise ValueError(f"Cannot evaluate: {ast.dump(node)}")
-
-        def _type_name(val):
-            if isinstance(val, bool):   return 'bool'
-            if isinstance(val, int):    return 'int'
-            if isinstance(val, float):  return 'float'
-            if isinstance(val, str):    return 'str'
-            if isinstance(val, (list, tuple)): return 'list'
-            return type(val).__name__
-
-        params = []
-        for i, arg in enumerate(args_list):
-            name = arg.arg
-            if name == 'system':
-                continue
-
-            val, type_name = None, 'None'
-
-            if i in default_map:
-                try:
-                    val = _eval(default_map[i])
-                    if isinstance(val, (list, tuple)):
-                        val = list(val)
-                    type_name = _type_name(val)
-                except Exception:
-                    try:
-                        val = ast.unparse(default_map[i])
-                        type_name = 'unknown'
-                    except Exception:
-                        val = None
-
-            # Check for Annotated[str, "file"] / Annotated[str, "url"] type hints
-            if arg.annotation is not None:
-                try:
-                    ann_src = ast.unparse(arg.annotation)
-                    if 'Annotated' in ann_src:
-                        if '"file"' in ann_src or "'file'" in ann_src:
-                            type_name = 'file'
-                        elif '"url"' in ann_src or "'url'" in ann_src:
-                            type_name = 'url'
-                except Exception:
-                    pass
-
-            params.append({'name': name, 'default': val, 'type': type_name})
+        params = _ast_function_params(func_node.args)
 
         return {'params': params, 'doc': doc}
 
@@ -736,5 +801,8 @@ class SourceManager:
             
             # Return result as string (for JSON serialization)
             return json.dumps({'result': 'SUCCESS', 'message': f"Function executed successfully. Result type: {type(result).__name__}"})
+        except ValueError:
+            raise
         except Exception as e:
-            raise RuntimeError(f"Error executing function '{function_name}': {e}")
+            msg = str(e).strip() or type(e).__name__
+            raise RuntimeError(f"Error executing function '{function_name}': {msg}") from e

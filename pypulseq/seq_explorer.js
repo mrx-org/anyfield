@@ -4314,12 +4314,17 @@ json.dumps(out)
             // Extract the most useful error message from the stack trace
             let errorMsg = rawError;
             // Try to extract the actual assertion/error message from pypulseq
-            const assertMatch = errorMsg.match(/AssertionError: ([^\n]+)/);
+            const assertMatch = errorMsg.match(/AssertionError(?:: ([^\n]+))?/);
+            const valueErrorMatch = errorMsg.match(/ValueError: ([^\n]+)/);
             const runtimeMatch = errorMsg.match(/RuntimeError: Error executing function '[^']+': ([^\n]+)/);
-            if (runtimeMatch) {
+            if (valueErrorMatch) {
+                errorMsg = valueErrorMatch[1];
+            } else if (runtimeMatch) {
                 errorMsg = runtimeMatch[1];
-            } else if (assertMatch) {
+            } else if (assertMatch && assertMatch[1]) {
                 errorMsg = assertMatch[1];
+            } else if (assertMatch) {
+                errorMsg = 'Timing or parameter constraint not satisfied (AssertionError). Check TE, TR, and readout bandwidth.';
             }
             // showStatus will log to UI console for errors
             this.showStatus(`Error: ${errorMsg}`, 'error');
@@ -4655,12 +4660,17 @@ plt.rcParams['font.size'] = 8`;
             console.error('Error executing function in popup:', error);
             await this.disposeSeqChartGpu();
             let errorMsg = error.message || String(error);
-            const assertMatch = errorMsg.match(/AssertionError: ([^\n]+)/);
+            const assertMatch = errorMsg.match(/AssertionError(?:: ([^\n]+))?/);
+            const valueErrorMatch = errorMsg.match(/ValueError: ([^\n]+)/);
             const runtimeMatch = errorMsg.match(/RuntimeError: Error executing function '[^']+': ([^\n]+)/);
-            if (runtimeMatch) {
+            if (valueErrorMatch) {
+                errorMsg = valueErrorMatch[1];
+            } else if (runtimeMatch) {
                 errorMsg = runtimeMatch[1];
-            } else if (assertMatch) {
+            } else if (assertMatch && assertMatch[1]) {
                 errorMsg = assertMatch[1];
+            } else if (assertMatch) {
+                errorMsg = 'Timing or parameter constraint not satisfied (AssertionError). Check TE, TR, and readout bandwidth.';
             }
             
             const errorDiv = document.createElement('div');
