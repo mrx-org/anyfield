@@ -26,14 +26,13 @@ import pypulseq as pp
 
 
 def seq_tse_2d(
-    fov: float | tuple[float, float] = 200e-3,
+    fov: tuple[float, float, float] = (200e-3, 200e-3, 8e-3),
     n_read: int = 128,
     n_phase: int = 128,
     flip_angle_deg: float = 90,
     refocus_flip_angle_deg: float = 120,
     tr: float = 5.0,
     te: float = 5e-3,
-    slice_thickness: float = 8e-3,
     experiment_id: str = 'tse_2d',
     ti: float = 0.0,
     pe_order: str = 'linear',
@@ -69,9 +68,9 @@ def seq_tse_2d(
     paper_plot : bool, optional
         Use ``seq.paper_plot()`` instead of ``seq.plot()`` when ``plot`` is True.
         Default is False.
-    fov : float or tuple of float, optional
-        Field of view in meters. If a single value, it is used for both x and y.
-        If a tuple, it is ``(fov_x, fov_y)``. Default is 200e-3.
+    fov : tuple of float, optional
+        Field of view in meters as ``(fov_x, fov_y, fov_z)``. For 2D sequences
+        ``fov_z`` is the slice thickness. Default is ``(200e-3, 200e-3, 8e-3)``.
     n_read : int, optional
         Number of readout samples. Default is 128.
     n_phase : int, optional
@@ -85,8 +84,6 @@ def seq_tse_2d(
     te : float, optional
         Echo spacing in seconds (effective TE is ``2 * (min_echo + te_delay)``).
         Default is 5e-3.
-    slice_thickness : float, optional
-        Slice thickness in meters. Default is 8e-3.
     experiment_id : str, optional
         Sequence name stored in definitions. Default is 'tse_2d'.
     ti : float, optional
@@ -118,7 +115,7 @@ def seq_tse_2d(
     seq : pypulseq.Sequence
         The TSE sequence object.
     """
-    fov_x, fov_y = (fov, fov) if isinstance(fov, (int, float)) else fov
+    fov_x, fov_y, fov_z = fov
 
     system = pp.Opts(
         max_grad=40,
@@ -142,7 +139,7 @@ def seq_tse_2d(
         flip_angle=np.deg2rad(flip_angle_deg),
         phase_offset=90 * np.pi / 180,
         duration=1e-3,
-        slice_thickness=slice_thickness,
+        slice_thickness=fov_z,
         apodization=0.5,
         time_bw_product=4,
         system=system,
@@ -152,7 +149,7 @@ def seq_tse_2d(
     rf2, gz2, _ = pp.make_sinc_pulse(
         flip_angle=np.deg2rad(refocus_flip_angle_deg),
         duration=1e-3,
-        slice_thickness=slice_thickness,
+        slice_thickness=fov_z,
         apodization=0.5,
         time_bw_product=4,
         system=system,
@@ -292,7 +289,7 @@ def seq_tse_2d(
             seq.plot(stacked=True, show_guides=True)
 
     seq.set_definition('name', experiment_id)
-    seq.set_definition('fov', [fov_x, fov_y, slice_thickness])
+    seq.set_definition('fov', [fov_x, fov_y, fov_z])
     seq.set_definition('recon_matrix', [n_read, n_phase, 1])
     seq.set_definition('te', te_effective)
     seq.set_definition('tr', tr_val)
@@ -348,14 +345,13 @@ main = seq_tse_2d
 
 
 def prot_tse_2d(
-    fov: float | tuple[float, float] = 200e-3,
+    fov: tuple[float, float, float] = (200e-3, 200e-3, 8e-3),
     n_read: int = 128,
     n_phase: int = 128,
     flip_angle_deg: float = 90,
     refocus_flip_angle_deg: float = 120,
     tr: float = 5.0,
     te: float = 5e-3,
-    slice_thickness: float = 8e-3,
     experiment_id: str = 'tse_2d',
     ti: float = 0.0,
     pe_order: str = 'linear',
@@ -376,7 +372,6 @@ def prot_tse_2d(
         refocus_flip_angle_deg=refocus_flip_angle_deg,
         tr=tr,
         te=te,
-        slice_thickness=slice_thickness,
         experiment_id=experiment_id,
         ti=ti,
         pe_order=pe_order,
@@ -392,14 +387,13 @@ def prot_tse_2d(
 
 
 def prot_tse_2d_flair(
-    fov: float | tuple[float, float] = 200e-3,
+    fov: tuple[float, float, float] = (200e-3, 200e-3, 8e-3),
     n_read: int = 128,
     n_phase: int = 128,
     flip_angle_deg: float = 90,
     refocus_flip_angle_deg: float = 120,
     tr: float = 8.0,
     te: float = 5e-3,
-    slice_thickness: float = 8e-3,
     experiment_id: str = 'tse_2d',
     ti: float = 2.3,
     pe_order: str = 'linear',
@@ -420,7 +414,6 @@ def prot_tse_2d_flair(
         refocus_flip_angle_deg=refocus_flip_angle_deg,
         tr=tr,
         te=te,
-        slice_thickness=slice_thickness,
         experiment_id=experiment_id,
         ti=ti,
         pe_order=pe_order,
@@ -436,14 +429,13 @@ def prot_tse_2d_flair(
 
 
 def prot_tse_2d_asym_ex(
-    fov: float | tuple[float, float] = 200e-3,
+    fov: tuple[float, float, float] = (200e-3, 200e-3, 8e-3),
     n_read: int = 128,
     n_phase: int = 128,
     flip_angle_deg: float = 90,
     refocus_flip_angle_deg: float = 120,
     tr: float = 5.0,
     te: float = 5e-3,
-    slice_thickness: float = 8e-3,
     experiment_id: str = 'tse_2d_asym_ex',
     ti: float = 0.0,
     pe_order: str = 'linear',
@@ -465,7 +457,6 @@ def prot_tse_2d_asym_ex(
         refocus_flip_angle_deg=refocus_flip_angle_deg,
         tr=tr,
         te=te,
-        slice_thickness=slice_thickness,
         experiment_id=experiment_id,
         ti=ti,
         pe_order=pe_order,

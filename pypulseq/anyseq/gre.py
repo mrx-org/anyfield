@@ -27,11 +27,10 @@ import pypulseq as pp
 
 
 def seq_gre(
-    fov: float | tuple[float, float] = 220e-3,
+    fov: tuple[float, float, float] = (220e-3, 220e-3, 3e-3),
     n_read: int = 96,
     n_phase: int = 96,
     flip_angle_deg: float = 4,
-    slice_thickness: float = 3e-3,
     tr: float = 12e-3,
     te: float | None = 5e-3,
     bandwidth_per_pixel: float = 347.0,
@@ -61,17 +60,15 @@ def seq_gre(
     paper_plot : bool, optional
         Use ``seq.paper_plot()`` instead of ``seq.plot()`` when ``plot`` is True.
         Default is False.
-    fov : float or tuple of float, optional
-        Field of view in meters. If a single value, it is used for both x and y.
-        If a tuple, it is ``(fov_x, fov_y)``. Default is 220e-3.
+    fov : tuple of float, optional
+        Field of view in meters as ``(fov_x, fov_y, fov_z)``. For 2D sequences
+        ``fov_z`` is the slice thickness. Default is ``(220e-3, 220e-3, 3e-3)``.
     n_read : int, optional
         Number of readout samples (PyPulseq ``n_x``). Default is 96.
     n_phase : int, optional
         Number of phase-encoding steps (PyPulseq ``n_y``). Default is 96.
     flip_angle_deg : float, optional
         Flip angle in degrees. Default is 4.
-    slice_thickness : float, optional
-        Slice thickness in meters. Default is 3e-3.
     tr : float, optional
         Repetition time in seconds. Default is 12e-3.
     te : float or None, optional
@@ -90,7 +87,7 @@ def seq_gre(
     seq : pypulseq.Sequence
         The GRE sequence object.
     """
-    fov_x, fov_y = (fov, fov) if isinstance(fov, (int, float)) else fov
+    fov_x, fov_y, fov_z = fov
 
     system = pp.Opts(
         max_grad=40,
@@ -107,7 +104,7 @@ def seq_gre(
     rf, gz, _ = pp.make_sinc_pulse(
         flip_angle=np.deg2rad(flip_angle_deg),
         duration=3e-3,
-        slice_thickness=slice_thickness,
+        slice_thickness=fov_z,
         apodization=0.42,
         time_bw_product=4,
         system=system,
@@ -133,7 +130,7 @@ def seq_gre(
     phase_areas = (np.arange(n_phase) - n_phase / 2) * delta_ky
 
     gx_spoil = pp.make_trapezoid(channel='x', area=2 * n_read * delta_kx, system=system)
-    gz_spoil = pp.make_trapezoid(channel='z', area=4 / slice_thickness, system=system)
+    gz_spoil = pp.make_trapezoid(channel='z', area=4 / fov_z, system=system)
 
     min_te = float(
         (pp.calc_duration(gz, rf) - pp.calc_rf_center(rf)[0] - rf.delay)
@@ -209,7 +206,7 @@ def seq_gre(
             seq.plot(time_range=(0.0, tr), stacked=True, show_guides=True)
 
     seq.set_definition('name', experiment_id)
-    seq.set_definition('fov', [fov_x, fov_y, slice_thickness])
+    seq.set_definition('fov', [fov_x, fov_y, fov_z])
     seq.set_definition('recon_matrix', [n_read, n_phase, 1])
     seq.set_definition('te', te_used)
     seq.set_definition('tr', tr)

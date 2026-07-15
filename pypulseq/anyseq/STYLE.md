@@ -20,7 +20,7 @@ PyPulseq [example script conventions](https://github.com/imr-framework/pypulseq/
 - Counts: `n_read`, `n_phase`, `n_part` (equivalent to PyPulseq `n_x` / `n_y` for Cartesian 2D)
 - Timing: lowercase `tr`, `te`, `te_delay`, `tr_delay`
 - Flip angles: `flip_angle_deg` (degrees at the API; use `np.deg2rad` internally)
-- FOV: `fov` as `float | tuple[...]` with explicit unpack to `fov_x`, `fov_y`, …
+- FOV: `fov` as `tuple[float, float, float]` — ``(fov_x, fov_y, fov_z)``; for 2D, ``fov_z`` is slice thickness
 
 Deprecated FAU/PyPulseq aliases (`Nread`, `alpha`, `TR`, `fov_xy`, …) are accepted via `**legacy_kwargs` with `DeprecationWarning`.
 
@@ -30,7 +30,7 @@ Use snake_case keys aligned with Python naming:
 
 ```python
 seq.set_definition('name', experiment_id)
-seq.set_definition('fov', [fov_x, fov_y, slice_thickness])
+seq.set_definition('fov', [fov_x, fov_y, fov_z])
 seq.set_definition('recon_matrix', [n_read, n_phase, 1])
 ```
 
