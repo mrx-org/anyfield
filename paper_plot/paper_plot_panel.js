@@ -342,7 +342,6 @@ export class PaperPanel {
     this.syncLayout();
     this.slotEl.title = this.state.expr ? this.module.getPanelTooltip(this) : "";
     this.module.updateCaption();
-    this.module.autosaveLayout();
     this.module.sync.refreshBroadcast();
   }
 
@@ -369,7 +368,6 @@ export class PaperPanel {
     this.syncLayout();
     this.slotEl.title = "";
     this.module.updateCaption();
-    this.module.autosaveLayout();
     this.module.sync.refreshBroadcast();
   }
 

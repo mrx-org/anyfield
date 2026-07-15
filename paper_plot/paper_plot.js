@@ -318,7 +318,6 @@ export class PaperPlotModule {
       });
       if (!next) return;
       panel.applyClims(next);
-      this.autosaveLayout();
     } finally {
       this._climDialogOpening = false;
     }
@@ -406,7 +405,6 @@ export class PaperPlotModule {
     this.state.options.linkPosition = false;
     this.sync.setLinkPosition(this.hasAnyRowLinkPosition());
     this.syncControlsFromState();
-    this.autosaveLayout();
   }
 
   setRowLinkClims(row, on) {
@@ -416,7 +414,6 @@ export class PaperPlotModule {
     this.sync.setLinkClims(this.state.options.rowLinkClims.some(Boolean));
     this.recomputePanelLayouts();
     this.syncControlsFromState();
-    this.autosaveLayout();
   }
 
   setAllRowLinkPosition(on) {
@@ -424,7 +421,6 @@ export class PaperPlotModule {
     this.state.options.linkPosition = !!on;
     this.sync.setLinkPosition(!!on);
     this.syncControlsFromState();
-    this.autosaveLayout();
   }
 
   setAllRowLinkClims(on) {
@@ -433,7 +429,6 @@ export class PaperPlotModule {
     this.sync.setLinkClims(!!on);
     this.recomputePanelLayouts();
     this.syncControlsFromState();
-    this.autosaveLayout();
   }
 
   getRecentScanNumbers() {
@@ -489,13 +484,11 @@ export class PaperPlotModule {
     this.state.options.showColorbar = !!on;
     for (const p of this.panels) p.applyColorbarVisibility();
     this._syncHtmlPositions();
-    this.autosaveLayout();
   }
 
   setDetailedCaption(on) {
     this.state.options.detailedCaption = !!on;
     this.updateCaption();
-    this.autosaveLayout();
   }
 
   setScanColormap(name) {
@@ -504,7 +497,6 @@ export class PaperPlotModule {
     for (const p of this.panels) {
       if (p.nv?.volumes?.length && !p.isDiff) p.applyColormap(this.scanColormap);
     }
-    this.autosaveLayout();
   }
 
   setDiffColormap(name) {
@@ -513,7 +505,6 @@ export class PaperPlotModule {
     for (const p of this.panels) {
       if (p.nv?.volumes?.length && p.isDiff) p.applyColormap(this.diffColormap);
     }
-    this.autosaveLayout();
   }
 
   recomputePanelLayouts() {
@@ -593,7 +584,6 @@ export class PaperPlotModule {
     this._updateGridBtnActive();
     this.updateCaption();
     if (loadExpressions) this.loadPanelExpressions();
-    this.autosaveLayout();
   }
 
   loadPanelExpressions() {
@@ -878,12 +868,6 @@ export class PaperPlotModule {
     this._updateGridBtnActive();
   }
 
-  autosaveLayout() {
-    try {
-      localStorage.setItem("paperPlot:lastLayout", serializeFigureState(this.state));
-    } catch (_) {}
-  }
-
   downloadLayoutJson() {
     this.captureRuntimeState();
     const blob = new Blob([serializeFigureState(this.state)], { type: "application/json;charset=utf-8" });
@@ -926,7 +910,6 @@ export class PaperPlotModule {
       }
     }
     this.updateCaption();
-    this.autosaveLayout();
   }
 
   captureRuntimeState() {

@@ -155,7 +155,9 @@ All in-memory paths used for loading and saving. **Every loaded sequence is stor
 
 Built-in sequences are fetched from GitHub (`anyseq`, `builtin` folder sources) and materialized into VFS as above. The Save As dialog lists only `user/seq/` or `user/prot/` so loaded registry files do not appear there.
 
-**Session-only user artifacts:** `user/seq/` and `user/prot/` exist only for the current browser session (Pyodide VFS + in-memory). A full reload starts a fresh scanner — no `localStorage` restore. To keep protocols: **Download** (tree menu) or **Share** (`#protocol_gz` URL). Cross-session restore from disk is deferred.
+**Session-only user artifacts:** `user/seq/` and `user/prot/` exist only for the current browser session (Pyodide VFS + in-memory). A full reload starts a fresh scanner — no `localStorage` restore for protocols or edited sequences. To keep protocols: **Download** (tree menu) or **Share** (`#protocol_gz` URL). Cross-session restore from disk is deferred.
+
+**Sequence tree collapse:** expand/collapse of each source group in the tree is stored in `localStorage` as `seq-tree-collapse-<sourceName>` (`collapsed` | `expanded`) and restored on render.
 
 #### 4a. Unified module model (all seq funcs as modules)
 

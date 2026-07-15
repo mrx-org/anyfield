@@ -87,8 +87,8 @@ The sim pipeline supports oblique (coronal, sagittal, arbitrary) FOV boxes. Unde
 
 ## Interface & Workflow
 - **CROP Button**: Resample-to-FOV only (see above).
-- **MR0 button** (**SCAN▶** in the bar): uses the in-app translated/resampled phantom path (with robust B1 TX/RX handling); queue/protocol label **`(▶)`**.
-- **Rapisim button** (**SCAN▶▶**): queue/protocol label **`(▶▶)`**.
+- **SCAN▶** (single button): runs simulation on the selected backend. Default backend on startup: **`modal_http_t4`** (mr0 T4 on Modal HTTP). Pro users open the gear **Simulation backend** dialog to pick another backend for the **current session only** (not persisted in `localStorage`; shared links / protocol TOML `[simulation].backend` still apply when loading a share).
+- **Backend registry**: `scan_zero/sim_backends.js` — Fly WebSocket (mr0 CPU, mr0r) and Modal HTTP workers (CPU / T4 / A10 / A100).
 - **Queue Item**: Shows the job number, label, and 24h timestamp (`${scanNumber}. ${name}`). **CROP** jobs use label **`crop`**. **SIM** jobs use the sequence display name plus **`(▶)`** (MR0) or **`(▶▶)`** (rapisim) in the title; `job.protocol` matches **`(▶)`** / **`(▶▶)`**.
 - **Visual Feedback**: Uses a color-coded left border (Green: Done, Yellow: Scanning, Red: Error).
 - **Actions**:
