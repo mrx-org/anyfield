@@ -1,5 +1,6 @@
 import { eventHub } from '../event_hub.js';
 import { SequenceExplorer } from '../pypulseq/seq_explorer.js';
+import { phantomFolderId } from './bifti_cache.js';
 import {
     DEFAULT_SIM_BACKEND_ID,
     SIM_BACKENDS,
@@ -1706,13 +1707,22 @@ if os.path.exists(_p):
     }
 
     /**
-     * Scan-ready bifti cache id for remote HTTP phantom load (no local upload).
-     * Set on the group when the phantom is loaded from the Modal cache; must match an
-     * entry from `GET /v1/cache` so `options.phantom.id` is accepted by the sim gateway.
+     * Cached bifti folder/scan id for remote HTTP phantom load (no local upload).
+     * Always the two-segment folder id (`collection/name`) when known — never a local-only
+     * Save-as stem like `user/…/…_copy`. Tissue/config edits travel separately as
+     * `phantom.config` via `_resolvePhantomConfigForHttp`. Must match an entry from
+     * `GET /v1/cache` so `options.phantom.id` is accepted by the sim gateway.
      */
     _resolveBiftiId(group) {
         if (!group) return null;
-        if (group.biftiRegistryId) return String(group.biftiRegistryId);
+        if (group.folderId) return String(group.folderId);
+        if (group.biftiRegistryId) {
+            try {
+                return phantomFolderId(group.biftiRegistryId);
+            } catch (_) {
+                return String(group.biftiRegistryId);
+            }
+        }
         return null;
     }
 

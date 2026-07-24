@@ -3635,10 +3635,10 @@ os.makedirs('/phantom/averaged', exist_ok=True)
   }
 
   /**
-   * Scan id for a folder + JSON config filename: two-segment folder id for the default config,
-   * three-segment `{folderId}/{stem}` for an alternate. The default config is identified by
-   * `defaultJsonName` when known (registry phantoms may use a JSON name != folder name); the
-   * `{folderName}.json` convention is only a fallback.
+   * Map a folder + JSON filename to a scan-ready id shape. Kept for callers that need a
+   * display/share stem; HTTP SCAN must not use invented 3-segment ids for local-only
+   * Save-as configs — those go as `phantom.config` with `phantom.id` = folder id.
+   * Default config → two-segment folder id; alternate → `{folderId}/{stem}`.
    */
   _configScanId(folderId, jsonFileName, defaultJsonName = null) {
     const stem = String(jsonFileName || "").replace(/\.json$/i, "");
@@ -3654,10 +3654,12 @@ os.makedirs('/phantom/averaged', exist_ok=True)
   }
 
   /**
-   * Switch the active phantom JSON config (from the config `<select>`): update the editor,
-   * the group's inline JSON identity, and the scan id (`biftiRegistryId`) so subsequent scans
-   * and shares use the chosen config. NIfTIs are shared across configs, so volumes are not
-   * re-fetched. Falls back to an editor-only swap for phantoms without a cache folder id.
+   * Switch the active phantom JSON config (from the config `<select>`): update the editor
+   * and the group's inline JSON identity (`jsonFileName` / `jsonContent`). Keeps
+   * `biftiRegistryId` as the cached folder id (or originally loaded cache id) so HTTP SCAN
+   * posts a registry-known `phantom.id`; the chosen/edited JSON is sent as `phantom.config`.
+   * Do not invent 3-segment ids like `user/…/…_copy` for Save-as configs that only exist
+   * locally. NIfTIs are shared across configs, so volumes are not re-fetched.
    */
   switchActivePhantomConfig(jsonFileName) {
     const fn = String(jsonFileName || "").trim();
@@ -3674,7 +3676,11 @@ os.makedirs('/phantom/averaged', exist_ok=True)
     const g = this.getActivePhantomGroup();
     if (!g) return;
     const folderId = g.folderId || (g.biftiRegistryId ? phantomFolderId(g.biftiRegistryId) : null);
-    if (folderId) g.biftiRegistryId = this._configScanId(folderId, fn, g.configFiles?.defaultJsonName ?? null);
+    if (folderId) {
+      g.folderId = folderId;
+      // Cache download + HTTP sim resolve NIfTIs by folder; local/_copy stems stay in json*.
+      g.biftiRegistryId = folderId;
+    }
     g.jsonFileName = fn;
     g.jsonName = fn.replace(/\.json$/i, "");
     if (text != null && String(text).trim()) g.jsonContent = String(text);

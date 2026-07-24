@@ -1,5 +1,11 @@
 # Release notes
 
+## v3.0.2
+
+- **HTTP SCAN + Save-as configs** — selecting a local Save-as phantom JSON (e.g. `*_copy.json`) no longer rewrites `phantom.id` to an uncached 3-segment stem. Modal HTTP jobs keep the cached folder id and send the editor JSON as `phantom.config`.
+- **BIfTI cache picker** — larger dialog, denser rows, and collapsed multi-config chips so more phantoms fit on screen.
+- **anyseq style** — GRE/TSE and related builtins follow the anyseq styleguide; FOV is passed as a tuple.
+
 ## v3.0.1
 
 - **Browser persistence cleanup** — simulation backend no longer stored in `localStorage`; each session starts on the default mr0 T4 (m). Removed unused Paper Plot `paperPlot:lastLayout` autosave (layouts remain export/import via JSON only). Sequence tree collapse state (`seq-tree-collapse-*`) is still persisted.
