@@ -3752,15 +3752,15 @@ _out
       overlay.style.cssText = "position:fixed;inset:0;background:rgba(0,0,0,0.6);display:flex;align-items:center;justify-content:center;z-index:9999;";
       const box = document.createElement("div");
       box.className = "json-choice-dialog";
-      box.style.cssText = "background:var(--bg-panel);border:1px solid var(--border);border-radius:8px;padding:16px;min-width:320px;max-width:460px;box-shadow:0 8px 32px rgba(0,0,0,0.4);";
+      box.style.cssText = "background:var(--bg-panel);border:1px solid var(--border);border-radius:8px;padding:20px;min-width:520px;max-width:720px;width:min(720px,92vw);box-shadow:0 8px 32px rgba(0,0,0,0.4);";
       const title = document.createElement("div");
-      title.style.cssText = "font-weight:600;margin-bottom:6px;color:var(--text);";
+      title.style.cssText = "font-weight:600;margin-bottom:6px;color:var(--text);font-size:15px;";
       title.textContent = "Add BIfTI — phantom cache";
       const hint = document.createElement("div");
-      hint.style.cssText = "font-size:11px;color:var(--muted);margin-bottom:12px;";
+      hint.style.cssText = "font-size:12px;color:var(--muted);margin-bottom:12px;";
       hint.textContent = "Loading a phantom replaces all volumes, scans, and masks in the viewer.";
       const list = document.createElement("div");
-      list.style.cssText = "display:flex;flex-direction:column;gap:6px;margin-bottom:14px;max-height:260px;overflow-y:auto;min-height:40px;";
+      list.style.cssText = "display:flex;flex-direction:column;gap:3px;margin-bottom:14px;max-height:min(720px,78vh);overflow-y:auto;min-height:80px;";
       const status = document.createElement("div");
       status.style.cssText = "font-size:11px;color:var(--muted);margin-bottom:10px;";
       status.textContent = "Fetching phantom list…";
@@ -3837,28 +3837,60 @@ _out
           for (const [folderId, variants] of folders) {
             const hasDefault = variants.some((v) => !v.config);
             const defaultId = hasDefault ? folderId : variants[0].id;
+            const group = document.createElement("div");
+            group.style.cssText = "display:flex;flex-direction:column;gap:4px;";
+
+            const rowMain = document.createElement("div");
+            rowMain.style.cssText = "display:flex;align-items:stretch;gap:4px;";
+
             const btn = document.createElement("button");
             btn.className = "btn";
-            btn.style.cssText = "text-align:left;padding:9px 12px;justify-content:flex-start;font-family:monospace;font-size:12px;";
-            btn.textContent = variants.length > 1 ? `${folderId}  · ${variants.length} configs` : folderId;
+            btn.style.cssText = "flex:1;text-align:left;padding:5px 12px;justify-content:flex-start;font-family:monospace;font-size:12px;line-height:1.3;";
+            btn.textContent = folderId;
             btn.onclick = () => pick(defaultId);
-            list.appendChild(btn);
+            rowMain.appendChild(btn);
+
             if (variants.length > 1) {
-              const row = document.createElement("div");
-              row.style.cssText = "display:flex;flex-wrap:wrap;gap:4px;margin:-2px 0 4px 14px;";
+              const toggle = document.createElement("button");
+              toggle.className = "btn btn-secondary";
+              toggle.style.cssText = "flex:0 0 auto;padding:4px 8px;font-size:11px;min-width:7.5em;line-height:1.3;";
+              toggle.setAttribute("aria-expanded", "false");
+              const setToggleLabel = (open) => {
+                toggle.textContent = open
+                  ? `▾ ${variants.length} configs`
+                  : `▸ ${variants.length} configs`;
+                toggle.setAttribute("aria-expanded", open ? "true" : "false");
+              };
+              setToggleLabel(false);
+
+              const configs = document.createElement("div");
+              configs.style.cssText = "display:none;flex-wrap:wrap;gap:4px;padding:2px 0 4px 14px;";
               variants
                 .slice()
                 .sort((a, b) => (a.config ? 1 : 0) - (b.config ? 1 : 0))
                 .forEach(({ id, config }) => {
                   const chip = document.createElement("button");
                   chip.className = "btn btn-secondary";
-                  chip.style.cssText = "padding:3px 8px;font-family:monospace;font-size:11px;";
+                  chip.style.cssText = "padding:2px 8px;font-family:monospace;font-size:11px;line-height:1.3;";
                   chip.textContent = config || "(default)";
                   chip.onclick = () => pick(id);
-                  row.appendChild(chip);
+                  configs.appendChild(chip);
                 });
-              list.appendChild(row);
+
+              toggle.onclick = (e) => {
+                e.stopPropagation();
+                const open = configs.style.display === "none";
+                configs.style.display = open ? "flex" : "none";
+                setToggleLabel(open);
+              };
+
+              rowMain.appendChild(toggle);
+              group.appendChild(rowMain);
+              group.appendChild(configs);
+            } else {
+              group.appendChild(rowMain);
             }
+            list.appendChild(group);
           }
         })
         .catch((e) => {
