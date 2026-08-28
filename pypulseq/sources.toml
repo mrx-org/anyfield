@@ -50,3 +50,10 @@ name = "MRzero"
 path = "https://raw.githubusercontent.com/MRsources/MRzero-Core/refs/heads/main/documentation/playground_mr0/mr0_EPI_2D_seq.ipynb"
 dependencies = ["pypulseq==1.5.0.post1"]
 micropip_no_deps = ["pypulseq"]
+
+[[sources]]
+type = "folder"
+name = "MuT"
+path = "https://github.com/magdamd/MuT"
+dependencies = ["numpy", "matplotlib", "pypulseq==1.5.0.post1"]
+micropip_no_deps = ["pypulseq"]
