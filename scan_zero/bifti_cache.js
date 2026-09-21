@@ -1,4 +1,9 @@
-import { TOOL_MR0SIM_HTTP_MODAL } from "./sim_backends.js";
+import {
+  readStoredSimBackendId,
+  resolveHttpSimBaseUrl,
+  SIM_BACKENDS,
+  TOOL_MR0SIM_HTTP_MODAL,
+} from "./sim_backends.js";
 
 /**
  * BIfTI cache client — list phantoms on the sim gateway, download from cache admin.
@@ -30,8 +35,15 @@ export const BIFTI_CACHE_ADMIN_BASE =
 
 /** Sim gateway (phantom list + HTTP sim jobs). Override via `window.ANYFIELD_HTTP_SIM_URL`. */
 export function simGatewayBase() {
-  const override = typeof window !== "undefined" ? window.ANYFIELD_HTTP_SIM_URL : null;
-  return String(override || TOOL_MR0SIM_HTTP_MODAL).replace(/\/$/, "");
+  const backendId = typeof window !== "undefined"
+    ? window.scanModule?.getSelectedSimBackendId?.()
+    : null;
+  const spec = backendId ? SIM_BACKENDS[backendId] : null;
+  const storedId = !spec && typeof window !== "undefined"
+    ? readStoredSimBackendId()
+    : null;
+  const storedSpec = storedId ? SIM_BACKENDS[storedId] : null;
+  return resolveHttpSimBaseUrl(spec?.httpBaseUrl || storedSpec?.httpBaseUrl || TOOL_MR0SIM_HTTP_MODAL);
 }
 
 /** Normalize id: strip leading/trailing slashes. */

@@ -11,7 +11,7 @@
  */
 
 import { eventHub } from "../event_hub.js";
-import { formatSimBackendLabel, SIM_BACKENDS } from "../scan_zero/sim_backends.js";
+import { formatSimBackendLabel, resolveSimBackendId, SIM_BACKENDS } from "../scan_zero/sim_backends.js";
 import {
     SEQ_DEFAULT_PLOT_SPEED,
     buildSeqPlotExecuteFragments,
@@ -150,6 +150,7 @@ const SEQ_TEMPLATES = {
                     <div class="seq-mobile-run-btns-group">
                     <button id="seq-mobile-crop" type="button" class="scan-btn scan-btn-compact scan-btn-secondary" title="Resample first volume to FOV (crop to box)">CROP</button>
                     <button id="seq-mobile-scan" type="button" class="scan-btn scan-btn-compact" title="Run scan">SCAN<span class="icon">▶</span></button>
+                    <button id="seq-mobile-scan-compare" type="button" class="scan-btn scan-btn-compact" title="Run compare scan">SCAN<span class="icon">▶▶</span></button>
                     <button id="seq-mobile-scan-settings" type="button" class="scan-btn scan-btn-compact scan-btn-settings" title="Simulation backend" aria-label="Simulation backend"><i class="bi bi-gear" aria-hidden="true"></i></button>
                     </div>
                 </div>`;
@@ -362,9 +363,11 @@ export class SequenceExplorer {
     _bindMobileScanButtons(root) {
         const crop = root.querySelector('#seq-mobile-crop');
         const scan = root.querySelector('#seq-mobile-scan');
+        const scanCompare = root.querySelector('#seq-mobile-scan-compare');
         const settings = root.querySelector('#seq-mobile-scan-settings');
         if (crop) crop.addEventListener('click', () => window.scanModule?.startCrop?.());
         if (scan) scan.addEventListener('click', () => window.scanModule?.startScan?.());
+        if (scanCompare) scanCompare.addEventListener('click', () => window.scanModule?.startScanCompare?.());
         if (settings) settings.addEventListener('click', () => window.scanModule?.openSimSettingsDialog?.());
     }
 
@@ -724,7 +727,7 @@ json.dumps(code)
         const nvMod = window.nvModule;
         const scanModule = window.scanModule;
         if (sim.backend && typeof scanModule?.setSelectedSimBackendId === 'function') {
-            const spec = SIM_BACKENDS[sim.backend];
+            const spec = SIM_BACKENDS[resolveSimBackendId(sim.backend, '')];
             if (!spec) {
                 console.warn('[share] ignoring unknown shared backend', sim.backend);
             } else if (spec.proOnly && !window.pro) {

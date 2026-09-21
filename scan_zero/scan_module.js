@@ -4,8 +4,18 @@ import { phantomFolderId } from './bifti_cache.js';
 import {
     DEFAULT_SIM_BACKEND_ID,
     SIM_BACKENDS,
-    SIM_BACKEND_OPTIONS,
     formatSimBackendLabel,
+    persistSimBackendCompareId,
+    persistSimBackendId,
+    persistHttpSimPruneOptions,
+    readStoredHttpSimPruneOptions,
+    readStoredSimBackendCompareId,
+    readStoredSimBackendId,
+    formatHttpSimPruneInput,
+    resolveHttpSimBaseUrl,
+    resolveSimBackendId,
+    httpSimPruneFieldsHtml,
+    simBackendRadioMatrixHtml,
 } from './sim_backends.js';
 
 /** toolapi-wasm WebSocket URLs (same path `/tool`, different host). */
@@ -17,6 +27,8 @@ export const TOOL_MR0SIM_T4 = 'wss://mzaiss--tool-mr0sim-modal-serve-t4.modal.ru
 /** Modal HTTP gateway (tool-mr0sim-modal_http); worker chosen per job (`cpu` / `t4` / `a10g` / `a100`). */
 export const TOOL_MR0SIM_HTTP_MODAL =
     'https://mzaiss--tool-mr0sim-modal-http-gateway.modal.run';
+/** PDGv2 HTTP gateway — same `/v1` contract as `TOOL_MR0SIM_HTTP_MODAL`. */
+export const TOOL_PDGV2_HTTP = 'https://mzaiss--pdgv2-gateway.modal.run';
 /** Local dev only — set `window.ANYFIELD_HTTP_SIM_URL` to this to use local server. */
 export const TOOL_MR0SIM_HTTP = 'http://127.0.0.1:8080';
 
@@ -25,20 +37,28 @@ export {
     SIM_BACKENDS,
     SIM_BACKEND_OPTIONS,
     formatSimBackendLabel,
+    resolveHttpSimBaseUrl,
 } from './sim_backends.js';
-
-function defaultHttpSimBaseUrl() {
-    if (typeof window !== 'undefined' && window.ANYFIELD_HTTP_SIM_URL) {
-        return String(window.ANYFIELD_HTTP_SIM_URL).replace(/\/$/, '');
-    }
-    return TOOL_MR0SIM_HTTP_MODAL;
-}
 
 const TOOL_FLY_HOSTS = [TOOL_CONSEQ, TOOL_TRAJEX, TOOL_RAPISIM, TOOL_MR0SIM].map(
     (url) => new URL(url).hostname,
 );
 
 const PIPELINE_STAGES = ['prep', 'conseq', 'trajex', 'sim', 'recon'];
+/** User-facing queue caption for pipelineStage 0–4 (local / fallback). */
+const PIPELINE_STAGE_CAPTIONS = ['seq', 'seq', 'obj', 'sim', 'reco'];
+/**
+ * Coarse order for HTTP queue abbreviations. Same-order labels may replace each other;
+ * a lower order never overwrites a later one (avoids Queued flickering after resample).
+ */
+const STAGE_CAPTION_ORDER = {
+    wake: 0, queue: 0, start: 0,
+    seq: 1,
+    load: 2, rsmp: 2, dl: 2, obj: 2,
+    tbl: 3, sim: 3, fwd: 3, sig: 3,
+    getk: 4,
+    reco: 5,
+};
 
 /** Ring fill angles (deg): stages 1+2 → 60; sim 60–315; recon 315–330 */
 const PIPELINE_DEG = {
@@ -203,29 +223,76 @@ export class ScanModule {
         this._simPipelineJob = null;
         this._toolWsInflight = 0;
         this._toolWsWaiters = [];
-        this._selectedSimBackendId = DEFAULT_SIM_BACKEND_ID;
+        this._scanBackendId = readStoredSimBackendId();
+        this._compareBackendId = readStoredSimBackendCompareId();
 
         this.setupEventListeners();
     }
 
-    getSelectedSimBackendId() {
-        const id = this._selectedSimBackendId || DEFAULT_SIM_BACKEND_ID;
-        return SIM_BACKENDS[id] ? id : DEFAULT_SIM_BACKEND_ID;
+    _resolveBackendId(backendId) {
+        return resolveSimBackendId(backendId, DEFAULT_SIM_BACKEND_ID);
     }
 
-    setSelectedSimBackendId(backendId) {
-        const id = String(backendId || '').trim();
-        if (!SIM_BACKENDS[id]) throw new Error(`Unknown sim backend: ${backendId}`);
-        this._selectedSimBackendId = id;
+    getSelectedSimBackendId() {
+        if (!isProUser()) return DEFAULT_SIM_BACKEND_ID;
+        return this._resolveBackendId(this._scanBackendId);
+    }
+
+    getCompareSimBackendId() {
+        return this._resolveBackendId(this._compareBackendId);
+    }
+
+    setSlotBackend(slot, backendId) {
+        if (!isProUser()) return;
+        const id = this._resolveBackendId(backendId);
+        if (slot === 'compare') {
+            this._compareBackendId = id;
+            persistSimBackendCompareId(id);
+        } else {
+            this._scanBackendId = id;
+            persistSimBackendId(id);
+        }
         this._syncScanControlLabels();
     }
 
+    setSelectedSimBackendId(backendId) {
+        this.setSlotBackend('scan', backendId);
+    }
+
+    bindSimBackendRadios(root) {
+        const scope = root && root.querySelectorAll ? root : document;
+        scope.querySelectorAll('.sim-backend-radio').forEach((el) => {
+            if (el.dataset.bound === '1') return;
+            el.dataset.bound = '1';
+            el.addEventListener('change', () => {
+                if (!el.checked) return;
+                this.setSlotBackend(el.dataset.slot === 'compare' ? 'compare' : 'scan', el.value);
+            });
+        });
+        this._syncSimBackendRadios();
+    }
+
+    _syncSimBackendRadios() {
+        const scan = this.getSelectedSimBackendId();
+        const compare = this.getCompareSimBackendId();
+        document.querySelectorAll('.sim-backend-radio').forEach((el) => {
+            const want = el.dataset.slot === 'compare' ? compare : scan;
+            el.checked = el.value === want;
+        });
+    }
+
     _syncScanControlLabels() {
-        const title = `Run scan (${formatSimBackendLabel(this.getSelectedSimBackendId())})`;
+        const scanTitle = `Run scan (${formatSimBackendLabel(this.getSelectedSimBackendId())})`;
         for (const sel of ['#btn-start-scan', '#seq-mobile-scan']) {
             const btn = document.querySelector(sel);
-            if (btn) btn.title = title;
+            if (btn) btn.title = scanTitle;
         }
+        const compareTitle = `Run scan ▶▶ (${formatSimBackendLabel(this.getCompareSimBackendId())})`;
+        for (const sel of ['#btn-start-scan-compare', '#seq-mobile-scan-compare']) {
+            const btn = document.querySelector(sel);
+            if (btn) btn.title = compareTitle;
+        }
+        this._syncSimBackendRadios();
     }
 
     /** Fetch `scan_zero/recon.py` and stage in Pyodide (source passed to Python via global). */
@@ -438,7 +505,8 @@ export class ScanModule {
                 <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 0.75rem;">
                     <h3 class="section-title" style="margin: 0;">RUN</h3>
                 </div>
-                <div class="scan-header scan-header-row">
+                <div class="scan-header">
+                    <div class="scan-header-row">
                     ${isProUser() ? `
                     <button id="btn-start-crop" class="scan-btn scan-btn-secondary" title="Resample first volume to FOV (crop to box)">
                         CROP
@@ -447,11 +515,15 @@ export class ScanModule {
                     <button id="btn-start-scan" class="scan-btn scan-btn-primary" title="Run scan">
                         SCAN<span class="icon">▶</span>
                     </button>
+                    <button id="btn-start-scan-compare" class="scan-btn scan-btn-primary" title="Run compare scan">
+                        SCAN<span class="icon">▶▶</span>
+                    </button>
                     ${isProUser() ? `
                     <button id="btn-scan-settings" type="button" class="scan-btn scan-btn-settings" title="Simulation backend" aria-label="Simulation backend">
                         <i class="bi bi-gear" aria-hidden="true"></i>
                     </button>
                     ` : ''}
+                    </div>
                 </div>
                 <div class="scan-queue" id="scan-queue-list">
                     <div class="queue-empty">Queue is empty</div>
@@ -462,8 +534,11 @@ export class ScanModule {
         const cropBtn = this.container.querySelector('#btn-start-crop');
         if (cropBtn) cropBtn.onclick = () => this.startCrop();
         this.container.querySelector('#btn-start-scan').onclick = () => this.startScan();
+        const compareBtn = this.container.querySelector('#btn-start-scan-compare');
+        if (compareBtn) compareBtn.onclick = () => this.startScanCompare();
         const settingsBtn = this.container.querySelector('#btn-scan-settings');
         if (settingsBtn) settingsBtn.onclick = () => this.openSimSettingsDialog();
+        this.bindSimBackendRadios(this.container);
 
         // Make this instance available globally for UI callbacks if needed
         window.scanModule = this;
@@ -489,14 +564,16 @@ export class ScanModule {
         `;
 
         const dialogContent = document.createElement('div');
+        dialogContent.className = 'sim-settings-dialog';
         dialogContent.style.cssText = `
             background: var(--bg, #1e1e1e);
             border: 1px solid var(--border, #333);
             border-radius: 8px;
             padding: 1.5rem;
-            min-width: 500px;
-            max-width: 600px;
+            min-width: 420px;
+            max-width: 560px;
             max-height: 80vh;
+            overflow-y: auto;
             display: flex;
             flex-direction: column;
             box-shadow: 0 4px 20px rgba(0, 0, 0, 0.5);
@@ -506,81 +583,58 @@ export class ScanModule {
         dialogTitle.textContent = 'Simulation backend';
         dialogTitle.style.cssText = 'margin: 0 0 1rem 0; color: var(--accent, #4a9eff);';
 
-        const optionsWrap = document.createElement('div');
-        optionsWrap.style.cssText = `
-            display: flex;
-            flex-direction: column;
-            gap: 0.65rem;
-            margin-bottom: 1.25rem;
-        `;
+        const matrixWrap = document.createElement('div');
+        matrixWrap.style.cssText = 'margin-bottom: 1.15rem; overflow: auto;';
+        matrixWrap.innerHTML = simBackendRadioMatrixHtml();
 
-        const selectedId = this.getSelectedSimBackendId();
-        const radioName = `sim-backend-${Date.now()}`;
-        for (const opt of SIM_BACKEND_OPTIONS) {
-            const row = document.createElement('label');
-            row.style.cssText = `
-                display: flex;
-                align-items: center;
-                gap: 0.6rem;
-                padding: 0.45rem 0.55rem;
-                border-radius: 4px;
-                cursor: pointer;
-                color: var(--text, #ddd);
-                font-size: 0.9rem;
-            `;
-            row.addEventListener('mouseenter', () => {
-                row.style.background = 'rgba(255, 255, 255, 0.06)';
-            });
-            row.addEventListener('mouseleave', () => {
-                row.style.background = 'transparent';
-            });
-
-            const input = document.createElement('input');
-            input.type = 'radio';
-            input.name = radioName;
-            input.value = opt.id;
-            input.checked = opt.id === selectedId;
-            input.style.cssText = 'accent-color: var(--accent, #4a9eff);';
-
-            const text = document.createElement('span');
-            text.textContent = opt.label;
-
-            row.appendChild(input);
-            row.appendChild(text);
-            optionsWrap.appendChild(row);
-        }
+        const pruneWrap = document.createElement('div');
+        pruneWrap.innerHTML = httpSimPruneFieldsHtml();
 
         const buttonRow = document.createElement('div');
-        buttonRow.style.cssText = 'display: flex; justify-content: flex-end; gap: 0.5rem;';
+        buttonRow.style.cssText = 'display: flex; justify-content: flex-end;';
 
-        const cancelBtn = document.createElement('button');
-        cancelBtn.type = 'button';
-        cancelBtn.textContent = 'Cancel';
-        cancelBtn.className = 'btn btn-secondary btn-md';
-
-        const saveBtn = document.createElement('button');
-        saveBtn.type = 'button';
-        saveBtn.textContent = 'Save';
-        saveBtn.className = 'btn btn-secondary btn-md seq-btn-primary';
+        const closeBtn = document.createElement('button');
+        closeBtn.type = 'button';
+        closeBtn.textContent = 'Close';
+        closeBtn.className = 'btn btn-secondary btn-md seq-btn-primary';
 
         const close = () => overlay.remove();
-        cancelBtn.onclick = close;
+        closeBtn.onclick = close;
         overlay.addEventListener('click', (e) => {
             if (e.target === overlay) close();
         });
-        saveBtn.onclick = () => {
-            const picked = optionsWrap.querySelector(`input[name="${radioName}"]:checked`);
-            if (picked?.value) this.setSelectedSimBackendId(picked.value);
-            close();
-        };
 
-        buttonRow.appendChild(cancelBtn);
-        buttonRow.appendChild(saveBtn);
+        buttonRow.appendChild(closeBtn);
         dialogContent.appendChild(dialogTitle);
-        dialogContent.appendChild(optionsWrap);
+        dialogContent.appendChild(matrixWrap);
+        dialogContent.appendChild(pruneWrap);
         dialogContent.appendChild(buttonRow);
         overlay.appendChild(dialogContent);
         document.body.appendChild(overlay);
+        this.bindSimBackendRadios(matrixWrap);
+        this.bindHttpSimPruneFields(pruneWrap);
+    }
+
+    bindHttpSimPruneFields(root) {
+        if (!root) return;
+        const commit = (input) => {
+            const key = input.dataset.pruneKey;
+            if (!key) return;
+            const next = persistHttpSimPruneOptions({
+                ...readStoredHttpSimPruneOptions(),
+                [key]: input.value,
+            });
+            input.value = formatHttpSimPruneInput(key, next[key]);
+        };
+        root.querySelectorAll('.sim-prune-input').forEach((input) => {
+            input.addEventListener('change', () => commit(input));
+            input.addEventListener('keydown', (e) => {
+                if (e.key === 'Enter') {
+                    e.preventDefault();
+                    input.blur();
+                }
+            });
+        });
     }
 
     _getActiveScanJob() {
@@ -707,7 +761,11 @@ export class ScanModule {
                 transport: backend.transport || 'ws',
                 httpBaseUrl: backend.httpBaseUrl || null,
                 worker: backend.worker || null,
+                forwardBackend: backend.forwardBackend || null,
+                accuracy: backend.accuracy,
+                recon: backend.recon,
                 exactTrajectories: backend.exactTrajectories === true,
+                ...readStoredHttpSimPruneOptions(),
             },
             status: 'pending',
             timestamp: `${pad(now.getHours())}:${pad(now.getMinutes())}:${pad(now.getSeconds())}`,
@@ -721,7 +779,9 @@ export class ScanModule {
     }
 
     async startScan(backendId = null) {
-        const resolvedId = backendId || this.getSelectedSimBackendId();
+        const resolvedId = isProUser()
+            ? (backendId || this.getSelectedSimBackendId())
+            : DEFAULT_SIM_BACKEND_ID;
         const backend = SIM_BACKENDS[resolvedId];
         if (!backend) throw new Error(`Unknown sim backend: ${resolvedId}`);
         if (backend.proOnly && !isProUser()) {
@@ -753,6 +813,11 @@ export class ScanModule {
         } else {
             await this.runSimPipeline(job);
         }
+    }
+
+    async startScanCompare() {
+        if (!isProUser()) return;
+        return this.startScan(this.getCompareSimBackendId());
     }
 
     async startSimFast() {
@@ -947,6 +1012,22 @@ export class ScanModule {
             }
         };
         job._simProgressAnimId = requestAnimationFrame(tick);
+    }
+
+    _pipelineStageCaption(job) {
+        if (job?.cropOnly) return 'crop';
+        if (job?.stageCaption) return job.stageCaption;
+        const s = Math.max(0, Math.min(4, Number(job?.pipelineStage) || 0));
+        return PIPELINE_STAGE_CAPTIONS[s] || 'seq';
+    }
+
+    _syncPipelineStageCaption(job) {
+        if (!job?.id || !this.container) return;
+        const el = this.container.querySelector(`.queue-item[data-id="${CSS.escape(job.id)}"] .scan-pipeline-stage`);
+        if (!el) return;
+        el.textContent = this._pipelineStageCaption(job);
+        if (job.stageCaptionDetail) el.title = job.stageCaptionDetail;
+        else el.removeAttribute('title');
     }
 
     _pipelineRingLabel(job) {
@@ -1329,6 +1410,10 @@ export class ScanModule {
         if (fovMatrix) simulation.fov_matrix = fovMatrix;
         if (phantomMatrix) simulation.phantom_matrix = phantomMatrix;
         if (phantomOversample) simulation.phantom_oversample = phantomOversample;
+        if (sim.min_state_mag != null) simulation.min_state_mag = sim.min_state_mag;
+        if (sim.max_state_count != null) simulation.max_state_count = sim.max_state_count;
+        if (sim.min_emitted_signal != null) simulation.min_emitted_signal = sim.min_emitted_signal;
+        if (sim.min_latent_signal != null) simulation.min_latent_signal = sim.min_latent_signal;
         await window.seqExplorer.patchProtocolTomlSections(protocolPath, {
             simulation,
             recon: {
@@ -1701,9 +1786,7 @@ if os.path.exists(_p):
     }
 
     _getHttpSimBaseUrl(job) {
-        const fromJob = job?.simulation?.httpBaseUrl;
-        if (fromJob) return String(fromJob).replace(/\/$/, '');
-        return defaultHttpSimBaseUrl();
+        return resolveHttpSimBaseUrl(job?.simulation?.httpBaseUrl);
     }
 
     /**
@@ -1744,6 +1827,37 @@ if os.path.exists(_p):
         }
     }
 
+    /**
+     * Map remote job status → short queue abbreviation.
+     * More specific than seq/obj/sim/reco so wake / resample / forward are distinct.
+     */
+    _httpRemoteStageCaption(status) {
+        if (!status || typeof status !== 'object') return null;
+        const explicit = String(status.stage || status.phase || status.step || '').toLowerCase();
+        const msg = String(status.message || '').toLowerCase();
+        const st = String(status.status || '').toLowerCase();
+        const work = `${explicit} ${msg}`.trim();
+
+        if (/resamp|reslice|footprint|fov resample/.test(work)) return 'rsmp';
+        if (/zenodo|download/.test(work)) return 'dl';
+        if (/loading phantom|load(ing)? phantom|convert(ing)? phantom|\bphantom\b|\bbifti\b/.test(work)
+            && !/execute|forward|simulat/.test(work)) return 'load';
+        if (/imported sequence|import(ing)? sequence|convert seq|\bimport\b/.test(work)) return 'seq';
+        if (/pdg2 tables|building .{0,24}tables|building pdg/.test(work)) return 'tbl';
+        if (/returning signal|return(ing)? signal/.test(work)) return 'sig';
+        if (/forward done|cuda forward|pdg_forward/.test(work)) return 'fwd';
+        if (/execute_graph|simulat|scanned\s+\d|forward|\bpdg\b/.test(work)) return 'sim';
+        if (/reco|recon/.test(work)) return 'reco';
+        if (/^seq$|\bseq\b/.test(explicit) || /\bseq\b/.test(msg)) return 'seq';
+        if (status.repetition != null && status.total != null) return 'sim';
+        if (/queued|waiting/.test(work) || (st === 'queued' && !work)) return 'queue';
+        if ((/\bstart(ing)?\b/.test(work) || st === 'starting') && !/execute|simulat|forward|resamp/.test(work)) {
+            return 'start';
+        }
+        if (st === 'done' || /\bcomplete\b/.test(msg)) return 'getk';
+        return null;
+    }
+
     _parseHttpJobProgress(status) {
         const msg = String(status?.message || '').trim();
         const rep = status?.repetition;
@@ -1763,11 +1877,25 @@ if os.path.exists(_p):
     }
 
     _applyHttpJobProgress(job, status, logTag) {
+        const remote = this._httpRemoteStageCaption(status);
+        if (remote) {
+            const prev = STAGE_CAPTION_ORDER[job.stageCaption] ?? -1;
+            const next = STAGE_CAPTION_ORDER[remote] ?? -1;
+            if (next >= prev) {
+                const detail = String(status.message || status.status || '').trim();
+                if (detail) job.stageCaptionDetail = detail;
+                if (remote !== job.stageCaption) job.stageCaption = remote;
+                this._syncPipelineStageCaption(job);
+            }
+        }
         const frac = this._parseHttpJobProgress(status);
-        if (frac == null) return;
-        job.simProgressTarget = Math.max(job.simProgressTarget ?? 0, frac);
-        this._ensureSimProgressAnimator(job);
-        console.log(`${logTag} [http]`, status.message || status.status);
+        if (frac != null) {
+            job.simProgressTarget = Math.max(job.simProgressTarget ?? 0, frac);
+            this._ensureSimProgressAnimator(job);
+        }
+        if (status?.message || status?.status || status?.stage) {
+            console.log(`${logTag} [http]`, status.stage || '', status.message || status.status);
+        }
     }
 
     /**
@@ -1865,7 +1993,7 @@ if os.path.exists(_p):
 
     async _httpHealth(baseUrl) {
         const resp = await fetch(`${baseUrl}/v1/health`);
-        if (!resp.ok) return { ok: false, cuda: false };
+        if (!resp.ok) return { ok: false };
         return await resp.json();
     }
 
@@ -1920,6 +2048,7 @@ for i in range(ktraj.shape[0]):
         job.abortSim = false;
         job.status = 'scanning';
         job.pipelineStage = 0;
+        job.stageCaption = 'seq';
         job.error = null;
         job.reconDone = false;
         job._reconStarted = false;
@@ -1995,6 +2124,27 @@ for i in range(ktraj.shape[0]):
             } else if (job.simulation?.useGpu === true) {
                 options.use_gpu = true;
             }
+            if (job.simulation?.forwardBackend) {
+                options.backend = job.simulation.forwardBackend;
+            }
+            if (job.simulation?.accuracy != null) {
+                options.accuracy = job.simulation.accuracy;
+            }
+            if (job.simulation?.recon != null) {
+                options.recon = job.simulation.recon;
+            }
+            if (job.simulation?.min_state_mag != null) {
+                options.min_state_mag = job.simulation.min_state_mag;
+            }
+            if (job.simulation?.max_state_count != null) {
+                options.max_state_count = job.simulation.max_state_count;
+            }
+            if (job.simulation?.min_emitted_signal != null) {
+                options.min_emitted_signal = job.simulation.min_emitted_signal;
+            }
+            if (job.simulation?.min_latent_signal != null) {
+                options.min_latent_signal = job.simulation.min_latent_signal;
+            }
 
             void this._patchProtocolSimulationToml(job, {
                 fovAffine: fovAffineFlat,
@@ -2008,6 +2158,9 @@ for i in range(ktraj.shape[0]):
             });
 
             this._setPipelineStage(job, 3);
+            job.stageCaption = 'wake';
+            job.stageCaptionDetail = 'Waiting for simulation server';
+            this._syncPipelineStageCaption(job);
             job.simProgress = 0;
             job.simProgressTarget = 0;
             job.simDisplayProgress = 0;
@@ -2138,6 +2291,7 @@ for i in range(ktraj.shape[0]):
                 ? nvMod.simReconOutPath(job.id)
                 : '/tmp/__sim_pipeline_reco.nii';
             job.reconDone = false;
+            job.stageCaption = 'reco';
             this._setPipelineStage(job, 4);
             const _tRecon = performance.now();
             const recoBytes = await nvMod.enqueuePyodideTask(job.id, 'sim-recon', async () => {
@@ -2505,6 +2659,7 @@ _recon.run_sim_recon(
         } else {
             this.updateQueueUI();
         }
+        this._syncPipelineStageCaption(job);
         if (job.status === 'scanning') this._syncMobileScanControls();
     }
 
@@ -2552,6 +2707,7 @@ _recon.run_sim_recon(
                             ` : ''}
                             ${this._pipelineProgressHtml(job, !!job.cropOnly)}
                         </div>
+                        <div class="scan-pipeline-stage"${job.stageCaptionDetail ? ` title="${this._escapeAttr(job.stageCaptionDetail)}"` : ''}>${this._escapeHtml(this._pipelineStageCaption(job))}</div>
                     ` : ''}
                     ${job.status === 'done' ? `
                         <div class="action-row">
