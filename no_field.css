@@ -622,6 +622,8 @@ html.pro-user #paper-plot-btn {
     border-radius: var(--radius-sm);
     color: var(--muted);
     cursor: pointer;
+    text-decoration: none;
+    box-sizing: border-box;
     transition: color 0.2s, background 0.2s, border-color 0.2s;
 }
 
