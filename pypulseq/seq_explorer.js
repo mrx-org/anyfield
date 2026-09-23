@@ -1709,7 +1709,7 @@ plt.rcParams['font.size'] = 8`;
 
     /**
      * Derive protocol display name from seq_func_file: strip .py, then take part after last . or /.
-     * @param {string} seqFuncFile - e.g. "mrseq.scripts.radial_flash" or "user/seq/seq_gre_4.py"
+     * @param {string} seqFuncFile - e.g. "mrseq.sequences.radial_flash" or "user/seq/seq_gre_4.py"
      * @returns {string} e.g. "radial_flash" or "seq_gre_4"
      */
     getProtocolDisplayNameFromSeqFuncFile(seqFuncFile) {
@@ -1938,8 +1938,8 @@ if hasattr(sys.modules['__main__'], '_user_edited_files'):
     }
 
     /**
-     * Path to use for display name: for module sources, prefer fileName (full module path e.g. mrseq.scripts.radial_flash)
-     * over source.path (package only e.g. mrseq.scripts) so we show "radial_flash" not "scripts".
+     * Path to use for display name: for module sources, prefer fileName (full module path e.g. mrseq.sequences.radial_flash)
+     * over source.path (package only e.g. mrseq.sequences) so we show "radial_flash" not "sequences".
      */
     getPathForDisplayName(fileName, source) {
         const base = this.parseProtocolBase(source).module || source?.path || fileName || '';

@@ -1268,13 +1268,13 @@ get_params()
                     log('Loading mrseq t1_inv_rec_gre_single_line sequence...');
                     await pyodide.runPythonAsync(`
 import __main__
-from mrseq.scripts.t1_inv_rec_gre_single_line import main as create_seq
+from mrseq.sequences.t1_inv_rec_gre_single_line import main as create_seq
 # Store the function in __main__ for later use
 __main__.create_seq = create_seq
 `);
                     
                     // Generate code representation for the editor
-                    currentCode = `from mrseq.scripts.t1_inv_rec_gre_single_line import main as create_seq
+                    currentCode = `from mrseq.sequences.t1_inv_rec_gre_single_line import main as create_seq
 import pypulseq as pp
 
 # Create sequence
@@ -1324,7 +1324,7 @@ json.dumps(params)
                 } else if (sequenceType === 'mrseq_github_radial_flash') {
                     // Fetch directly from GitHub main branch
                     log('Fetching Radial FLASH from mrseq GitHub...');
-                    const url = 'https://raw.githubusercontent.com/PTB-MR/mrseq/main/src/mrseq/scripts/radial_flash.py';
+                    const url = 'https://raw.githubusercontent.com/PTB-MR/mrseq/main/src/mrseq/sequences/radial_flash.py';
                     const response = await fetch(url);
                     if (!response.ok) throw new Error('Failed to fetch radial_flash.py from GitHub');
                     currentCode = await response.text();
