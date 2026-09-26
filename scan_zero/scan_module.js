@@ -642,15 +642,13 @@ export class ScanModule {
     }
 
     /**
-     * Disable buttons that call Pyodide *outside* the task queue (plot seq, Get FOV, CROP) while any
-     * scan is in flight. Their direct `executeFunction` / resample calls would otherwise race the
-     * background recon for the single-threaded Pyodide interpreter. SCAN stays enabled — its prep is
-     * routed through `enqueuePyodideTask`, so rapid scanning is safe.
+     * Disable buttons that call Pyodide *outside* the task queue (Get FOV, CROP) while any scan is
+     * in flight. plot seq stays available: only seq.write holds the interpreter, and plot seq waits
+     * on the same queue instead of being locked out for the whole remote simulation.
      */
     _syncScanBusyUi() {
         const busy = this.queue.some((j) => j.status === 'scanning');
         const selectors = [
-            '#seq-execute-btn',
             '#seq-get-fov-btn',
             '#btn-start-crop',
             '#seq-mobile-crop',
@@ -1460,6 +1458,9 @@ export class ScanModule {
                 scanNumber: job.scanNumber,
                 name: job.name,
             };
+            // Already inside enqueuePyodideTask (sim-seq). Run inline so this does not
+            // wait on a nested queue task and deadlock the drain.
+            window.seqExplorer._inlineNextExecute = true;
             await window.seqExplorer.executeFunction(true, job.scanNumber);
             window.seqExplorer._pendingProtocolMeta = null;
         }

@@ -306,6 +306,10 @@ export class SequenceExplorer {
         this._seqChartGpuRemoveDeviceListeners = null;
         /** Full Python traceback from the last failed executeFunction (silent scan prep reads this). */
         this._lastExecutionError = null;
+        /** Scan prep is already inside the Pyodide queue; the next executeFunction must not re-enqueue. */
+        this._inlineNextExecute = false;
+        /** Visible plot seq is queued or running; ignore extra clicks. */
+        this._plotSeqQueued = false;
         
         // Initialize UI
         if (containerId) {
@@ -4048,7 +4052,45 @@ json.dumps(_result)
         this.updateSequenceNameDisplay();
     }
     
+    /**
+     * Run the selected sequence. User-facing calls wait on the shared Pyodide queue so they
+     * do not overlap seq.write / recon. Scan prep sets `_inlineNextExecute` and runs inside
+     * the task it already holds.
+     */
     async executeFunction(silent = false, protocolName = null) {
+        if (this._inlineNextExecute) {
+            this._inlineNextExecute = false;
+            return this._executeFunctionNow(silent, protocolName);
+        }
+        if (!silent && this._plotSeqQueued) return;
+        const nv = window.nvModule;
+        if (nv?.enqueuePyodideTask) {
+            const executeBtn = !silent
+                ? (this.paramsTarget || this.container)?.querySelector('#seq-execute-btn')
+                : null;
+            if (!silent) this._plotSeqQueued = true;
+            if (executeBtn) {
+                executeBtn.disabled = true;
+                executeBtn.textContent = 'Plotting...';
+            }
+            try {
+                return await nv.enqueuePyodideTask(
+                    `plotseq_${Date.now()}`,
+                    silent ? 'seq-exec' : 'plot-seq',
+                    () => this._executeFunctionNow(silent, protocolName),
+                );
+            } finally {
+                if (!silent) this._plotSeqQueued = false;
+                if (executeBtn) {
+                    executeBtn.disabled = false;
+                    executeBtn.textContent = 'plot seq';
+                }
+            }
+        }
+        return this._executeFunctionNow(silent, protocolName);
+    }
+
+    async _executeFunctionNow(silent = false, protocolName = null) {
         if (!this.selectedSequence || !this.config.pyodide) {
             console.warn('No function selected or Pyodide not available');
             return;
@@ -4075,8 +4117,10 @@ json.dumps(_result)
             this.config.onFunctionStart(this.selectedSequence);
         }
 
-        executeBtn.disabled = true;
-        executeBtn.textContent = silent ? 'Generating...' : 'Plotting...';
+        if (!silent) {
+            executeBtn.disabled = true;
+            executeBtn.textContent = 'Plotting...';
+        }
         
         // Clear any previous error display
         this._lastExecutionError = null;
@@ -4332,8 +4376,10 @@ json.dumps(out)
             // showStatus will log to UI console for errors
             this.showStatus(`Error: ${errorMsg}`, 'error');
         } finally {
-            executeBtn.disabled = false;
-            executeBtn.textContent = 'plot seq';
+            if (!silent) {
+                executeBtn.disabled = false;
+                executeBtn.textContent = 'plot seq';
+            }
         }
     }
 
