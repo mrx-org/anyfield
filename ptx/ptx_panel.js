@@ -1,4 +1,4 @@
-import { NVImage } from "https://unpkg.com/@niivue/niivue@0.65.0/dist/index.js";
+import { NVImage, NVMesh } from "https://unpkg.com/@niivue/niivue@0.65.0/dist/index.js";
 import {
   TISSUE_K,
   OUTSIDE_PHASE_SENTINEL,
@@ -15,6 +15,81 @@ const COLORS = ["#5eead4", "#67e8f9", "#93c5fd", "#c4b5fd", "#f0abfc", "#fda4af"
 const CX = 110;
 const CY = 110;
 const RING = 74;
+const COIL_TUBE_MM = 3;
+const COIL_TUBE_SIDES = 6;
+/** How far from the current slice a coil triangle still draws. The 3D panel shows the whole array. */
+const COIL_SLICE_MM = 6;
+
+function hexRgba(hex) {
+  const n = parseInt(hex.slice(1), 16);
+  return new Uint8Array([(n >> 16) & 255, (n >> 8) & 255, n & 255, 255]);
+}
+
+function v3norm(a) {
+  const l = Math.hypot(a[0], a[1], a[2]) || 1;
+  return [a[0] / l, a[1] / l, a[2] / l];
+}
+
+function v3cross(a, b) {
+  return [a[1] * b[2] - a[2] * b[1], a[2] * b[0] - a[0] * b[2], a[0] * b[1] - a[1] * b[0]];
+}
+
+/** Closed-loop tube in world mm. Coil points are meters; `com` is the head center in mm. */
+function coilTube(pointsM, com, radius, sides) {
+  const n = pointsM.length;
+  const centers = pointsM.map((p) => [p[0] * 1000 + com[0], p[1] * 1000 + com[1], p[2] * 1000 + com[2]]);
+  let nx = 0, ny = 0, nz = 0;
+  for (let i = 0; i < n; i++) {
+    const a = centers[i];
+    const b = centers[(i + 1) % n];
+    nx += (a[1] - b[1]) * (a[2] + b[2]);
+    ny += (a[2] - b[2]) * (a[0] + b[0]);
+    nz += (a[0] - b[0]) * (a[1] + b[1]);
+  }
+  const plane = v3norm([nx, ny, nz]);
+  const pts = new Float32Array(n * sides * 3);
+  const tris = new Uint32Array(n * sides * 6);
+  let tp = 0;
+  let tt = 0;
+  for (let i = 0; i < n; i++) {
+    const prev = centers[(i - 1 + n) % n];
+    const next = centers[(i + 1) % n];
+    const tangent = v3norm([next[0] - prev[0], next[1] - prev[1], next[2] - prev[2]]);
+    const dot = plane[0] * tangent[0] + plane[1] * tangent[1] + plane[2] * tangent[2];
+    let normal = v3norm([
+      plane[0] - tangent[0] * dot,
+      plane[1] - tangent[1] * dot,
+      plane[2] - tangent[2] * dot,
+    ]);
+    if (!Number.isFinite(normal[0])) {
+      const ref = Math.abs(tangent[2]) < 0.9 ? [0, 0, 1] : [1, 0, 0];
+      normal = v3norm(v3cross(tangent, ref));
+    }
+    const binormal = v3norm(v3cross(tangent, normal));
+    for (let s = 0; s < sides; s++) {
+      const ang = (s / sides) * Math.PI * 2;
+      const c = Math.cos(ang) * radius;
+      const sn = Math.sin(ang) * radius;
+      const o = centers[i];
+      pts[tp++] = o[0] + normal[0] * c + binormal[0] * sn;
+      pts[tp++] = o[1] + normal[1] * c + binormal[1] * sn;
+      pts[tp++] = o[2] + normal[2] * c + binormal[2] * sn;
+    }
+  }
+  for (let i = 0; i < n; i++) {
+    const i2 = (i + 1) % n;
+    for (let s = 0; s < sides; s++) {
+      const s2 = (s + 1) % sides;
+      const a = i * sides + s;
+      const b = i * sides + s2;
+      const c = i2 * sides + s;
+      const d = i2 * sides + s2;
+      tris[tt++] = a; tris[tt++] = c; tris[tt++] = b;
+      tris[tt++] = b; tris[tt++] = c; tris[tt++] = d;
+    }
+  }
+  return { pts, tris };
+}
 
 /**
  * Left-sidebar pTx steering for the 8-channel stadium triangular array.
@@ -40,6 +115,10 @@ export class PtxPanel {
     this._pendingShow = null;
     this._showing = false;
     this._drag = null;
+    this.showCoil = true;
+    this.coilMeshes = null;
+    this._coilKey = "";
+    this._meshClip = null;
   }
 
   mount(root) {
@@ -61,6 +140,7 @@ export class PtxPanel {
         <div class="ptx-options">
           <label><input type="checkbox" id="ptx-power" checked> Constant transmit power</label>
           <label title="Retarded phase at 7 T in brain tissue. Off is quasi-static."><input type="checkbox" id="ptx-wave" checked> 7 T tissue phase</label>
+          <label title="Draw the eight loops on the phantom viewer"><input type="checkbox" id="ptx-coil" checked> Show coil</label>
         </div>
         <div class="ptx-channels" id="ptx-channels"></div>
         <div class="ptx-stats" id="ptx-stats">CoV —</div>
@@ -82,6 +162,10 @@ export class PtxPanel {
       this.basis = null;
       this.basisKey = "";
       if (this.active) this.refresh();
+    });
+    root.querySelector("#ptx-coil").addEventListener("change", (e) => {
+      this.showCoil = e.target.checked;
+      this.updateCoilMeshes();
     });
     this.svg.addEventListener("pointerdown", (e) => this._onPointerDown(e));
     this.svg.addEventListener("dblclick", (e) => {
@@ -300,6 +384,7 @@ export class PtxPanel {
     this._volKey = key;
     this.basis = null;
     this.basisKey = "";
+    this._clearCoilMeshes();
     if (this.active) this.refresh();
   }
 
@@ -362,6 +447,7 @@ export class PtxPanel {
       this.basis = await this._building;
       this.basisKey = key;
       this._focused = false;
+      this.updateCoilMeshes();
       this.setStatus("B1+ ready. Drag a knob. Quasi-static model, not full-wave.");
     } finally {
       this._building = null;
@@ -379,6 +465,7 @@ export class PtxPanel {
     if (this.statsEl) {
       this.statsEl.textContent = `CoV ${covPct}% · mean ${field.mean.toFixed(2)} · p98 ${field.p98.toFixed(2)}`;
     }
+    this.updateCoilMeshes();
     const affine = this.nvMod.getReferenceVolumeInfoForFovSync().affine;
     const dims = [this.basis.nx, this.basis.ny, this.basis.nz];
     const calMin = Math.max(0.02, field.p98 * 0.04);
@@ -469,6 +556,52 @@ export class PtxPanel {
     }
     preview.nv?.resizeListener?.();
     compare.module.nv?.resizeListener?.();
+  }
+
+  _clearCoilMeshes() {
+    const nv = this.nvMod?.nv;
+    if (nv && this.coilMeshes?.length) {
+      for (const mesh of this.coilMeshes) {
+        try { nv.removeMesh(mesh); } catch (e) { console.warn(e); }
+      }
+      if (this._meshClip != null && typeof nv.setMeshThicknessOn2D === "function") {
+        nv.setMeshThicknessOn2D(this._meshClip);
+      }
+    }
+    this._meshClip = null;
+    this.coilMeshes = null;
+    this._coilKey = "";
+  }
+
+  updateCoilMeshes() {
+    const nv = this.nvMod?.nv;
+    if (!this.showCoil || !nv?.gl || !this.basis?.com || !this.channels.length || !nv.volumes?.length) {
+      if (this.coilMeshes) {
+        this._clearCoilMeshes();
+        nv?.drawScene?.();
+      }
+      return;
+    }
+    const com = this.basis.com;
+    const key = `${com[0].toFixed(2)},${com[1].toFixed(2)},${com[2].toFixed(2)}:${this.channels.length}`;
+    if (this._coilKey !== key || !this.coilMeshes) {
+      this._clearCoilMeshes();
+      if (this._meshClip == null) this._meshClip = nv.opts.meshThicknessOn2D;
+      if (typeof nv.setMeshThicknessOn2D === "function") nv.setMeshThicknessOn2D(COIL_SLICE_MM);
+      this.coilMeshes = this.channels.map((ch, i) => {
+        const { pts, tris } = coilTube(ch.pointsM, com, COIL_TUBE_MM, COIL_TUBE_SIDES);
+        const mesh = new NVMesh(pts, tris, `Tx${ch.id} ${ch.label}`, hexRgba(COLORS[i]), 1, true, nv.gl);
+        mesh.colorbarVisible = false;
+        nv.addMesh(mesh);
+        return mesh;
+      });
+      this._coilKey = key;
+    }
+    this.coilMeshes.forEach((mesh, i) => {
+      const mag = Math.max(0, Math.min(1, this.mags[i] ?? 1));
+      mesh.opacity = 0.25 + 0.75 * mag;
+    });
+    nv.drawScene();
   }
 
   _canReplace(nv, data) {
