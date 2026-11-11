@@ -11,6 +11,7 @@
     <!-- CSS Loading Order: Base styles first, then modules, then master override -->
     <link rel="stylesheet" href="startup.css">
     <link rel="stylesheet" href="niivue_app.css?v=5">
+    <link rel="stylesheet" href="ptx/ptx.css">
     <link rel="stylesheet" href="pypulseq/seq_explorer.css">
     <link rel="stylesheet" href="scan_zero/scan_module.css?v=8">
     <link rel="stylesheet" href="no_field.css"> <!-- Master override LAST -->
@@ -157,7 +158,8 @@
         }
         #slot-sidebar.sidebar-collapsed .tab-btn[data-tab="phantoms"],
         #slot-sidebar.sidebar-collapsed .tab-btn[data-tab="view"],
-        #slot-sidebar.sidebar-collapsed .tab-btn[data-tab="fov"] {
+        #slot-sidebar.sidebar-collapsed .tab-btn[data-tab="fov"],
+        #slot-sidebar.sidebar-collapsed .tab-btn[data-tab="ptx"] {
             display: none;
         }
         #slot-main { 
