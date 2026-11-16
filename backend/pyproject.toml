@@ -1,0 +1,26 @@
+[project]
+name = "anyfield"
+version = "0.1.0"
+description = "anyfield v4 backend: session state as MCP server on Modal"
+requires-python = ">=3.12"
+dependencies = [
+    "fastmcp[apps]==4.0.0b3",
+    "modal>=1.2",
+]
+
+[dependency-groups]
+dev = ["pytest>=8", "pytest-asyncio>=0.24", "ruff>=0.8"]
+
+[build-system]
+requires = ["uv_build>=0.8,<0.13"]
+build-backend = "uv_build"
+
+[tool.pytest.ini_options]
+asyncio_mode = "auto"
+
+[tool.ruff]
+line-length = 110
+
+[tool.uv]
+# fastmcp 4 is a pre-release (same as the mcp-gateway)
+prerelease = "if-necessary-or-explicit"
