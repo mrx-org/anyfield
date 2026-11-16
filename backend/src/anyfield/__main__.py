@@ -9,10 +9,12 @@ from __future__ import annotations
 
 import argparse
 import os
+import tempfile
 from pathlib import Path
 
 import uvicorn
 
+from .phantoms import local_library
 from .server import build, http_app
 from .store import MemoryStore
 
@@ -32,7 +34,9 @@ def main() -> None:
         auth = github_auth(base_url)
     else:
         os.environ.setdefault("ANYFIELD_DEV_USER", "dev")
-    uvicorn.run(http_app(build(MemoryStore(), base_url, auth=auth, static_dir=args.static)), port=args.port)
+    library = local_library(Path(tempfile.gettempdir()) / "anyfield-phantoms")
+    mcp = build(MemoryStore(), base_url, auth=auth, static_dir=args.static, library=library)
+    uvicorn.run(http_app(mcp), port=args.port)
 
 
 if __name__ == "__main__":

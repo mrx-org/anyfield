@@ -39,21 +39,41 @@ if modal.is_local():
     )
 
 
+PHANTOM_ROOT = STATE_PATH / "phantoms"
+
+
+@app.function(
+    image=image,
+    volumes={str(STATE_PATH): state_volume},
+    memory=16384,  # a 0.5 mm brain takes several GB while it is resampled
+    timeout=900,
+)
+def prepare_phantom(collection: str, name: str) -> dict:
+    """Download a BIfTI phantom and write its display maps to the state volume."""
+    from .phantoms import prepare
+
+    meta = prepare(collection, name, PHANTOM_ROOT, PHANTOM_ROOT / "_downloads")
+    state_volume.commit()
+    return meta
+
+
 @app.function(
     image=image,
     secrets=[modal.Secret.from_name("gh_oauth")],
     volumes={str(STATE_PATH): state_volume},
     min_containers=0,
     scaledown_window=300,
-    timeout=120,
+    timeout=900,  # select_phantom waits while a new phantom is prepared
 )
 @modal.concurrent(max_inputs=100)
 @modal.asgi_app()
 def web():
     from .auth import DictKeyValue, encrypted, github_auth
+    from .phantoms import PhantomLibrary
     from .server import build, http_app
     from .store import ModalStore
 
     store = ModalStore(sessions_dict, state_volume, STATE_PATH / "sessions")
     auth = github_auth(BASE_URL, client_storage=encrypted(DictKeyValue(oauth_dict)))
-    return http_app(build(store, BASE_URL, auth=auth, static_dir=STATIC_DIR))
+    library = PhantomLibrary(PHANTOM_ROOT, prepare_phantom.remote.aio, reload=state_volume.reload)
+    return http_app(build(store, BASE_URL, auth=auth, static_dir=STATIC_DIR, library=library))

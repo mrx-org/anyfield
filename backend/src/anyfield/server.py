@@ -21,8 +21,10 @@ from starlette.routing import Mount
 from starlette.staticfiles import StaticFiles
 
 from . import fov as fov_ops
+from . import phantom_tools
 from .auth import AuthProvider, make_login_on_demand, require_user
 from .models import Session, Vec3, new_key
+from .phantoms import Catalog, PhantomLibrary
 from .store import SessionStore
 
 DATA_DIR = Path(__file__).parent / "data"
@@ -43,6 +45,8 @@ def build(
     *,
     auth: AuthProvider | None = None,
     static_dir: Path | None = None,
+    library: PhantomLibrary | None = None,
+    catalog: Catalog | None = None,
 ) -> FastMCP:
     base_url = base_url.rstrip("/")
     mcp = FastMCP(
@@ -65,7 +69,8 @@ def build(
             "owner_login": s.owner_login,
             "updated_at": s.updated_at,
             "fov": s.fov.model_dump(),
-            "phantom_url": f"{base_url}/files/phantom.nii.gz",
+            "phantom": (phantom := phantom_tools.public(s.phantom, base_url)),
+            "phantom_url": phantom["url"],
             "web_url": f"{base_url}/s/{s.key}",
         }
 
@@ -204,16 +209,17 @@ def build(
         In clients without MCP Apps this returns the session state and its web link."""
         return public(await load(session_key))
 
-    @mcp.resource(
-        FOV_APP_URI,
-        name="FOV planner",
-        app=AppConfig(csp=ResourceCSP(connect_domains=[base_url], resource_domains=[base_url])),
+    app_html(mcp, FOV_APP_URI, "FOV planner", "fov-app.html", base_url, static_dir)
+
+    # --- Phantoms (BIfTI): a separate tool ----------------------------------
+
+    phantom_tools.register(
+        mcp,
+        phantom_tools.Ctx(base_url=base_url, load=load, save=save, public=public, locks=locks),
+        library=library,
+        catalog=catalog or Catalog(),
+        static_dir=static_dir,
     )
-    def fov_planner_html() -> str:
-        path = static_dir / "fov-app.html" if static_dir else None
-        if path and path.exists():
-            return path.read_text()
-        return "<!doctype html><p>FOV planner not built (frontend/dist missing).</p>"
 
     # --- HTTP routes ----------------------------------------------------------
 
@@ -237,6 +243,21 @@ def build(
     mcp.custom_route("/s/{key}", methods=["GET"])(index)
     mcp._anyfield_static_dir = static_dir  # read by http_app below
     return mcp
+
+
+def app_html(mcp: FastMCP, uri: str, name: str, file: str, base_url: str, static_dir: Path | None) -> None:
+    """Register an MCP App's HTML (a single-file build in `static_dir`) as resource `uri`."""
+
+    @mcp.resource(
+        uri,
+        name=name,
+        app=AppConfig(csp=ResourceCSP(connect_domains=[base_url], resource_domains=[base_url])),
+    )
+    def html() -> str:
+        path = static_dir / file if static_dir else None
+        if path and path.exists():
+            return path.read_text()
+        return f"<!doctype html><p>{name} not built (frontend/dist missing).</p>"
 
 
 def http_app(mcp: FastMCP):

@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import secrets
 import time
+from typing import Literal
 
 from pydantic import BaseModel, Field
 
@@ -22,6 +23,19 @@ class Fov(BaseModel):
     size_mm: Vec3 = (200.0, 200.0, 100.0)
 
 
+class PhantomSel(BaseModel):
+    """The session's phantom. `collection=None` is the built-in default phantom."""
+
+    collection: str | None = None
+    name: str = "default"
+    property: str = "density"
+    status: Literal["ready", "loading", "error"] = "ready"
+    error: str | None = None
+    properties: list[dict] = Field(
+        default_factory=lambda: [{"key": "density", "label": "PD", "unit": "a.u.", "range": None}]
+    )
+
+
 class Session(BaseModel):
     key: str
     name: str
@@ -31,6 +45,7 @@ class Session(BaseModel):
     updated_at: float = Field(default_factory=time.time)
     rev: int = 0
     fov: Fov = Field(default_factory=Fov)
+    phantom: PhantomSel = Field(default_factory=PhantomSel)
 
 
 def new_key() -> str:
