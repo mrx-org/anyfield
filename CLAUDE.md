@@ -10,4 +10,4 @@ https://linear.app/mrx-org/issue/MRX-71/studie-anyfield-redesign-v4-mit-mcp-stat
 ## Commits
 
 - Jede Commit-Message folgt **Conventional Commits** (`feat:`, `fix:`, `docs:`, `refactor:`, `test:`, `chore:`, `ci:` …, optional mit Scope, z. B. `feat(server): …`).
-- Letzte Zeile: `Refs MRX-71` (bzw. die passende Issue-ID).
+- `Refs MRX-71` (letzte Zeile) nur bei Commits, die ein Feature bzw. einen Punkt aus dem Issue fertigstellen. Normale Zwischen-Commits ohne Referenz.
