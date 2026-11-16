@@ -11,3 +11,10 @@ https://linear.app/mrx-org/issue/MRX-71/studie-anyfield-redesign-v4-mit-mcp-stat
 
 - Jede Commit-Message folgt **Conventional Commits** (`feat:`, `fix:`, `docs:`, `refactor:`, `test:`, `chore:`, `ci:` …, optional mit Scope, z. B. `feat(server): …`).
 - `Refs MRX-71` (letzte Zeile) nur bei Commits, die ein Feature bzw. einen Punkt aus dem Issue fertigstellen. Normale Zwischen-Commits ohne Referenz.
+
+## Arbeiten im Repo
+
+- Aufbau, Befehle und Deployment: siehe `README.md`.
+- Vor jedem Commit: `pnpm check && pnpm test` (frontend), `uv run ruff check src tests && uv run ruff format --check src tests && uv run pytest` (backend).
+- Betrieb nur auf Modal; `python -m anyfield` ist nur ein Testserver.
+- Komponenten sprechen nie direkt MCP, sondern über `Transport`/`AnyfieldClient` und `SessionStore`.
