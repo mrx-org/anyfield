@@ -1,7 +1,7 @@
 """Deployment on Modal (workspace mrx-org): `modal deploy -m anyfield.modal_app`.
 
 Serves `web` at `https://mrx-org--anyfield-web.modal.run`. Needs the Modal
-secret `anyfield-oauth` with GITHUB_OAUTH_CLIENT_ID and GITHUB_OAUTH_CLIENT_SECRET
+secret `gh_oauth` with GITHUB_OAUTH_CLIENT_ID and GITHUB_OAUTH_CLIENT_SECRET
 (a GitHub OAuth app whose callback URL is `<BASE_URL>/auth/callback`).
 """
 
@@ -41,7 +41,7 @@ if modal.is_local():
 
 @app.function(
     image=image,
-    secrets=[modal.Secret.from_name("anyfield-oauth")],
+    secrets=[modal.Secret.from_name("gh_oauth")],
     volumes={str(STATE_PATH): state_volume},
     min_containers=0,
     scaledown_window=300,

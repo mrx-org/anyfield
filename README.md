@@ -58,5 +58,5 @@ Jeder Push auf `mcp-redesign` deployt nach Tests per GitHub Actions auf Modal
 1. GitHub-OAuth-App in der mrx-org anlegen, Callback-URL
    `https://mrx-org--anyfield-web.modal.run/auth/callback`.
 2. Modal-Secret im Workspace mrx-org:
-   `modal secret create anyfield-oauth GITHUB_OAUTH_CLIENT_ID=… GITHUB_OAUTH_CLIENT_SECRET=…`
+   `modal secret create gh_oauth GITHUB_OAUTH_CLIENT_ID=… GITHUB_OAUTH_CLIENT_SECRET=…`
 3. Modal-Token für mrx-org als Repository-Secrets `MODAL_TOKEN_ID` und `MODAL_TOKEN_SECRET`.
