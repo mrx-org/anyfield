@@ -1,4 +1,4 @@
-import type { FovChange, SessionState, SessionSummary, Vec3 } from "../types";
+import type { FovChange, PhantomCollection, PhantomState, PhantomTree, SessionState, SessionSummary, Vec3 } from "../types";
 import type { Transport } from "./transport";
 
 export type SessionPoll = SessionState | { rev: number; unchanged: true };
@@ -24,4 +24,13 @@ export class AnyfieldClient {
     this.call<FovChange>("set_fov", { session_key: key, ...fov });
   moveFov = (key: string, delta_mm: Vec3) => this.call<FovChange>("move_fov", { session_key: key, delta_mm });
   rotateFov = (key: string, delta_deg: Vec3) => this.call<FovChange>("rotate_fov", { session_key: key, delta_deg });
+
+  // Phantoms (BIfTI catalog)
+  listPhantomCollections = () => this.call<PhantomCollection[]>("list_phantom_collections");
+  listPhantoms = (collection: string, path?: string[]) =>
+    this.call<PhantomTree>("list_phantoms", { collection, ...(path ? { path } : {}) });
+  selectPhantom = (key: string, collection: string, phantom: string, property?: string) =>
+    this.call<PhantomState>("select_phantom", { session_key: key, collection, phantom, ...(property ? { property } : {}) });
+  setPhantomProperty = (key: string, property: string) =>
+    this.call<PhantomState>("set_phantom_property", { session_key: key, property });
 }

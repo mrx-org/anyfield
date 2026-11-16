@@ -1,15 +1,18 @@
 <script lang="ts">
-  // MCP App (ui://anyfield/fov-planner.html): opened by the tool `open_fov_planner`.
-  // The session key comes from the tool's arguments; all calls go through the host.
+  // Shell of every anyfield MCP App: connects to the host, takes the session key
+  // from the tool call that opened the app and hands a SessionStore to `tool`.
+  // All calls go through the host's connection.
   import { App } from "@modelcontextprotocol/ext-apps";
-  import { onDestroy } from "svelte";
+  import { onDestroy, type Component } from "svelte";
   import { AnyfieldClient } from "../lib/client/anyfield";
   import { McpAppTransport } from "../lib/client/mcp-app";
-  import FovPlanner from "../lib/components/fov/FovPlanner.svelte";
   import { SessionStore } from "../lib/state/session.svelte";
   import type { SessionState } from "../lib/types";
 
-  const app = new App({ name: "anyfield-fov-planner", version: "0.1.0" });
+  let { name, tool, height = 560 }: { name: string; tool: Component<{ store: SessionStore }>; height?: number } = $props();
+
+  // svelte-ignore state_referenced_locally
+  const app = new App({ name, version: "0.1.0" });
   const client = new AnyfieldClient(new McpAppTransport(app));
   let store = $state<SessionStore | null>(null);
   let error = $state<string | null>(null);
@@ -38,11 +41,13 @@
   app.connect().catch((e) => (error = String(e)));
 
   onDestroy(() => store?.stop());
+
+  const Tool = $derived(tool);
 </script>
 
-<div class="h-[560px] w-full">
+<div class="w-full" style="height: {height}px">
   {#if store}
-    <FovPlanner {store} compact />
+    <Tool {store} />
   {:else}
     <p class="p-4 text-sm text-muted">{error ?? "Warte auf Session …"}</p>
   {/if}

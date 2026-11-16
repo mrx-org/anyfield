@@ -4,6 +4,7 @@
   import { AnyfieldClient } from "../lib/client/anyfield";
   import { LoginRedirect, McpHttpTransport } from "../lib/client/mcp-http";
   import FovPlanner from "../lib/components/fov/FovPlanner.svelte";
+  import PhantomBrowser from "../lib/components/phantom/PhantomBrowser.svelte";
   import { SessionStore } from "../lib/state/session.svelte";
   import type { SessionSummary } from "../lib/types";
 
@@ -99,7 +100,13 @@
   </header>
 
   {#if sessionKey && store}
-    <main class="min-h-0 flex-1"><FovPlanner {store} /></main>
+    <!-- Two independent tools on the same session, side by side -->
+    <main class="flex min-h-0 flex-1 flex-col lg:flex-row">
+      <section class="max-h-[45vh] shrink-0 border-b border-border lg:max-h-none lg:w-80 lg:border-b-0 lg:border-r" aria-label="Phantom">
+        <PhantomBrowser {store} preview={false} />
+      </section>
+      <section class="min-h-0 flex-1" aria-label="FOV-Planung"><FovPlanner {store} /></section>
+    </main>
   {:else}
     <main class="mx-auto flex w-full max-w-xl flex-col gap-6 p-6">
       <section class="flex flex-col gap-2">

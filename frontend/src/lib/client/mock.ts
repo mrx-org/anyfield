@@ -14,6 +14,7 @@ export class MockTransport implements Transport {
       owner_login: "mock",
       updated_at: 0,
       fov: { center_mm: [0, 0, 0], rotation_deg: [0, 0, 0], size_mm: [200, 200, 100] },
+      phantom: { collection: null, name: "default", property: "density", status: "ready", error: null, properties: [{ key: "density", label: "PD", unit: "a.u.", range: null }], url: "/files/phantom.nii.gz" },
       phantom_url: "/files/phantom.nii.gz",
       web_url: "/s/mock-key",
       ...initial,
@@ -40,6 +41,18 @@ export class MockTransport implements Transport {
         return change({ ...s.fov, center_mm: add(s.fov.center_mm, args.delta_mm as Vec3) });
       case "rotate_fov":
         return change({ ...s.fov, rotation_deg: add(s.fov.rotation_deg, args.delta_deg as Vec3) });
+      case "select_phantom": {
+        const props = ["density", "T1", "T2"].map((k) => ({ key: k, label: k, unit: "", range: null }));
+        s.phantom = { collection: args.collection as string, name: args.phantom as string, property: (args.property as string) ?? "density", status: "ready", error: null, properties: props, url: `/files/phantoms/${args.collection}/${args.phantom}/density.nii.gz` };
+        s.phantom_url = s.phantom.url;
+        s.rev += 1;
+        return structuredClone(s.phantom);
+      }
+      case "set_phantom_property":
+        s.phantom = { ...s.phantom, property: args.property as string, url: `${s.phantom.url?.replace(/[^/]+\.nii\.gz$/, "")}${args.property}.nii.gz` };
+        s.phantom_url = s.phantom.url;
+        s.rev += 1;
+        return structuredClone(s.phantom);
       default:
         throw new ToolCallError(name, `MockTransport: ${name} not implemented`);
     }

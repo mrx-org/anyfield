@@ -11,7 +11,11 @@
 <div class="flex h-full w-full {compact ? 'flex-col' : 'flex-col md:flex-row'} bg-bg text-text">
   <div class="min-h-0 flex-1 {compact ? 'min-h-72' : 'min-h-96'}">
     {#if store.server}
-      <FovViewer fov={store.fov} phantomUrl={store.server.phantom_url} />
+      <FovViewer
+        fov={store.fov}
+        phantomUrl={store.server.phantom_url}
+        range={store.server.phantom.properties.find((p) => p.key === store.server?.phantom.property)?.range ?? null}
+      />
     {:else if store.error}
       <p class="p-4 text-red-400">{store.error}</p>
     {:else}

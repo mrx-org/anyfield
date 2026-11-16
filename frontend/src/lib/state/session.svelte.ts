@@ -111,6 +111,31 @@ export class SessionStore {
     }
   }
 
+  /** Collection + phantom being selected by this client (preparing can take a minute). */
+  selecting = $state<{ collection: string; name: string } | null>(null);
+
+  async selectPhantom(collection: string, name: string): Promise<void> {
+    this.selecting = { collection, name };
+    await this.act(() => this.client.selectPhantom(this.key, collection, name, this.server?.phantom.property));
+    this.selecting = null;
+  }
+
+  setPhantomProperty(property: string): Promise<void> {
+    return this.act(() => this.client.setPhantomProperty(this.key, property));
+  }
+
+  /** Run a tool call, then re-read the session; an error stays visible after the refresh. */
+  private async act(fn: () => Promise<unknown>): Promise<void> {
+    let error: string | null = null;
+    try {
+      await fn();
+    } catch (e) {
+      error = e instanceof Error ? e.message : String(e);
+    }
+    await this.refresh();
+    if (error) this.error = error;
+  }
+
   /** Resolves once no local edit is pending or in flight (for tests). */
   async settled(): Promise<void> {
     while (this.pendingFov || this.inFlight || this.commitTimer) await new Promise((r) => setTimeout(r, 5));

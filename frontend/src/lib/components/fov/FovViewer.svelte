@@ -5,12 +5,17 @@
   import { fovMesh } from "../../geometry/fov";
   import type { Fov } from "../../types";
 
-  let { fov, phantomUrl }: { fov: Fov | null; phantomUrl: string } = $props();
+  let {
+    fov,
+    phantomUrl,
+    range = null,
+  }: { fov: Fov | null; phantomUrl: string | null; range?: [number, number] | null } = $props();
 
   let canvas: HTMLCanvasElement;
   let nv: Niivue | null = null;
   let mesh: NVMesh | null = null;
   let ready = $state(false);
+  let loadedUrl: string | null = null;
   let loadError = $state<string | null>(null);
   const FOV_RGBA = new Uint8Array([245, 165, 36, 255]);
 
@@ -29,7 +34,6 @@
       });
       await nv.attachToCanvas(canvas);
       nv.setSliceType(SLICE_TYPE.MULTIPLANAR);
-      await nv.loadVolumes([{ url: phantomUrl, name: "phantom.nii.gz" }]);
       ready = true;
     } catch (e) {
       loadError = e instanceof Error ? e.message : String(e);
@@ -39,6 +43,18 @@
   onDestroy(() => {
     mesh = null;
     nv = null;
+  });
+
+  // Load the phantom map; a new URL (other phantom or property) replaces it.
+  // While a phantom is being prepared the URL is null and the old one stays.
+  $effect(() => {
+    if (!ready || !nv || !phantomUrl || phantomUrl === loadedUrl) return;
+    const url = phantomUrl;
+    loadedUrl = url;
+    const opts = range ? { cal_min: range[0], cal_max: range[1] } : {};
+    nv.loadVolumes([{ url, name: url.split("/").pop() ?? "phantom.nii.gz", ...opts }])
+      .then(() => nv?.drawScene())
+      .catch((e) => (loadError = e instanceof Error ? e.message : String(e)));
   });
 
   $effect(() => {

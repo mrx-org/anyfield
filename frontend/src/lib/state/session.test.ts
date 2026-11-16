@@ -53,3 +53,16 @@ describe("SessionStore", () => {
     expect(store.error).toMatch(/Unknown session key/);
   });
 });
+
+describe("SessionStore phantoms", () => {
+  it("selects a phantom and a property", async () => {
+    const { t, store } = setup();
+    await store.refresh();
+    await store.selectPhantom("demo-001", "shapes.json");
+    expect(store.server?.phantom.collection).toBe("demo-001");
+    expect(store.selecting).toBeNull();
+    await store.setPhantomProperty("T1");
+    expect(store.server?.phantom.url).toMatch(/T1\.nii\.gz$/);
+    expect(t.calls.map((c) => c.name)).toContain("set_phantom_property");
+  });
+});

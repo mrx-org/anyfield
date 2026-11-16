@@ -17,9 +17,21 @@ Web-App: `/` (eigene Sessions), `/s/{key}` (eine Session).
 
 ## Tools
 
-`list_sessions`, `create_session`, `rename_session`, `delete_session` (Login) ·
-`get_session`, `set_fov`, `move_fov`, `rotate_fov`, `open_fov_planner` (Session-Key).
-`open_fov_planner` zeigt in Clients mit MCP Apps den FOV-Planer im Chat.
+| Tool | Tools |
+| -- | -- |
+| Sessions (Login) | `list_sessions`, `create_session`, `rename_session`, `delete_session` |
+| Session | `get_session` |
+| FOV-Planer | `set_fov`, `move_fov`, `rotate_fov`, `open_fov_planner` |
+| Phantom (BIfTI) | `list_phantom_collections`, `list_phantoms`, `select_phantom`, `set_phantom_property`, `open_phantom_browser` |
+
+`open_*` zeigen in Clients mit MCP Apps das jeweilige Tool im Chat. Die Website
+zeigt unter `/s/{key}` beide Tools nebeneinander.
+
+Phantome kommen aus dem öffentlichen [BIfTI-Katalog](https://github.com/mrx-org/bifti-phantoms)
+(Download von Zenodo mit dem Paket `bifti`). Beim ersten Gebrauch werden je Phantom
+Anzeige-Karten berechnet (PD, T1, T2, T2′, ADC, dB0, B1±; dichtegewichtete Mittel
+über die Gewebe) und auf dem Modal-Volume abgelegt; große Phantome auf höchstens
+8 Mio. Voxel vergröbert.
 
 ## Aufbau
 
@@ -28,13 +40,16 @@ backend/   Python (uv), FastMCP, Modal
   src/anyfield/server.py     Tools, Routen
   src/anyfield/auth.py       GitHub-OAuth nur für Session-Verwaltung
   src/anyfield/store.py      Modal Dict + Volume (Dict-Einträge verfallen nach 7 Tagen)
+  src/anyfield/phantoms.py   BIfTI-Katalog, Anzeige-Karten (PhantomLibrary)
+  src/anyfield/phantom_tools.py  Phantom-Tool
   src/anyfield/modal_app.py  Deployment
 frontend/  Svelte 5, TypeScript, Vite, NiiVue
   src/lib/client/            Transport: MCP-HTTP (Web), MCP App, Mock
   src/lib/state/             SessionStore: Polling, optimistische Änderungen
   src/lib/components/fov/    FOV-Planer (eigenständige Komponente)
+  src/lib/components/phantom/  Phantom-Browser (eigenständige Komponente)
   src/web/                   Web-App
-  src/mcp-app/               MCP App (eine HTML-Datei)
+  src/mcp-app/               MCP Apps (je eine HTML-Datei, gemeinsame Hülle McpApp.svelte)
   dev/app-host.html          Test-Host für die MCP App
 ```
 
@@ -45,7 +60,7 @@ cd frontend && pnpm install && pnpm build      # dist/ wird vom Backend ausgelie
 cd backend && uv run pytest                    # Tests
 cd backend && uv run python -m anyfield        # Testserver im Speicher, ohne Login (Nutzer "dev")
 cd frontend && pnpm dev                        # Web-App mit Hot Reload, Proxy auf den Testserver
-# MCP App testen: http://localhost:5173/dev/app-host.html?key=<session key>
+# MCP App testen: http://localhost:5173/dev/app-host.html?key=<session key>[&tool=open_phantom_browser]
 ```
 
 Der Testserver ist nur für Tests und Frontend-Entwicklung; betrieben wird nur auf Modal.

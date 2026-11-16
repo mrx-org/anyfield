@@ -1,4 +1,4 @@
-// Dev only (`pnpm dev`, then /dev/app-host.html?key=<session key>): plays the chat
+// Dev only (`pnpm dev`, then /dev/app-host.html?key=<session key>[&tool=open_phantom_browser]): plays the chat
 // host for the MCP App, the way claude.ai does. It calls `open_fov_planner`,
 // loads the app's resource into a sandboxed iframe and forwards its tool calls.
 import { AppBridge, PostMessageTransport } from "@modelcontextprotocol/ext-apps/app-bridge";
@@ -7,13 +7,15 @@ import { StreamableHTTPClientTransport } from "@modelcontextprotocol/sdk/client/
 
 const status = document.getElementById("status")!;
 const iframe = document.getElementById("app") as HTMLIFrameElement;
-const key = new URLSearchParams(location.search).get("key") ?? "";
+const query = new URLSearchParams(location.search);
+const key = query.get("key") ?? "";
+const toolName = query.get("tool") ?? "open_fov_planner";
 
 const client = new Client({ name: "anyfield-test-host", version: "0.0.0" });
 await client.connect(new StreamableHTTPClientTransport(new URL("/mcp", location.origin)));
 
 const tools = await client.listTools();
-const uri = (tools.tools.find((t) => t.name === "open_fov_planner")?._meta as { ui?: { resourceUri?: string } })?.ui
+const uri = (tools.tools.find((t) => t.name === toolName)?._meta as { ui?: { resourceUri?: string } })?.ui
   ?.resourceUri;
 const resource = await client.readResource({ uri: uri! });
 const html = (resource.contents[0] as { text: string }).text;
@@ -26,7 +28,7 @@ const args = { session_key: key };
 bridge.oninitialized = async () => {
   status.textContent = "App verbunden";
   await bridge.sendToolInput({ arguments: args });
-  const result = await client.callTool({ name: "open_fov_planner", arguments: args });
+  const result = await client.callTool({ name: toolName, arguments: args });
   await bridge.sendToolResult(result as Parameters<typeof bridge.sendToolResult>[0]);
 };
 iframe.srcdoc = html;
