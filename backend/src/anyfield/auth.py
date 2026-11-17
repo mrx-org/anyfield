@@ -1,8 +1,14 @@
-"""Login: GitHub OAuth, but only where it is needed.
+"""Login: through the MRX gateway, but only where it is needed.
 
-Managing sessions (list, create, rename, delete) needs a GitHub login. Every
-other tool needs only the session key, passed as a tool argument: whoever knows
-it may use the session, so it can be shared.
+The gateway is the authorization server (GitHub login); anyfield has no OAuth
+app of its own. Its tokens carry anyfield's `/mcp` as audience, and anyfield
+checks them by introspection at the gateway with its client credentials (see
+`mcp-gateway/docs/security.md`, "Other resource servers"). The same
+credentials exchange a user's token for a gateway token (`gateway.py`).
+
+Managing sessions (list, create, rename, delete) needs a login. Every other
+tool needs only the session key, passed as a tool argument: whoever knows it
+may use the session, so it can be shared.
 
 Everything runs on the one endpoint `/mcp`. A request without a token passes,
 unless it calls a tool in `LOGIN_TOOLS`: that one gets the 401 that makes an
@@ -16,24 +22,21 @@ import os
 from typing import Any
 
 import anyio
-from cryptography.fernet import Fernet
 from fastmcp.exceptions import ToolError
-from fastmcp.server.auth import AuthProvider
-from fastmcp.server.auth.jwt_issuer import derive_jwt_key
+from fastmcp.server.auth import AuthProvider, RemoteAuthProvider
 from fastmcp.server.auth.middleware import RequireAuthMiddleware
-from fastmcp.server.auth.providers.github import GitHubProvider
+from fastmcp.server.auth.providers.introspection import IntrospectionTokenVerifier
 from fastmcp.server.dependencies import get_access_token
-from key_value.aio._utils.managed_entry import ManagedEntry
-from key_value.aio.protocols import AsyncKeyValue
-from key_value.aio.stores.base import BaseStore
-from key_value.aio.wrappers.encryption import FernetEncryptionWrapper
-from pydantic import BaseModel
+from pydantic import AnyHttpUrl, BaseModel
 from starlette.routing import Route
 from starlette.types import ASGIApp, Message, Receive, Scope, Send
 
+# anyfield's client at the gateway
+CLIENT_ID = "anyfield"
+
 LOGIN_TOOLS = frozenset({"list_sessions", "create_session", "rename_session", "delete_session"})
 
-# Enough to read the caller's GitHub user id
+# What the gateway grants: enough to read the caller's GitHub user id
 SCOPES = ["read:user"]
 
 
@@ -54,51 +57,28 @@ def current_user() -> User | None:
 def require_user() -> User:
     user = current_user()
     if user is None:
-        raise ToolError("Login required: this tool needs a GitHub login (OAuth).")
+        raise ToolError("Login required: this tool needs a GitHub login (OAuth, through the MRX gateway).")
     return user
 
 
-def github_auth(base_url: str, client_storage: AsyncKeyValue | None = None) -> GitHubProvider:
-    """Raises `KeyError` if the OAuth app's secrets are not set."""
-    client_secret = os.environ["GITHUB_OAUTH_CLIENT_SECRET"]
-    return GitHubProvider(
-        client_id=os.environ["GITHUB_OAUTH_CLIENT_ID"],
+def gateway_auth(base_url: str, gateway_url: str, client_secret: str) -> RemoteAuthProvider:
+    """Tokens from the gateway at `gateway_url`, checked there by introspection.
+    `client_secret` is anyfield's at the gateway (`ANYFIELD_CLIENT_SECRET`)."""
+    gateway_url = gateway_url.rstrip("/")
+    verifier = IntrospectionTokenVerifier(
+        introspection_url=f"{gateway_url}/introspect",
+        client_id=CLIENT_ID,
         client_secret=client_secret,
-        base_url=base_url,
         required_scopes=SCOPES,
-        client_storage=client_storage,
-        # Verifying a token costs GitHub API calls; without a cache on every request
+        # An introspection reaches GitHub through the gateway; without a cache on every request
         cache_ttl_seconds=300,
     )
-
-
-class DictKeyValue(BaseStore):
-    """fastmcp's OAuth state (client registrations, codes, tokens) in a Modal Dict,
-    so that every container sees it. Same idea as `auth/oauth_store.py` in the
-    mcp-gateway. Expired entries are dropped on read by `BaseStore`."""
-
-    def __init__(self, dict_) -> None:
-        super().__init__(stable_api=True)
-        self.dict = dict_
-
-    async def _get_managed_entry(self, *, key: str, collection: str) -> ManagedEntry | None:
-        value = await self.dict.get.aio(f"{collection}:{key}")
-        return None if value is None else self._serialization_adapter.load_json(json_str=value)
-
-    async def _put_managed_entry(self, *, key: str, collection: str, managed_entry: ManagedEntry) -> None:
-        value = self._serialization_adapter.dump_json(entry=managed_entry, key=key, collection=collection)
-        await self.dict.put.aio(f"{collection}:{key}", value)
-
-    async def _delete_managed_entry(self, *, key: str, collection: str) -> bool:
-        return await self.dict.pop.aio(f"{collection}:{key}", None) is not None
-
-
-def encrypted(store: AsyncKeyValue) -> AsyncKeyValue:
-    """`store`, encrypted with a key derived from the OAuth client secret."""
-    key = derive_jwt_key(
-        high_entropy_material=os.environ["GITHUB_OAUTH_CLIENT_SECRET"], salt="anyfield-oauth-storage"
+    return RemoteAuthProvider(
+        token_verifier=verifier,
+        authorization_servers=[AnyHttpUrl(gateway_url)],
+        base_url=base_url,
+        resource_name="anyfield",
     )
-    return FernetEncryptionWrapper(key_value=store, fernet=Fernet(key=key), raise_on_decryption_error=False)
 
 
 class LoginOnDemand:
@@ -175,13 +155,12 @@ def _calls_login_tool(body: bytes) -> bool:
 
 
 __all__ = [
+    "CLIENT_ID",
     "LOGIN_TOOLS",
     "AuthProvider",
-    "DictKeyValue",
     "User",
     "current_user",
-    "encrypted",
-    "github_auth",
+    "gateway_auth",
     "make_login_on_demand",
     "require_user",
 ]

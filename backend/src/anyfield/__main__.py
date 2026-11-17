@@ -1,8 +1,9 @@
 """Run the server in memory, without Modal: `uv run python -m anyfield`.
 
 For tests and frontend development only (production runs on Modal). Without
-GITHUB_OAUTH_CLIENT_ID there is no login; session management then acts as the
-fixed user `dev` (set ANYFIELD_DEV_USER to change it).
+MRX_GATEWAY_URL and ANYFIELD_CLIENT_SECRET (a local gateway that knows this
+server as `ANYFIELD_RESOURCE`) there is no login; session management then acts
+as the fixed user `dev` (set ANYFIELD_DEV_USER to change it).
 """
 
 from __future__ import annotations
@@ -28,10 +29,10 @@ def main() -> None:
     args = parser.parse_args()
     base_url = f"http://127.0.0.1:{args.port}"
     auth = None
-    if "GITHUB_OAUTH_CLIENT_ID" in os.environ:
-        from .auth import github_auth
+    if "MRX_GATEWAY_URL" in os.environ and "ANYFIELD_CLIENT_SECRET" in os.environ:
+        from .auth import gateway_auth
 
-        auth = github_auth(base_url)
+        auth = gateway_auth(base_url, os.environ["MRX_GATEWAY_URL"], os.environ["ANYFIELD_CLIENT_SECRET"])
     else:
         os.environ.setdefault("ANYFIELD_DEV_USER", "dev")
     library = local_library(Path(tempfile.gettempdir()) / "anyfield-phantoms")

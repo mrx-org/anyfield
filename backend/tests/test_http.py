@@ -74,18 +74,33 @@ def test_web_routes(http):
     assert http.get("/s/abc").status_code == 200
 
 
-def test_github_provider_wiring(monkeypatch):
-    """The real provider: OAuth metadata exists and the challenge points to it."""
-    from anyfield.auth import github_auth
+def test_gateway_auth_wiring():
+    """The real provider: the resource metadata names the gateway as the login,
+    the challenge points to it, and a token is checked at the gateway."""
+    from anyfield.auth import gateway_auth
 
-    monkeypatch.setenv("GITHUB_OAUTH_CLIENT_ID", "id")
-    monkeypatch.setenv("GITHUB_OAUTH_CLIENT_SECRET", "secret")
-    mcp = build(MemoryStore(), "https://testserver", auth=github_auth("https://testserver"))
+    auth = gateway_auth("https://testserver", "https://gateway.test", "secret")
+    seen = []
+
+    async def introspect(token):
+        seen.append(token)
+        return await StaticTokenVerifier(
+            {TOKEN: {"client_id": "c", "scopes": ["read:user"], "sub": "1", "login": "alice"}}
+        ).verify_token(token)
+
+    auth.token_verifier.verify_token = introspect
+    assert auth.token_verifier.introspection_url == "https://gateway.test/introspect"
+    mcp = build(MemoryStore(), "https://testserver", auth=auth)
     with TestClient(http_app(mcp), base_url="https://testserver") as c:
         meta = c.get("/.well-known/oauth-protected-resource/mcp").json()
         assert meta["resource"] == "https://testserver/mcp"
-        assert c.get("/.well-known/oauth-authorization-server").status_code == 200
+        assert [s.rstrip("/") for s in meta["authorization_servers"]] == ["https://gateway.test"]
+        # No authorization server of its own any more
+        assert c.get("/.well-known/oauth-authorization-server").status_code == 404
         r, _ = call(c, "create_session")
         assert r.status_code == 401 and "resource_metadata" in r.headers["www-authenticate"]
         r, _ = rpc(c, "tools/list")
         assert r.status_code == 200
+        r, msg = call(c, "list_sessions", token=TOKEN)
+        assert r.status_code == 200 and not msg["result"].get("isError")
+        assert seen == [TOKEN]

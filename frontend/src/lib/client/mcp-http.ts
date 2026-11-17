@@ -8,7 +8,9 @@ import type {
 } from "@modelcontextprotocol/sdk/shared/auth.js";
 import { type Transport, unwrapResult } from "./transport";
 
-const STORE_PREFIX = "anyfield.oauth.";
+// The login runs at the MRX gateway (`/mcp` names it as authorization server).
+// "v2": clients and tokens of anyfield's former own OAuth server are not valid there.
+const STORE_PREFIX = "anyfield.oauth.v2.";
 const RETURN_PATH = `${STORE_PREFIX}returnPath`;
 
 /** Thrown when a tool needed a login and the page is now on its way to GitHub. */
@@ -22,7 +24,8 @@ export class LoginRedirect extends Error {
 /**
  * Web app: MCP over HTTP to `/mcp`. Session tools go out without a token.
  * The first call of a login tool gets a 401; the SDK then runs the OAuth flow
- * (dynamic client registration, PKCE) and the page goes to GitHub and back.
+ * at the MRX gateway (dynamic client registration, PKCE) and the page goes to
+ * the gateway, GitHub and back.
  */
 export class McpHttpTransport implements Transport {
   private client: Client | null = null;

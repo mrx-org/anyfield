@@ -10,7 +10,7 @@ Produktiv: `https://mrx-org--anyfield-web.modal.run` (MCP-Endpunkt `/mcp`).
 
 | Was | Wie |
 | -- | -- |
-| Sessions auflisten, anlegen, umbenennen, löschen | GitHub-Login (OAuth). Der Server verlangt ihn erst, wenn eines dieser Tools aufgerufen wird. |
+| Sessions auflisten, anlegen, umbenennen, löschen | GitHub-Login (OAuth) über das MRX-Gateway. Der Server verlangt ihn erst, wenn eines dieser Tools aufgerufen wird. |
 | Alle anderen Tools | Nur der Session-Key als Tool-Parameter `session_key`. Wer ihn kennt, darf die Session lesen und ändern; er lässt sich teilen. |
 
 Web-App: `/` (eigene Sessions), `/s/{key}` (eine Session).
@@ -38,7 +38,8 @@ Anzeige-Karten berechnet (PD, T1, T2, T2′, ADC, dB0, B1±; dichtegewichtete Mi
 ```
 backend/   Python (uv), FastMCP, Modal
   src/anyfield/server.py     Tools, Routen
-  src/anyfield/auth.py       GitHub-OAuth nur für Session-Verwaltung
+  src/anyfield/auth.py       Login über das Gateway, nur für Session-Verwaltung
+  src/anyfield/gateway.py    Gateway-Tools im Namen des Nutzers (Token Exchange) oder als `visitor`
   src/anyfield/store.py      Modal Dict + Volume (Dict-Einträge verfallen nach 7 Tagen)
   src/anyfield/phantoms.py   BIfTI-Katalog, Anzeige-Karten (PhantomLibrary)
   src/anyfield/phantom_tools.py  Phantom-Tool
@@ -70,8 +71,7 @@ Der Testserver ist nur für Tests und Frontend-Entwicklung; betrieben wird nur a
 Jeder Push auf `mcp-redesign` deployt nach Tests per GitHub Actions auf Modal
 (Workspace mrx-org). Einmalig einzurichten:
 
-1. GitHub-OAuth-App in der mrx-org anlegen, Callback-URL
-   `https://mrx-org--anyfield-web.modal.run/auth/callback`.
-2. Modal-Secret im Workspace mrx-org:
-   `modal secret create gh_oauth GITHUB_OAUTH_CLIENT_ID=… GITHUB_OAUTH_CLIENT_SECRET=…`
-3. Modal-Token für mrx-org als Repository-Secrets `MODAL_TOKEN_ID` und `MODAL_TOKEN_SECRET`.
+1. Modal-Secret `anyfield-gateway` im Workspace mrx-org (`ANYFIELD_CLIENT_SECRET`,
+   `MRX_VISITOR_KEY`). Dasselbe Secret nutzt das Gateway; angelegt wird es dort
+   (README von `mrx-org/mcp-gateway`).
+2. Modal-Token für mrx-org als Repository-Secrets `MODAL_TOKEN_ID` und `MODAL_TOKEN_SECRET`.
