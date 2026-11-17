@@ -1,19 +1,28 @@
 @import "tailwindcss";
+@plugin "@tailwindcss/forms";
 
-@theme {
-  --color-bg: #0f1115;
-  --color-panel: #171a21;
-  --color-border: #2a2f3a;
-  --color-text: #e6e8ee;
-  --color-muted: #8b93a7;
-  --color-accent: #f5a524;
+/* Skeleton: design system (core + Svelte components) and the active theme.
+   The theme is set with data-theme on <html>; dark mode with the "dark" class. */
+@import "@skeletonlabs/skeleton";
+@import "@skeletonlabs/skeleton-svelte";
+@import "@skeletonlabs/skeleton/themes/cerberus";
+
+@custom-variant dark (&:where(.dark, .dark *));
+
+/* anyfield's own tokens, mapped onto the Skeleton theme (light/dark pairings),
+   so a theme change restyles everything. */
+@theme inline {
+  --color-bg: var(--color-surface-50-950);
+  --color-panel: var(--color-surface-100-900);
+  --color-border: var(--color-surface-200-800);
+  --color-text: var(--color-surface-950-50);
+  --color-muted: var(--color-surface-600-400);
+  --color-accent: var(--color-primary-500);
 }
 
 html,
 body {
   background: var(--color-bg);
-  color: var(--color-text);
-  font-family: ui-sans-serif, system-ui, sans-serif;
   margin: 0;
   height: 100%;
 }

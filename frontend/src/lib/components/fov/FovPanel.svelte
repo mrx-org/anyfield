@@ -1,5 +1,6 @@
 <script lang="ts">
   // Numeric FOV and matrix controls. Emits changes; the Selection applies them.
+  import { Slider } from "@skeletonlabs/skeleton-svelte";
   import type { Fov, Vec3 } from "../../types";
 
   let {
@@ -16,9 +17,8 @@
   ];
   const axes = ["x", "y", "z"] as const;
 
-  function set(field: keyof Fov, axis: number, raw: string) {
-    const v = Number(raw);
-    if (!Number.isFinite(v)) return;
+  function set(field: keyof Fov, axis: number, v: number) {
+    if (!Number.isFinite(v) || v === fov[field][axis]) return;
     const next = [...fov[field]] as Vec3;
     next[axis] = v;
     onfov({ [field]: next });
@@ -37,37 +37,44 @@
 
 <div class="flex flex-col gap-4 text-sm">
   {#each groups as g (g.field)}
-    <fieldset class="flex flex-col gap-1.5">
-      <legend class="mb-1 text-xs font-semibold uppercase tracking-wide text-muted">{g.label} ({g.unit})</legend>
+    <fieldset class="fieldset flex flex-col gap-2">
+      <legend class="legend mb-1 text-xs font-semibold uppercase tracking-wide text-muted">{g.label} ({g.unit})</legend>
       {#each axes as axis, i (axis)}
-        <label class="grid grid-cols-[1rem_1fr_4.5rem] items-center gap-2">
+        <div class="grid grid-cols-[1rem_1fr_4.5rem] items-center gap-2">
           <span class="text-muted">{axis}</span>
-          <input
-            type="range"
+          <Slider
             min={g.min}
             max={g.max}
             step={g.step}
-            value={fov[g.field][i]}
-            oninput={(e) => set(g.field, i, e.currentTarget.value)}
-            class="accent-accent"
-            aria-label="{g.label} {axis}"
-          />
+            value={[fov[g.field][i]]}
+            onValueChange={(d) => set(g.field, i, d.value[0])}
+            aria-label={[`${g.label} ${axis}`]}
+          >
+            <Slider.Control>
+              <Slider.Track>
+                <Slider.Range class="bg-primary-500" />
+              </Slider.Track>
+              <Slider.Thumb index={0} class="ring-primary-500">
+                <Slider.HiddenInput />
+              </Slider.Thumb>
+            </Slider.Control>
+          </Slider>
           <input
             type="number"
             min={g.min}
             max={g.max}
             step={g.step}
             value={Math.round(fov[g.field][i] * 10) / 10}
-            onchange={(e) => set(g.field, i, e.currentTarget.value)}
-            class="w-full rounded border border-border bg-bg px-1.5 py-0.5 text-right"
+            onchange={(e) => set(g.field, i, Number(e.currentTarget.value))}
+            class="input px-1.5 py-0.5 text-right"
             aria-label="{g.label} {axis} Wert"
           />
-        </label>
+        </div>
       {/each}
     </fieldset>
   {/each}
-  <fieldset class="flex flex-col gap-1.5">
-    <legend class="mb-1 text-xs font-semibold uppercase tracking-wide text-muted">Matrix</legend>
+  <fieldset class="fieldset flex flex-col gap-2">
+    <legend class="legend mb-1 text-xs font-semibold uppercase tracking-wide text-muted">Matrix</legend>
     <div class="grid grid-cols-3 gap-2">
       {#each axes as axis, i (axis)}
         <label class="flex items-center gap-1">
@@ -79,7 +86,7 @@
             step="1"
             value={matrix[i]}
             onchange={(e) => setMatrix(i, e.currentTarget.value)}
-            class="w-full rounded border border-border bg-bg px-1.5 py-0.5 text-right"
+            class="input px-1.5 py-0.5 text-right"
             aria-label="Matrix {axis}"
           />
         </label>

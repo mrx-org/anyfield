@@ -10,7 +10,10 @@
     "test": "vitest run"
   },
   "devDependencies": {
+    "@skeletonlabs/skeleton": "^5.0.4",
+    "@skeletonlabs/skeleton-svelte": "^5.0.4",
     "@sveltejs/vite-plugin-svelte": "^7.3.1",
+    "@tailwindcss/forms": "^0.5.11",
     "@tailwindcss/vite": "^4.3.5",
     "@tsconfig/svelte": "^5.0.9",
     "@types/node": "^22.20.5",

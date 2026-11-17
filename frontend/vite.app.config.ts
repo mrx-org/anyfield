@@ -9,7 +9,7 @@ import { viteSingleFile } from "vite-plugin-singlefile";
 const app = process.env.APP ?? "fov";
 
 export default defineConfig({
-  plugins: [svelte(), tailwindcss(), viteSingleFile()],
+  plugins: [tailwindcss(), svelte(), viteSingleFile()],
   build: {
     outDir: "dist",
     emptyOutDir: false,
