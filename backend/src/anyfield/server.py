@@ -1,11 +1,13 @@
-"""The anyfield MCP server: session management (login) and session tools
-(session key as argument). Browser, MCP App and AI all use these same tools."""
+"""The anyfield MCP server: small UI tools (phantom, FOV planner), optionally
+bound to a session whose state is a small JSON. Browser, MCP App and AI all use
+the same tools. Session management needs a login, the rest a session key."""
 
 from __future__ import annotations
 
 import asyncio
 import time
 from collections import defaultdict
+from collections.abc import Callable
 from pathlib import Path
 from typing import Annotated, Any
 from urllib.parse import urlsplit
@@ -13,7 +15,7 @@ from urllib.parse import urlsplit
 from fastmcp import FastMCP
 from fastmcp.apps.config import AppConfig, ResourceCSP
 from fastmcp.exceptions import ToolError
-from pydantic import Field
+from pydantic import Field, ValidationError
 from starlette.middleware import Middleware
 from starlette.middleware.cors import CORSMiddleware
 from starlette.requests import Request
@@ -24,17 +26,24 @@ from starlette.staticfiles import StaticFiles
 from . import fov as fov_ops
 from . import phantom_tools
 from .auth import AuthProvider, make_login_on_demand, require_user
-from .gateway import GatewayClient
-from .models import Session, Vec3, new_key
-from .phantoms import Catalog, PhantomLibrary
+from .gateway import GATEWAY_URL, GatewayClient
+from .models import Session, State, Vec3, merge_patch, new_key
+from .phantoms import PROPERTY_KEYS, Catalog, PhantomLibrary
 from .store import SessionStore
 
 DATA_DIR = Path(__file__).parent / "data"
 PHANTOM_FILE = DATA_DIR / "phantom_pd_2mm.nii.gz"
 FOV_APP_URI = "ui://anyfield/fov-planner.html"
 MAX_SESSIONS_PER_USER = 200
+MAX_MATRIX = 1024
 
 SessionKey = Annotated[str, Field(description="Key of the session (from create_session or a shared link)")]
+OptionalSessionKey = Annotated[
+    str | None,
+    Field(
+        description="Optional session key: store the choice in that session. Without one it goes back to the chat"
+    ),
+]
 Vec3Arg = Annotated[list[float], Field(min_length=3, max_length=3)]
 ExpectedRev = Annotated[
     int | None, Field(description="Optional: fail instead of overwriting if the session changed since")
@@ -52,13 +61,17 @@ def build(
     gateway: GatewayClient | None = None,
 ) -> FastMCP:
     base_url = base_url.rstrip("/")
+    catalog = catalog or Catalog(gateway.call_tool if gateway else None)
     mcp = FastMCP(
         "anyfield",
         instructions=(
-            "anyfield plans virtual MRI scans. Work happens in sessions, identified by a session key. "
-            "Managing sessions (list/create/rename/delete) needs a login; all other tools only "
-            "need the session key. The user and you share the session: changes you make appear in "
-            "the user's browser within a second, and vice versa. Coordinates are world RAS in mm."
+            "anyfield is the user interface for planning virtual MRI scans: small tools to choose a "
+            "phantom, view it and plan the field of view (FOV). Every UI tool works without a session "
+            "(the user's choice comes back to the chat) or with a `session_key`: then the choice is "
+            "stored in the session's state, a small JSON (`get_state`, `patch_state`), and the user "
+            "sees changes in the browser within a second, and vice versa. Managing sessions "
+            "(list/create/rename/delete) needs a login; all other tools only need the session key. "
+            "Coordinates are world RAS in mm."
         ),
         auth=auth,
     )
@@ -69,11 +82,8 @@ def build(
             "key": s.key,
             "name": s.name,
             "rev": s.rev,
-            "owner_login": s.owner_login,
             "updated_at": s.updated_at,
-            "fov": s.fov.model_dump(),
-            "phantom": (phantom := phantom_tools.public(s.phantom, base_url)),
-            "phantom_url": phantom["url"],
+            "state": s.state.model_dump(),
             "web_url": f"{base_url}/s/{s.key}",
         }
 
@@ -88,6 +98,35 @@ def build(
         session.updated_at = time.time()
         await store.put(session)
         return session
+
+    async def checked(old: State, new: State) -> State:
+        """Validate a new state against the old one: FOV limits, known phantom and property."""
+        try:
+            fov = fov_ops.set_fov(new.fov, new.fov.center_mm, new.fov.rotation_deg, new.fov.size_mm)
+        except ValueError as e:
+            raise ToolError(str(e)) from e
+        if any(not (1 <= m <= MAX_MATRIX) for m in new.matrix):
+            raise ToolError(f"matrix values must be in [1, {MAX_MATRIX}]")
+        if new.phantom is not None and new.phantom != old.phantom:
+            await phantom_tools.check(catalog, new.phantom.collection, new.phantom.name)
+        if new.view.property not in PROPERTY_KEYS:
+            raise ToolError(f"Unknown property {new.view.property!r}. Known: {', '.join(PROPERTY_KEYS)}")
+        return new.model_copy(update={"fov": fov})
+
+    async def change(
+        session_key: str, fn: Callable[[State], State], expected_rev: int | None = None
+    ) -> Session:
+        """Apply `fn` to a session's state (validated), atomically per session."""
+        async with locks[session_key]:
+            session = await load(session_key)
+            if expected_rev is not None and expected_rev != session.rev:
+                raise ToolError(f"Conflict: session is at rev {session.rev}, not {expected_rev}. Re-read it.")
+            try:
+                new = fn(session.state.model_copy(deep=True))
+            except (ValueError, ValidationError) as e:
+                raise ToolError(str(e)) from e
+            session.state = await checked(session.state, new)
+            return await save(session)
 
     async def owned(key: str) -> Session:
         user = require_user()
@@ -114,9 +153,7 @@ def build(
         keys = await store.owned_by(user.id)
         if len(keys) >= MAX_SESSIONS_PER_USER:
             raise ToolError(f"At most {MAX_SESSIONS_PER_USER} sessions per user. Delete some first.")
-        session = Session(
-            key=new_key(), name=name.strip() or "New session", owner=user.id, owner_login=user.login
-        )
+        session = Session(key=new_key(), name=name.strip() or "New session", owner=user.id)
         await save(session)
         await store.set_owned_by(user.id, [*keys, session.key])
         return public(session)
@@ -139,33 +176,51 @@ def build(
             await store.set_owned_by(session.owner, [k for k in keys if k != session.key])
         return f"Deleted session '{session.name}'."
 
-    # --- Session tools (session key only) ----------------------------------
+    # --- Session state (session key only) ------------------------------------
 
     @mcp.tool(annotations={"readOnlyHint": True})
-    async def get_session(
+    async def get_state(
         session_key: SessionKey,
         known_rev: Annotated[
             int | None, Field(description="Last revision the caller has; if unchanged, only {rev, unchanged}")
         ] = None,
     ) -> dict[str, Any]:
-        """Current state of a session: name, revision, FOV, phantom URL and the
+        """A session: name, revision, its state (phantom, view, fov, matrix) and the
         link to open it in the browser."""
         session = await load(session_key)
         if known_rev is not None and known_rev == session.rev:
             return {"rev": session.rev, "unchanged": True}
         return public(session)
 
-    async def change_fov(session_key: str, change, expected_rev: int | None) -> dict[str, Any]:
-        async with locks[session_key]:
-            session = await load(session_key)
-            if expected_rev is not None and expected_rev != session.rev:
-                raise ToolError(f"Conflict: session is at rev {session.rev}, not {expected_rev}. Re-read it.")
-            try:
-                session.fov = change(session.fov)
-            except ValueError as e:
-                raise ToolError(str(e)) from e
-            session = await save(session)
-        return {"rev": session.rev, "fov": session.fov.model_dump(), "summary": fov_ops.describe(session.fov)}
+    @mcp.tool
+    async def patch_state(
+        session_key: SessionKey,
+        patch: Annotated[
+            dict[str, Any],
+            Field(
+                description="JSON Merge Patch (RFC 7386) on the state, e.g. "
+                '{"view": {"property": "T1"}, "matrix": [256, 256, 1]}; '
+                '{"phantom": null} selects the built-in default phantom'
+            ),
+        ],
+        expected_rev: ExpectedRev = None,
+    ) -> dict[str, Any]:
+        """Change several parts of a session's state at once. Returns the session."""
+        session = await change(
+            session_key,
+            lambda st: State.model_validate(merge_patch(st.model_dump(), patch)),
+            expected_rev,
+        )
+        return public(session)
+
+    # --- FOV planner ---------------------------------------------------------
+
+    async def change_fov(session_key: str, fn, expected_rev: int | None) -> dict[str, Any]:
+        session = await change(
+            session_key, lambda st: st.model_copy(update={"fov": fn(st.fov)}), expected_rev
+        )
+        fov = session.state.fov
+        return {"rev": session.rev, "fov": fov.model_dump(), "summary": fov_ops.describe(fov)}
 
     @mcp.tool
     async def set_fov(
@@ -204,13 +259,18 @@ def build(
         """Rotate the field of view: adds to its rotation angles."""
         return await change_fov(session_key, lambda f: fov_ops.rotate_fov(f, _v(delta_deg)), expected_rev)
 
-    # --- MCP App ------------------------------------------------------------
-
     @mcp.tool(app=AppConfig(resource_uri=FOV_APP_URI), annotations={"readOnlyHint": True})
-    async def open_fov_planner(session_key: SessionKey) -> dict[str, Any]:
-        """Show the interactive FOV planner of a session (phantom with the FOV box).
-        In clients without MCP Apps this returns the session state and its web link."""
-        return public(await load(session_key))
+    async def open_fov_planner(session_key: OptionalSessionKey = None) -> dict[str, Any]:
+        """Show the interactive FOV planner (phantom with the FOV box and the scan
+        matrix). With a session it edits the session's FOV; without one the user
+        plans locally and sends the result back to the chat. In clients without
+        MCP Apps this returns the state and the web link."""
+        return await opened(session_key)
+
+    async def opened(session_key: str | None) -> dict[str, Any]:
+        if session_key:
+            return public(await load(session_key))
+        return {"key": None, "state": State().model_dump()}
 
     app_html(mcp, FOV_APP_URI, "FOV planner", "fov-app.html", base_url, static_dir)
 
@@ -218,9 +278,9 @@ def build(
 
     phantom_tools.register(
         mcp,
-        phantom_tools.Ctx(base_url=base_url, load=load, save=save, public=public, locks=locks),
+        phantom_tools.Ctx(base_url=base_url, change=change, public=public, opened=opened),
         library=library,
-        catalog=catalog or Catalog(gateway.call_tool if gateway else None),
+        catalog=catalog,
         static_dir=static_dir,
     )
 
@@ -261,7 +321,9 @@ def app_html(mcp: FastMCP, uri: str, name: str, file: str, base_url: str, static
     @mcp.resource(
         uri,
         name=name,
-        app=AppConfig(csp=ResourceCSP(connect_domains=[base_url], resource_domains=[base_url])),
+        app=AppConfig(
+            csp=ResourceCSP(connect_domains=[base_url, GATEWAY_URL], resource_domains=[base_url, GATEWAY_URL])
+        ),
     )
     def html() -> str:
         path = static_dir / file if static_dir else None

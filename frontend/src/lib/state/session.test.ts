@@ -1,6 +1,8 @@
 import { describe, expect, it } from "vitest";
 import { AnyfieldClient } from "../client/anyfield";
 import { MockTransport } from "../client/mock";
+import { LocalSelection } from "./local.svelte";
+import { mergePatch } from "./patch";
 import { SessionStore } from "./session.svelte";
 
 const setup = () => {
@@ -22,29 +24,43 @@ describe("SessionStore", () => {
     await store.refresh();
     await t.callTool("move_fov", { session_key: "mock-key", delta_mm: [0, 0, 10] }); // e.g. the AI
     await store.refresh();
-    expect(store.fov?.center_mm).toEqual([0, 0, 10]);
+    expect(store.state?.fov.center_mm).toEqual([0, 0, 10]);
   });
 
   it("applies edits at once and throttles commits", async () => {
     const { t, store } = setup();
     await store.refresh();
-    for (let i = 1; i <= 20; i++) store.editFov({ center_mm: [i, 0, 0] });
-    expect(store.fov?.center_mm).toEqual([20, 0, 0]); // optimistic
+    for (let i = 1; i <= 20; i++) store.patch({ fov: { center_mm: [i, 0, 0] } });
+    expect(store.state?.fov.center_mm).toEqual([20, 0, 0]); // optimistic
+    expect(store.state?.fov.size_mm).toEqual([200, 200, 100]); // merged, not replaced
     await store.settled();
-    const commits = t.calls.filter((c) => c.name === "set_fov");
+    const commits = t.calls.filter((c) => c.name === "patch_state");
     expect(commits.length).toBeLessThan(5);
-    expect(commits.at(-1)?.args.center_mm).toEqual([20, 0, 0]);
-    expect(store.server?.fov.center_mm).toEqual([20, 0, 0]);
-    expect(store.pendingFov).toBeNull();
+    expect((commits.at(-1)?.args.patch as { fov: { center_mm: number[] } }).fov.center_mm).toEqual([20, 0, 0]);
+    expect(store.server?.state.fov.center_mm).toEqual([20, 0, 0]);
+    expect(store.pending).toBeNull();
   });
 
   it("pending edits win over a stale poll", async () => {
     const { store } = setup();
     await store.refresh();
-    store.editFov({ size_mm: [50, 50, 50] });
+    store.patch({ matrix: [64, 64, 1] });
     await store.refresh();
-    expect(store.fov?.size_mm).toEqual([50, 50, 50]);
+    expect(store.state?.matrix).toEqual([64, 64, 1]);
     await store.settled();
+  });
+
+  it("selects a phantom and goes back to the default", async () => {
+    const { store } = setup();
+    await store.refresh();
+    store.patch({ phantom: { collection: "demo-001", name: "shapes.json" }, view: { property: "T1" } });
+    await store.settled();
+    expect(store.server?.state.phantom?.name).toBe("shapes.json");
+    expect(store.server?.state.view.property).toBe("T1");
+    store.patch({ phantom: null });
+    expect(store.state?.phantom).toBeNull();
+    await store.settled();
+    expect(store.server?.state.phantom).toBeNull();
   });
 
   it("reports unknown keys", async () => {
@@ -54,15 +70,33 @@ describe("SessionStore", () => {
   });
 });
 
-describe("SessionStore phantoms", () => {
-  it("selects a phantom and a property", async () => {
-    const { t, store } = setup();
-    await store.refresh();
-    await store.selectPhantom("demo-001", "shapes.json");
-    expect(store.server?.phantom.collection).toBe("demo-001");
-    expect(store.selecting).toBeNull();
-    await store.setPhantomProperty("T1");
-    expect(store.server?.phantom.url).toMatch(/T1\.nii\.gz$/);
-    expect(t.calls.map((c) => c.name)).toContain("set_phantom_property");
+describe("LocalSelection", () => {
+  it("changes only locally and reports every change", () => {
+    const t = new MockTransport();
+    const seen: string[] = [];
+    const sel = new LocalSelection(new AnyfieldClient(t), undefined, (s) => seen.push(s.phantom?.name ?? "default"));
+    sel.patch({ phantom: { collection: "c", name: "p.json" } });
+    expect(sel.state.phantom?.name).toBe("p.json");
+    expect(sel.sessionKey).toBeNull();
+    expect(seen).toEqual(["p.json"]);
+    expect(t.calls).toEqual([]);
+  });
+});
+
+describe("mergePatch", () => {
+  it("follows RFC 7386", () => {
+    expect(mergePatch({ a: 1, b: { c: 2, d: 3 } }, { b: { c: null, e: 4 }, f: [1] })).toEqual({ a: 1, b: { d: 3, e: 4 }, f: [1] });
+  });
+});
+
+describe("AnyfieldClient", () => {
+  it("caches phantom maps per phantom", async () => {
+    const t = new MockTransport();
+    const c = new AnyfieldClient(t);
+    const p = { collection: "c", name: "p.json" };
+    await c.getPhantomMaps(p);
+    await c.getPhantomMaps(p);
+    await c.getPhantomMaps(null);
+    expect(t.calls.filter((x) => x.name === "get_phantom_maps").length).toBe(2);
   });
 });

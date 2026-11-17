@@ -1,29 +1,35 @@
 <script lang="ts">
-  // The phantom tool: browse the BIfTI catalog, pick the session's phantom and
-  // the property it is shown with. Works standalone, as MCP App and next to
-  // the FOV planner.
+  // The phantom tool: browse the BIfTI catalog (gateway), pick a phantom and the
+  // property it is shown with. Bound to a Selection: a session or local (MCP App
+  // without session, result back to the chat).
   import { onMount } from "svelte";
-  import type { SessionStore } from "../../state/session.svelte";
+  import { MapsLoader } from "../../state/maps.svelte";
+  import type { Selection } from "../../state/selection";
   import type { PhantomCollection, PhantomTree } from "../../types";
   import PhantomTreeNode from "./PhantomTreeNode.svelte";
   import VolumePreview from "./VolumePreview.svelte";
 
-  let { store, preview = true }: { store: SessionStore; preview?: boolean } = $props();
+  let { sel, preview = true }: { sel: Selection; preview?: boolean } = $props();
 
   let collections = $state<PhantomCollection[] | null>(null);
   let trees = $state<Record<string, PhantomTree>>({});
   let openCollection = $state<string | null>(null);
   let loadError = $state<string | null>(null);
+  // svelte-ignore state_referenced_locally
+  const maps = new MapsLoader(sel.client);
 
-  const phantom = $derived(store.server?.phantom ?? null);
-  const shown = $derived(phantom?.properties.find((p) => p.key === phantom.property) ?? null);
-  const busyName = $derived(store.selecting?.name ?? (phantom?.status === "loading" ? phantom.name : null));
+  const phantom = $derived(sel.state?.phantom ?? null);
+  const property = $derived(sel.state?.view.property ?? "density");
+  const shown = $derived(maps.property(property));
+
+  $effect(() => {
+    if (sel.state) maps.load(phantom);
+  });
 
   onMount(async () => {
     try {
-      collections = await store.client.listPhantomCollections();
-      const current = phantom?.collection;
-      if (current) await toggle(current);
+      collections = await sel.client.listPhantomCollections();
+      if (phantom) await toggle(phantom.collection);
     } catch (e) {
       loadError = e instanceof Error ? e.message : String(e);
     }
@@ -33,7 +39,7 @@
     openCollection = openCollection === collection ? null : collection;
     if (openCollection && !trees[collection]) {
       try {
-        trees[collection] = await store.client.listPhantoms(collection);
+        trees[collection] = await sel.client.listPhantoms(collection);
       } catch (e) {
         loadError = e instanceof Error ? e.message : String(e);
       }
@@ -46,20 +52,20 @@
 <div class="flex h-full flex-col gap-3 overflow-y-auto bg-panel p-3 text-sm text-text">
   <section class="flex flex-col gap-2">
     <h2 class="text-xs font-semibold uppercase tracking-wide text-muted">Phantom</h2>
-    {#if phantom}
+    {#if sel.state}
       <div class="flex items-baseline gap-2">
-        <span class="truncate font-medium" title={phantom.name}>
-          {phantom.collection ? phantom.name.replace(/\.json$/, "") : "Standard (BrainWeb subj04, 2 mm)"}
+        <span class="truncate font-medium" title={phantom?.name}>
+          {phantom ? phantom.name.replace(/\.json$/, "") : "Standard (BrainWeb subj04, 2 mm)"}
         </span>
-        {#if phantom.status === "loading"}<span class="text-xs text-accent">wird vorbereitet …</span>{/if}
+        {#if maps.loading}<span class="text-xs text-accent">wird vorbereitet …</span>{/if}
       </div>
-      {#if phantom.collection}<span class="-mt-1 text-xs text-muted">{phantom.collection}</span>{/if}
-      {#if phantom.status === "error"}<p class="text-xs text-red-400">{phantom.error}</p>{/if}
+      {#if phantom}<span class="-mt-1 text-xs text-muted">{phantom.collection}</span>{/if}
+      {#if maps.error}<p class="text-xs text-red-400">{maps.error}</p>{/if}
       <div class="flex flex-wrap gap-1">
-        {#each phantom.properties as p (p.key)}
+        {#each maps.maps?.properties ?? [] as p (p.key)}
           <button
-            class="rounded border px-2 py-0.5 text-xs {p.key === phantom.property ? 'border-accent text-accent' : 'border-border text-muted hover:text-text'}"
-            onclick={() => store.setPhantomProperty(p.key)}
+            class="rounded border px-2 py-0.5 text-xs {p.key === shown?.key ? 'border-accent text-accent' : 'border-border text-muted hover:text-text'}"
+            onclick={() => sel.patch({ view: { property: p.key } })}
             title="{p.label} ({p.unit})"
           >{p.label}</button>
         {/each}
@@ -67,9 +73,9 @@
       {#if shown?.range}
         <span class="text-xs text-muted">{shown.label}: {fmt(shown.range[0])} … {fmt(shown.range[1])} {shown.unit}</span>
       {/if}
-      {#if preview}<VolumePreview url={phantom.url} range={shown?.range ?? null} />{/if}
+      {#if preview}<VolumePreview url={maps.loading ? null : (shown?.url ?? null)} range={shown?.range ?? null} />{/if}
     {/if}
-    {#if store.error}<p class="text-xs text-red-400">{store.error}</p>{/if}
+    {#if sel.error}<p class="text-xs text-red-400">{sel.error}</p>{/if}
   </section>
 
   <section class="flex flex-col gap-1">
@@ -89,8 +95,8 @@
               <PhantomTreeNode
                 tree={trees[c.collection]}
                 selected={phantom?.collection === c.collection ? phantom.name : null}
-                busy={busyName}
-                onselect={(name) => store.selectPhantom(c.collection, name)}
+                busy={maps.loading ? (phantom?.name ?? null) : null}
+                onselect={(name) => sel.patch({ phantom: { collection: c.collection, name } })}
               />
             {:else}
               <p class="text-xs text-muted">Lade …</p>

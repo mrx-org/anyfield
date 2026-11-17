@@ -54,7 +54,7 @@ def test_management_without_token_gets_oauth_challenge(http):
 
 
 def test_invalid_token_is_rejected(http):
-    r, _ = call(http, "get_session", token="nope", session_key="x")
+    r, _ = call(http, "get_state", token="nope", session_key="x")
     assert r.status_code == 401
 
 

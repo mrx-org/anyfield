@@ -17,6 +17,7 @@
   let keyInput = $state("");
   let loggedIn = $state(transport.loggedIn);
   let copied = $state(false);
+  let showState = $state(false);
 
   const sessionKey = $derived(path.match(/^\/s\/([^/]+)/)?.[1] ?? null);
   let store = $state<SessionStore | null>(null);
@@ -93,7 +94,10 @@
     {#if store && sessionKey}
       <span class="text-muted">/</span>
       <span>{store.server?.name ?? "…"}</span>
-      <button class="ml-auto rounded border border-border px-2 py-0.5 hover:bg-bg" onclick={copyLink}>
+      <button class="ml-auto text-muted hover:text-text" onclick={() => (showState = !showState)} aria-expanded={showState}>
+        Zustand (JSON)
+      </button>
+      <button class="rounded border border-border px-2 py-0.5 hover:bg-bg" onclick={copyLink}>
         {copied ? "Kopiert" : "Link kopieren"}
       </button>
     {/if}
@@ -103,9 +107,15 @@
     <!-- Two independent tools on the same session, side by side -->
     <main class="flex min-h-0 flex-1 flex-col lg:flex-row">
       <section class="max-h-[45vh] shrink-0 border-b border-border lg:max-h-none lg:w-80 lg:border-b-0 lg:border-r" aria-label="Phantom">
-        <PhantomBrowser {store} preview={false} />
+        <PhantomBrowser sel={store} preview={false} />
       </section>
-      <section class="min-h-0 flex-1" aria-label="FOV-Planung"><FovPlanner {store} /></section>
+      <section class="min-h-0 flex-1" aria-label="FOV-Planung"><FovPlanner sel={store} /></section>
+      {#if showState}
+        <section class="max-h-[40vh] shrink-0 overflow-auto border-t border-border bg-panel p-3 lg:max-h-none lg:w-80 lg:border-l lg:border-t-0" aria-label="Zustand">
+          <p class="mb-2 text-xs text-muted">Session-Zustand, rev {store.server?.rev ?? "–"}{store.pending ? " (Änderung wird gespeichert …)" : ""}</p>
+          <pre class="whitespace-pre-wrap break-all font-mono text-xs">{JSON.stringify(store.state, null, 2)}</pre>
+        </section>
+      {/if}
     </main>
   {:else}
     <main class="mx-auto flex w-full max-w-xl flex-col gap-6 p-6">

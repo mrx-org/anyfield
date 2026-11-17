@@ -1,26 +1,31 @@
 import type { AnyfieldClient } from "../client/anyfield";
-import type { Fov, SessionState } from "../types";
+import type { Session, State, StatePatch } from "../types";
+import { applyPatch, mergePatch } from "./patch";
+import type { Selection } from "./selection";
 
 export interface SessionStoreOptions {
   /** Poll interval while the page is visible (ms). */
   pollMs?: number;
   /** Poll interval while hidden (ms). */
   hiddenPollMs?: number;
-  /** Minimum time between FOV commits while dragging (ms). */
+  /** Minimum time between commits while dragging (ms). */
   commitMs?: number;
 }
 
 /**
  * Client-side view of one session. The server owns the state; this keeps the
  * last confirmed copy, polls for changes from others (e.g. the AI), and applies
- * local edits optimistically: a pending FOV wins over poll results until the
- * server has confirmed it.
+ * local edits optimistically: pending patches win over poll results until the
+ * server has confirmed them.
  */
-export class SessionStore {
-  server = $state<SessionState | null>(null);
-  pendingFov = $state<Fov | null>(null);
+export class SessionStore implements Selection {
+  server = $state<Session | null>(null);
+  /** Patch not yet confirmed by the server (accumulated). */
+  pending = $state<StatePatch | null>(null);
   error = $state<string | null>(null);
-  readonly fov: Fov | null = $derived(this.pendingFov ?? this.server?.fov ?? null);
+  readonly state: State | null = $derived(
+    this.server ? (this.pending ? applyPatch(this.server.state, this.pending) : this.server.state) : null,
+  );
 
   private timer: ReturnType<typeof setTimeout> | null = null;
   private commitTimer: ReturnType<typeof setTimeout> | null = null;
@@ -37,16 +42,20 @@ export class SessionStore {
     this.opts = { pollMs: 500, hiddenPollMs: 5000, commitMs: 100, ...opts };
   }
 
+  get sessionKey(): string {
+    return this.key;
+  }
+
   /** Accept a newer server state (from a poll, a tool result or a commit). */
-  accept(state: SessionState): void {
-    if (this.server && state.rev < this.server.rev) return;
-    this.server = state;
+  accept(session: Session): void {
+    if (this.server && session.rev < this.server.rev) return;
+    this.server = session;
     this.error = null;
   }
 
   async refresh(): Promise<void> {
     try {
-      const r = await this.client.getSession(this.key, this.server?.rev);
+      const r = await this.client.getState(this.key, this.server?.rev);
       if (!("unchanged" in r)) this.accept(r);
       this.error = null;
     } catch (e) {
@@ -73,11 +82,12 @@ export class SessionStore {
     this.timer = null;
   }
 
-  /** Change the FOV locally right away; commit to the server throttled. */
-  editFov(change: Partial<Fov>): void {
-    const base = this.fov;
-    if (!base) return;
-    this.pendingFov = { ...base, ...change };
+  /** Change the state locally right away; commit to the server throttled. */
+  patch(patch: StatePatch): void {
+    if (!this.server) return;
+    this.pending = mergePatch(this.pending ? ($state.snapshot(this.pending) as StatePatch) : {}, patch) as StatePatch;
+    // A removed phantom must stay a `null` in the patch, not vanish from it
+    if (patch.phantom === null) this.pending = { ...this.pending, phantom: null };
     this.scheduleCommit();
   }
 
@@ -91,53 +101,27 @@ export class SessionStore {
   }
 
   private async commit(): Promise<void> {
-    const sent = this.pendingFov;
+    const sent = this.pending;
     if (!sent) return;
     this.inFlight = true;
     this.lastCommit = Date.now();
     try {
-      const r = await this.client.setFov(this.key, $state.snapshot(sent));
-      if (this.server && r.rev > this.server.rev) this.server = { ...this.server, rev: r.rev, fov: r.fov };
+      const r = await this.client.patchState(this.key, $state.snapshot(sent) as StatePatch);
+      this.accept(r);
       // Changed again while the request was out? Then keep it pending and send again.
-      if (this.pendingFov === sent) this.pendingFov = null;
-      this.error = null;
+      if (this.pending === sent) this.pending = null;
     } catch (e) {
-      console.warn("anyfield: FOV commit failed", e);
-      this.pendingFov = null; // fall back to the server's state
+      console.warn("anyfield: commit failed", e);
+      this.pending = null; // fall back to the server's state
       this.error = e instanceof Error ? e.message : String(e);
     } finally {
       this.inFlight = false;
-      if (this.pendingFov) this.scheduleCommit();
+      if (this.pending) this.scheduleCommit();
     }
-  }
-
-  /** Collection + phantom being selected by this client (preparing can take a minute). */
-  selecting = $state<{ collection: string; name: string } | null>(null);
-
-  async selectPhantom(collection: string, name: string): Promise<void> {
-    this.selecting = { collection, name };
-    await this.act(() => this.client.selectPhantom(this.key, collection, name, this.server?.phantom.property));
-    this.selecting = null;
-  }
-
-  setPhantomProperty(property: string): Promise<void> {
-    return this.act(() => this.client.setPhantomProperty(this.key, property));
-  }
-
-  /** Run a tool call, then re-read the session; an error stays visible after the refresh. */
-  private async act(fn: () => Promise<unknown>): Promise<void> {
-    let error: string | null = null;
-    try {
-      await fn();
-    } catch (e) {
-      error = e instanceof Error ? e.message : String(e);
-    }
-    await this.refresh();
-    if (error) this.error = error;
   }
 
   /** Resolves once no local edit is pending or in flight (for tests). */
   async settled(): Promise<void> {
-    while (this.pendingFov || this.inFlight || this.commitTimer) await new Promise((r) => setTimeout(r, 5));
+    while (this.pending || this.inFlight || this.commitTimer) await new Promise((r) => setTimeout(r, 5));
   }
 }

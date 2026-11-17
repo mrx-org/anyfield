@@ -1,14 +1,20 @@
-"""Session state. Small (a few KB): large data will only be referenced by hash."""
+"""Session state: a small JSON with the user's choices only, no data.
+
+Data (phantom maps, value ranges, loading state) comes from the tools that
+produce it and is never stored here. Besides `state`, a session has only
+management fields.
+"""
 
 from __future__ import annotations
 
 import secrets
 import time
-from typing import Literal
+from typing import Any
 
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, ConfigDict, Field
 
 Vec3 = tuple[float, float, float]
+Int3 = tuple[int, int, int]
 
 
 class Fov(BaseModel):
@@ -18,34 +24,60 @@ class Fov(BaseModel):
     `rotation_deg`: first about X, then about Y, then about Z (as in v3).
     """
 
+    model_config = ConfigDict(extra="forbid")
+
     center_mm: Vec3 = (0.0, 0.0, 0.0)
     rotation_deg: Vec3 = (0.0, 0.0, 0.0)
     size_mm: Vec3 = (200.0, 200.0, 100.0)
 
 
-class PhantomSel(BaseModel):
-    """The session's phantom. `collection=None` is the built-in default phantom."""
+class PhantomChoice(BaseModel):
+    """A phantom of the BIfTI registry."""
 
-    collection: str | None = None
-    name: str = "default"
-    property: str = "density"
-    status: Literal["ready", "loading", "error"] = "ready"
-    error: str | None = None
-    properties: list[dict] = Field(
-        default_factory=lambda: [{"key": "density", "label": "PD", "unit": "a.u.", "range": None}]
-    )
+    model_config = ConfigDict(extra="forbid")
+
+    collection: str
+    name: str = Field(description="Phantom file name, e.g. 'subj04-3T-1mm.json'")
+
+
+class View(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    property: str = Field(default="density", description="Shown property: density, T1, T2, ...")
+
+
+class State(BaseModel):
+    """What the user (or the AI) chose. `phantom=None` is the built-in default phantom."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    phantom: PhantomChoice | None = None
+    view: View = Field(default_factory=View)
+    fov: Fov = Field(default_factory=Fov)
+    matrix: Int3 = Field(default=(128, 128, 1), description="Resolution (x, y, z) of the planned scan")
 
 
 class Session(BaseModel):
     key: str
     name: str
-    owner: str | None = Field(default=None, description="GitHub user id of the creator")
-    owner_login: str | None = None
+    owner: str | None = Field(default=None, description="User id (WorkOS `sub`) of the creator")
     created_at: float = Field(default_factory=time.time)
     updated_at: float = Field(default_factory=time.time)
     rev: int = 0
-    fov: Fov = Field(default_factory=Fov)
-    phantom: PhantomSel = Field(default_factory=PhantomSel)
+    state: State = Field(default_factory=State)
+
+
+def merge_patch(target: Any, patch: Any) -> Any:
+    """RFC 7386 JSON Merge Patch: objects merge, `null` removes, the rest replaces."""
+    if not isinstance(patch, dict):
+        return patch
+    result = dict(target) if isinstance(target, dict) else {}
+    for k, v in patch.items():
+        if v is None:
+            result.pop(k, None)
+        else:
+            result[k] = merge_patch(result.get(k), v)
+    return result
 
 
 def new_key() -> str:

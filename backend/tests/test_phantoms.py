@@ -123,55 +123,60 @@ async def test_catalog_without_gateway():
         await Catalog(None).collections()
 
 
-async def test_select_phantom_prepares_once(client, library):
-    s = await call(client, "get_session", session_key=client.key)
-    assert s["phantom"]["collection"] is None and s["phantom_url"].endswith("/files/phantom.nii.gz")
+async def test_select_phantom_in_session(client):
+    s = await call(client, "get_state", session_key=client.key)
+    assert s["state"]["phantom"] is None
 
     r = await call(
         client, "select_phantom", session_key=client.key, collection="demo-001", phantom="shapes.json"
     )
-    assert r["status"] == "ready" and r["property"] == "density"
-    assert r["url"] == "https://anyfield.test/files/phantoms/demo-001/shapes/density.nii.gz"
-
+    assert r == {"rev": 2, "phantom": {"collection": "demo-001", "name": "shapes.json"}}
     r = await call(client, "set_phantom_property", session_key=client.key, property="dB0")
-    assert r["url"].endswith("/dB0.nii.gz")
-    with pytest.raises(ToolError, match="no 'B1minus'"):
-        await client.call_tool("set_phantom_property", {"session_key": client.key, "property": "B1minus"})
+    assert r["view"] == {"property": "dB0"}
+    s = await call(client, "get_state", session_key=client.key)
+    assert s["state"]["phantom"]["name"] == "shapes.json" and s["state"]["view"]["property"] == "dB0"
 
-    await call(client, "select_phantom", session_key=client.key, collection="demo-001", phantom="shapes.json")
+    r = await call(client, "patch_state", session_key=client.key, patch={"phantom": None})
+    assert r["state"]["phantom"] is None
+
+
+async def test_select_phantom_without_session(client):
+    r = await call(client, "select_phantom", collection="demo-001", phantom="shapes.json")
+    assert r == {"phantom": {"collection": "demo-001", "name": "shapes.json"}}
+
+
+async def test_unknown_phantom_is_rejected(client):
+    for args in [
+        {"collection": "demo-001", "phantom": "../../etc.json"},
+        {"session_key": client.key, "collection": "demo-001", "phantom": "x.json"},
+    ]:
+        with pytest.raises(ToolError, match="No phantom"):
+            await client.call_tool("select_phantom", args)
+    with pytest.raises(ToolError, match="No phantom"):
+        await client.call_tool(
+            "patch_state",
+            {"session_key": client.key, "patch": {"phantom": {"collection": "demo-001", "name": "x.json"}}},
+        )
+
+
+async def test_phantom_maps_prepared_once(client, library):
+    r = await call(client, "get_phantom_maps", collection="demo-001", phantom="shapes.json")
+    keys = [p["key"] for p in r["properties"]]
+    assert keys[0] == "density" and "dB0" in keys and "B1minus" not in keys
+    assert r["properties"][0]["url"] == "https://anyfield.test/files/phantoms/demo-001/shapes/density.nii.gz"
+    assert r["shape"] == [40, 32, 4]
+    await call(client, "get_phantom_maps", collection="demo-001", phantom="shapes.json")
     assert library.calls == ["shapes.json"]  # prepared once, then reused
 
 
-async def test_select_shows_loading_then_ready(client):
-    task = asyncio.create_task(
-        client.call_tool(
-            "select_phantom",
-            {"session_key": client.key, "collection": "demo-001", "phantom": "shapes.json", "property": "T2"},
-        )
-    )
-    await asyncio.sleep(0.02)
-    s = await call(client, "get_session", session_key=client.key)
-    assert s["phantom"]["status"] == "loading" and s["phantom_url"] is None
-    await task
-    s = await call(client, "get_session", session_key=client.key)
-    assert s["phantom"]["status"] == "ready" and s["phantom"]["property"] == "T2"
+async def test_default_phantom_maps(client):
+    r = await call(client, "get_phantom_maps")
+    assert r["phantom"] is None and r["properties"][0]["url"].endswith("/files/phantom.nii.gz")
 
 
 async def test_failed_phantom_is_reported(client):
     with pytest.raises(ToolError, match="download failed"):
-        await client.call_tool(
-            "select_phantom", {"session_key": client.key, "collection": "demo-001", "phantom": "broken.json"}
-        )
-    s = await call(client, "get_session", session_key=client.key)
-    assert s["phantom"]["status"] == "error"
-
-
-async def test_unknown_phantom_is_rejected(client):
-    with pytest.raises(ToolError, match="No phantom"):
-        await client.call_tool(
-            "select_phantom",
-            {"session_key": client.key, "collection": "demo-001", "phantom": "../../etc.json"},
-        )
+        await client.call_tool("get_phantom_maps", {"collection": "demo-001", "phantom": "broken.json"})
 
 
 async def test_phantom_browser_is_an_app(client):

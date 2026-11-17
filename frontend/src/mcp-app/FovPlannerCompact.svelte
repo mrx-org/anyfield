@@ -1,8 +1,8 @@
 <script lang="ts">
   import FovPlanner from "../lib/components/fov/FovPlanner.svelte";
-  import type { SessionStore } from "../lib/state/session.svelte";
+  import type { Selection } from "../lib/state/selection";
 
-  let { store }: { store: SessionStore } = $props();
+  let { sel }: { sel: Selection } = $props();
 </script>
 
-<FovPlanner {store} compact />
+<FovPlanner {sel} compact />

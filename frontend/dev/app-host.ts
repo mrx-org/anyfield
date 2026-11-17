@@ -1,4 +1,4 @@
-// Dev only (`pnpm dev`, then /dev/app-host.html?key=<session key>[&tool=open_phantom_browser]): plays the chat
+// Dev only (`pnpm dev`, then /dev/app-host.html[?key=<session key>][&tool=open_phantom_browser]): plays the chat
 // host for the MCP App, the way claude.ai does. It calls `open_fov_planner`,
 // loads the app's resource into a sandboxed iframe and forwards its tool calls.
 import { AppBridge, PostMessageTransport } from "@modelcontextprotocol/ext-apps/app-bridge";
@@ -24,7 +24,16 @@ const html = (resource.contents[0] as { text: string }).text;
 const bridge = new AppBridge(null, { name: "anyfield-test-host", version: "0.0.0" }, { serverTools: {} });
 bridge.oncalltool = async (params) =>
   (await client.callTool(params)) as Awaited<ReturnType<NonNullable<typeof bridge.oncalltool>>>;
-const args = { session_key: key };
+const args = key ? { session_key: key } : {};
+// Without a session the app hands its result back to the chat: show it here
+bridge.onmessage = async (params) => {
+  status.textContent = `Nachricht an den Chat: ${JSON.stringify(params.content)}`;
+  return {};
+};
+bridge.onupdatemodelcontext = async (params) => {
+  console.info("anyfield test host: model context", params.content);
+  return {};
+};
 bridge.oninitialized = async () => {
   status.textContent = "App verbunden";
   await bridge.sendToolInput({ arguments: args });
