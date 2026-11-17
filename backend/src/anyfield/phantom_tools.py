@@ -71,8 +71,8 @@ def register(
 
     @mcp.tool(annotations={"readOnlyHint": True})
     async def list_phantom_collections() -> list[dict[str, Any]]:
-        """Phantom collections of the public BIfTI catalog: name (`collection`),
-        label, description, license, DOI and number of phantoms."""
+        """Phantom collections of the BIfTI registry (from the MRX gateway): name
+        (`collection`), description and number of phantoms."""
         return await guard(catalog.collections())
 
     @mcp.tool(annotations={"readOnlyHint": True})

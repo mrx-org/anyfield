@@ -29,8 +29,10 @@ Web-App: `/` (eigene Sessions), `/s/{key}` (eine Session).
 `open_*` zeigen in Clients mit MCP Apps das jeweilige Tool im Chat. Die Website
 zeigt unter `/s/{key}` beide Tools nebeneinander.
 
-Phantome kommen aus dem öffentlichen [BIfTI-Katalog](https://github.com/mrx-org/bifti-phantoms)
-(Download von Zenodo mit dem Paket `bifti`). Beim ersten Gebrauch werden je Phantom
+Den Phantom-Katalog liefern die bifti-Tools des MRX-Gateways (`bifti_list_collections`,
+`bifti_list_phantoms`). Gateway-Aufrufe laufen mit Login als der Nutzer (Token Exchange
+bei AuthKit), ohne Login als `visitor`. Die Phantome selbst lädt anyfield noch von Zenodo
+(Paket `bifti`); das entfällt mit MRX-73. Beim ersten Gebrauch werden je Phantom
 Anzeige-Karten berechnet (PD, T1, T2, T2′, ADC, dB0, B1±; dichtegewichtete Mittel
 über die Gewebe) und auf dem Modal-Volume abgelegt; große Phantome auf höchstens
 8 Mio. Voxel vergröbert.
@@ -41,6 +43,7 @@ Anzeige-Karten berechnet (PD, T1, T2, T2′, ADC, dB0, B1±; dichtegewichtete Mi
 backend/   Python (uv), FastMCP, Modal
   src/anyfield/server.py     Tools, Routen
   src/anyfield/auth.py       Login (AuthKit) nur für Session-Verwaltung
+  src/anyfield/gateway.py    Gateway-Tools im Namen des Nutzers (Token Exchange) oder als `visitor`
   src/anyfield/store.py      Modal Dict + Volume (Dict-Einträge verfallen nach 7 Tagen)
   src/anyfield/phantoms.py   BIfTI-Katalog, Anzeige-Karten (PhantomLibrary)
   src/anyfield/phantom_tools.py  Phantom-Tool

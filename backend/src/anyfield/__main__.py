@@ -14,6 +14,7 @@ from pathlib import Path
 
 import uvicorn
 
+from .gateway import GatewayClient
 from .phantoms import local_library
 from .server import build, http_app
 from .store import MemoryStore
@@ -35,7 +36,9 @@ def main() -> None:
     else:
         os.environ.setdefault("ANYFIELD_DEV_USER", "dev")
     library = local_library(Path(tempfile.gettempdir()) / "anyfield-phantoms")
-    mcp = build(MemoryStore(), base_url, auth=auth, static_dir=args.static, library=library)
+    # With MRX_VISITOR_KEY: the real gateway, as `visitor` (or exchanged with the WorkOS env)
+    gateway = GatewayClient.from_env()
+    mcp = build(MemoryStore(), base_url, auth=auth, static_dir=args.static, library=library, gateway=gateway)
     uvicorn.run(http_app(mcp), port=args.port)
 
 

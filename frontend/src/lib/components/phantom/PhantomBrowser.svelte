@@ -79,16 +79,12 @@
     {#each collections ?? [] as c (c.collection)}
       <div class="rounded border border-border">
         <button class="flex w-full items-baseline gap-2 px-2 py-1.5 text-left" onclick={() => toggle(c.collection)} aria-expanded={openCollection === c.collection}>
-          <span class="font-medium">{c.label}</span>
+          <span class="truncate font-medium" title={c.collection}>{c.collection}</span>
           <span class="ml-auto shrink-0 text-xs text-muted">{c.phantom_count}</span>
         </button>
         {#if openCollection === c.collection}
           <div class="flex flex-col gap-1 border-t border-border px-2 py-1.5">
             <p class="text-xs text-muted">{c.description}</p>
-            <p class="text-[11px] text-muted">
-              {c.authors.join("; ")} · {c.license}
-              {#if c.doi} · <a class="underline hover:text-text" href="https://doi.org/{c.doi}" target="_blank" rel="noreferrer">DOI</a>{/if}
-            </p>
             {#if trees[c.collection]}
               <PhantomTreeNode
                 tree={trees[c.collection]}

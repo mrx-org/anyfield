@@ -1,4 +1,4 @@
-"""BIfTI phantoms: the public catalog, and display maps of a phantom.
+"""BIfTI phantoms: the catalog (from the MRX gateway), and display maps of a phantom.
 
 A phantom's tissues are combined into one map per property (density-weighted
 means), so a viewer can show "T1" or "dB0" of the whole phantom. Computing them
@@ -6,7 +6,7 @@ means downloading the phantom from Zenodo and loading it with `bifti`, which
 takes from seconds to a minute; the result is stored once per phantom and
 shared by every session (`PhantomLibrary`).
 
-Registry format: https://github.com/mrx-org/bifti-phantoms/blob/main/REGISTRY.md
+The maps will come from the gateway too (MRX-73); until then they are computed here.
 """
 
 from __future__ import annotations
@@ -21,12 +21,8 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
-import httpx
 import nibabel as nib
 import numpy as np
-
-CATALOG_URL = "https://raw.githubusercontent.com/mrx-org/bifti-phantoms/refs/heads/main/catalog.json"
-REGISTRY_URL = "https://raw.githubusercontent.com/mrx-org/bifti-phantoms/refs/heads/main/registry.json"
 
 # Larger phantoms are shown on a coarser grid (e.g. 0.5 mm brains at 2 mm).
 MAX_DISPLAY_VOXELS = 8_000_000
@@ -82,58 +78,50 @@ def subtree(phantoms: list, path: list[str]) -> list:
 
 
 class Catalog:
-    """catalog.json (label → collection) and registry.json, refreshed every `ttl_s`."""
+    """The phantom catalog, from the gateway's bifti tools (`bifti_list_collections`,
+    `bifti_list_phantoms`). `call(tool, arguments)` calls a gateway tool, e.g.
+    `GatewayClient.call_tool`. Answers are cached for `ttl_s`: the registry
+    changes rarely and is the same for every user."""
 
-    def __init__(self, ttl_s: float = 600, fetch: Callable[[str], Awaitable[Any]] | None = None) -> None:
+    def __init__(
+        self, call: Callable[[str, dict[str, Any]], Awaitable[Any]] | None, ttl_s: float = 600
+    ) -> None:
+        self._call = call
         self.ttl_s = ttl_s
-        self._fetch = fetch or _fetch_json
-        self._data: tuple[float, dict[str, str], dict[str, Any]] | None = None
-        self._lock = asyncio.Lock()
+        self._cache: dict[str, tuple[float, Any]] = {}
 
-    async def _load(self) -> tuple[dict[str, str], dict[str, Any]]:
-        async with self._lock:
-            if self._data is None or time.monotonic() - self._data[0] > self.ttl_s:
-                catalog, registry = await asyncio.gather(self._fetch(CATALOG_URL), self._fetch(REGISTRY_URL))
-                self._data = (time.monotonic(), catalog, registry)
-            return self._data[1], self._data[2]
+    async def _cached(self, key: str, tool: str, arguments: dict[str, Any]) -> Any:
+        hit = self._cache.get(key)
+        if hit is not None and time.monotonic() - hit[0] < self.ttl_s:
+            return hit[1]
+        if self._call is None:
+            raise PhantomError("The phantom catalog (MRX gateway) is not available on this server.")
+        value = await self._call(tool, arguments)
+        self._cache[key] = (time.monotonic(), value)
+        return value
 
     async def collections(self) -> list[dict[str, Any]]:
-        catalog, registry = await self._load()
-        out = []
-        for label, name in catalog.items():
-            entry = registry.get(name)
-            if entry is None:
-                continue
-            out.append(
-                {
-                    "collection": name,
-                    "label": label,
-                    "description": entry.get("description", ""),
-                    "keywords": entry.get("keywords", []),
-                    "authors": [a.get("name") for a in entry.get("authors", [])],
-                    "license": entry.get("license"),
-                    "doi": entry.get("doi"),
-                    "phantom_count": len(flatten(entry.get("phantoms", []))),
-                }
-            )
-        return out
+        """`{collection, description, phantom_count}` per collection."""
+        data = await self._cached("collections", "bifti_list_collections", {})
+        return [
+            {
+                "collection": c["name"],
+                "description": c.get("description", ""),
+                "phantom_count": c.get("phantom_count", 0),
+            }
+            for c in data.get("collections", [])
+        ]
 
     async def phantoms(self, collection: str, path: list[str] | None = None) -> list:
-        _, registry = await self._load()
-        if collection not in registry:
-            raise PhantomError(f"Unknown collection {collection!r}")
-        return subtree(registry[collection].get("phantoms", []), path or [])
+        safe_part(collection)
+        tree = await self._cached(
+            f"phantoms:{collection}", "bifti_list_phantoms", {"collection": collection, "path": []}
+        )
+        return subtree(tree.get("phantoms", []), path or [])
 
     async def check(self, collection: str, name: str) -> None:
         if name not in flatten(await self.phantoms(collection)):
             raise PhantomError(f"No phantom {name!r} in {collection!r}")
-
-
-async def _fetch_json(url: str) -> Any:
-    async with httpx.AsyncClient(timeout=30) as client:
-        r = await client.get(url)
-        r.raise_for_status()
-        return r.json()
 
 
 # --- Display maps ---------------------------------------------------------------

@@ -71,6 +71,7 @@ def prepare_phantom(collection: str, name: str) -> dict:
 @modal.asgi_app()
 def web():
     from .auth import authkit_auth
+    from .gateway import GatewayClient
     from .phantoms import PhantomLibrary
     from .server import build, http_app
     from .store import ModalStore
@@ -78,4 +79,13 @@ def web():
     store = ModalStore(sessions_dict, state_volume, STATE_PATH / "sessions")
     auth = authkit_auth(BASE_URL)
     library = PhantomLibrary(PHANTOM_ROOT, prepare_phantom.remote.aio, reload=state_volume.reload)
-    return http_app(build(store, BASE_URL, auth=auth, static_dir=STATIC_DIR, library=library))
+    return http_app(
+        build(
+            store,
+            BASE_URL,
+            auth=auth,
+            static_dir=STATIC_DIR,
+            library=library,
+            gateway=GatewayClient.from_env(),
+        )
+    )

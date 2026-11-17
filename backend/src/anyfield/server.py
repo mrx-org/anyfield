@@ -24,6 +24,7 @@ from starlette.staticfiles import StaticFiles
 from . import fov as fov_ops
 from . import phantom_tools
 from .auth import AuthProvider, make_login_on_demand, require_user
+from .gateway import GatewayClient
 from .models import Session, Vec3, new_key
 from .phantoms import Catalog, PhantomLibrary
 from .store import SessionStore
@@ -48,6 +49,7 @@ def build(
     static_dir: Path | None = None,
     library: PhantomLibrary | None = None,
     catalog: Catalog | None = None,
+    gateway: GatewayClient | None = None,
 ) -> FastMCP:
     base_url = base_url.rstrip("/")
     mcp = FastMCP(
@@ -218,7 +220,7 @@ def build(
         mcp,
         phantom_tools.Ctx(base_url=base_url, load=load, save=save, public=public, locks=locks),
         library=library,
-        catalog=catalog or Catalog(),
+        catalog=catalog or Catalog(gateway.call_tool if gateway else None),
         static_dir=static_dir,
     )
 

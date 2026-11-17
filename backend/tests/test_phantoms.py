@@ -12,31 +12,38 @@ from fastmcp import Client
 from fastmcp.exceptions import ToolError
 from starlette.testclient import TestClient
 
-from anyfield.phantoms import Catalog, PhantomLibrary, compute_maps, display_grid, prepare_from_json
+from anyfield.phantoms import (
+    Catalog,
+    PhantomError,
+    PhantomLibrary,
+    compute_maps,
+    display_grid,
+    prepare_from_json,
+)
 from anyfield.server import build, http_app
 from anyfield.store import MemoryStore
 
 DATA = Path(__file__).parent / "data"
-CATALOG = {"Demo phantoms": "demo-001", "Gone": "missing-001"}
-REGISTRY = {
-    "demo-001": {
-        "description": "Demo",
-        "license": "CC-BY-4.0",
-        "doi": "10.5281/zenodo.1",
-        "authors": [{"name": "Endres, Jonathan"}],
-        "phantoms": [
-            "shapes.json",
-            {"group": "broken", "default": "broken.json", "phantoms": ["broken.json"]},
-        ],
-    }
+COLLECTIONS = {"collections": [{"name": "demo-001", "description": "Demo", "phantom_count": 2}]}
+TREE = {
+    "phantoms": [
+        "shapes.json",
+        {"group": "broken", "default": "broken.json", "phantoms": ["broken.json"]},
+    ]
 }
 
 
 def fake_catalog() -> Catalog:
-    async def fetch(url):
-        return CATALOG if url.endswith("catalog.json") else REGISTRY
+    """Answers like the gateway's bifti tools."""
 
-    return Catalog(fetch=fetch)
+    async def call(tool, arguments):
+        if tool == "bifti_list_collections":
+            return COLLECTIONS
+        if tool == "bifti_list_phantoms" and arguments["collection"] == "demo-001":
+            return TREE
+        raise ToolError(f"MRX gateway, {tool}: unknown collection")
+
+    return Catalog(call)
 
 
 @pytest.fixture
@@ -104,12 +111,16 @@ def test_prepared_files(tmp_path):
 
 async def test_catalog_tools(client):
     cols = await call(client, "list_phantom_collections")
-    assert [c["collection"] for c in cols["result"]] == ["demo-001"]  # "Gone" is not in the registry
-    assert cols["result"][0]["phantom_count"] == 2
+    assert cols["result"] == [{"collection": "demo-001", "description": "Demo", "phantom_count": 2}]
     tree = (await call(client, "list_phantoms", collection="demo-001", path=["broken"]))["result"]
     assert tree == ["broken.json"]
-    with pytest.raises(ToolError, match="Unknown collection"):
+    with pytest.raises(ToolError, match="unknown collection"):
         await client.call_tool("list_phantoms", {"collection": "nope"})
+
+
+async def test_catalog_without_gateway():
+    with pytest.raises(PhantomError, match="not available"):
+        await Catalog(None).collections()
 
 
 async def test_select_phantom_prepares_once(client, library):

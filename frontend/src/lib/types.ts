@@ -39,14 +39,10 @@ export interface SessionState {
   web_url: string;
 }
 
+/** A collection of the BIfTI registry (from the gateway's `bifti_list_collections`). */
 export interface PhantomCollection {
   collection: string;
-  label: string;
   description: string;
-  keywords: string[];
-  authors: string[];
-  license: string | null;
-  doi: string | null;
   phantom_count: number;
 }
 
