@@ -1,4 +1,4 @@
-// Dev only (`pnpm dev`, then /dev/app-host.html[?key=<session key>][&tool=open_phantom_browser]): plays the chat
+// Dev only (`pnpm dev`, then /dev/app-host.html[?key=<session key>][&tool=open_phantom_browser][&maxHeight=500]): plays the chat
 // host for the MCP App, the way claude.ai does. It calls `open_fov_planner`,
 // loads the app's resource into a sandboxed iframe and forwards its tool calls.
 import { AppBridge, PostMessageTransport } from "@modelcontextprotocol/ext-apps/app-bridge";
@@ -21,7 +21,14 @@ const resource = await client.readResource({ uri: uri! });
 const html = (resource.contents[0] as { text: string }).text;
 
 // ext-apps is built on MCP SDK v2, the web app on v1: forward tool calls by hand
-const bridge = new AppBridge(null, { name: "anyfield-test-host", version: "0.0.0" }, { serverTools: {} });
+// `&maxHeight=<px>` limits the app's height, as a host may (containerDimensions)
+const maxHeight = Number(query.get("maxHeight")) || undefined;
+const bridge = new AppBridge(
+  null,
+  { name: "anyfield-test-host", version: "0.0.0" },
+  { serverTools: {} },
+  { hostContext: { containerDimensions: { maxHeight } } },
+);
 bridge.oncalltool = async (params) =>
   (await client.callTool(params)) as Awaited<ReturnType<NonNullable<typeof bridge.oncalltool>>>;
 const args = key ? { session_key: key } : {};
@@ -39,6 +46,10 @@ bridge.oninitialized = async () => {
   await bridge.sendToolInput({ arguments: args });
   const result = await client.callTool({ name: toolName, arguments: args });
   await bridge.sendToolResult(result as Parameters<typeof bridge.sendToolResult>[0]);
+};
+// Like claude.ai: the iframe takes the height the app reports
+bridge.onsizechange = ({ height }) => {
+  if (height !== undefined) iframe.style.height = `${Math.min(height, maxHeight ?? Infinity)}px`;
 };
 iframe.srcdoc = html;
 await new Promise((r) => iframe.addEventListener("load", r, { once: true }));

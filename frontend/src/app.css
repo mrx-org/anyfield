@@ -29,3 +29,10 @@ body {
 #app {
   height: 100%;
 }
+/* MCP Apps are as tall as their content: the SDK observes <html> and <body>
+   and reports their height to the host, so they must not be fixed to 100%. */
+html.mcp-app,
+html.mcp-app body,
+html.mcp-app #app {
+  height: auto;
+}

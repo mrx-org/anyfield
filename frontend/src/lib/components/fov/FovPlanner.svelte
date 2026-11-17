@@ -39,7 +39,8 @@
 </script>
 
 <div class="flex h-full w-full {compact ? 'flex-col' : 'flex-col md:flex-row'} bg-bg text-text">
-  <div class="min-h-0 flex-1 {compact ? 'min-h-72' : 'min-h-96'}">
+  <!-- Compact (MCP App): a fixed-height viewer and the controls below it, as tall as they are -->
+  <div class={compact ? "h-72 shrink-0" : "min-h-0 flex-1 min-h-96"}>
     {#if sel.state}
       <FovViewer fov={sel.state.fov} phantomUrl={maps.loading ? null : (shown?.url ?? null)} range={shown?.range ?? null} />
     {:else if sel.error}
@@ -49,7 +50,7 @@
     {/if}
   </div>
   {#if sel.state}
-    <aside class="{compact ? 'border-t' : 'border-t md:w-72 md:border-l md:border-t-0'} flex flex-col gap-4 overflow-y-auto border-border bg-panel p-3">
+    <aside class="{compact ? 'border-t' : 'border-t overflow-y-auto md:w-72 md:border-l md:border-t-0'} flex flex-col gap-4 border-border bg-panel p-3">
       <FovPanel
         fov={sel.state.fov}
         matrix={sel.state.matrix}
