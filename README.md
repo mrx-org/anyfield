@@ -40,8 +40,9 @@ Der Session-Zustand ist ein kleines JSON nur mit der Auswahl, keine Daten:
 }
 ```
 
-`phantom: null` ist das eingebaute Standard-Phantom. Karten, Wertebereiche und
-Ladezustand liefert `get_phantom_maps`; sie werden nicht gespeichert.
+`phantom: null` ist das Standard-Phantom `endres-brainweb-001` / `subj04-3T-1mm.json`
+(vom Gateway wie jedes andere). Karten und Wertebereiche liefert `get_phantom_maps`;
+sie werden nicht gespeichert.
 
 `open_*` zeigen in Clients mit MCP Apps das jeweilige Tool im Chat. Mit `session_key`
 arbeitet es auf der Session; ohne wählt der Nutzer lokal, jede Änderung geht als
@@ -49,13 +50,15 @@ Kontext an das Modell (`updateModelContext`), „In den Chat“ schickt die Ausw
 Nachricht. `select_phantom` geht auch ohne Session (prüft nur die Wahl). Die Website
 zeigt unter `/s/{key}` beide Tools nebeneinander.
 
-Den Phantom-Katalog liefern die bifti-Tools des MRX-Gateways (`bifti_list_collections`,
-`bifti_list_phantoms`). Gateway-Aufrufe laufen mit Login als der Nutzer (Token Exchange
-bei AuthKit), ohne Login als `visitor`. Die Phantome selbst lädt anyfield noch von Zenodo
-(Paket `bifti`); das entfällt mit MRX-73. Beim ersten Gebrauch werden je Phantom
-Anzeige-Karten berechnet (PD, T1, T2, T2′, ADC, dB0, B1±; dichtegewichtete Mittel
-über die Gewebe) und auf dem Modal-Volume abgelegt; große Phantome auf höchstens
-8 Mio. Voxel vergröbert.
+anyfield hält keine Phantomdaten. Katalog und Karten liefern die bifti-Tools des
+MRX-Gateways (`bifti_list_collections`, `bifti_list_phantoms`,
+`bifti_get_property_maps`). Gateway-Aufrufe laufen mit Login als der Nutzer (Token
+Exchange bei AuthKit), ohne Login als `visitor`. Die Karten (PD, T1, T2, T2′, ADC, dB0,
+B1±; über die Gewebe kombiniert) sind NIfTIs unter `<gateway>/files/<hash>`, die Browser
+und MCP Apps ohne Login laden. Mit `fov` und `matrix` liefert `get_phantom_maps` die
+Karten auf dem geplanten Scan-Raster (Reslicing); das FOV wird dafür aus dem
+Scanner-Rahmen der Karten in den RAS+-Rahmen des Phantoms zurückgedreht. Der FOV-Planer
+zeigt so eine Vorschau „Im Scan-Raster“.
 
 ## Aufbau
 
@@ -65,7 +68,7 @@ backend/   Python (uv), FastMCP, Modal
   src/anyfield/auth.py       Login (AuthKit) nur für Session-Verwaltung
   src/anyfield/gateway.py    Gateway-Tools im Namen des Nutzers (Token Exchange) oder als `visitor`
   src/anyfield/store.py      Modal Dict + Volume (Dict-Einträge verfallen nach 7 Tagen)
-  src/anyfield/phantoms.py   BIfTI-Katalog, Anzeige-Karten (PhantomLibrary)
+  src/anyfield/phantoms.py   Katalog und Karten vom Gateway, FOV → Scan-Raster
   src/anyfield/phantom_tools.py  Phantom-Tool
   src/anyfield/modal_app.py  Deployment
 frontend/  Svelte 5, TypeScript, Vite, NiiVue
@@ -89,6 +92,8 @@ cd frontend && pnpm dev                        # Web-App mit Hot Reload, Proxy a
 ```
 
 Der Testserver ist nur für Tests und Frontend-Entwicklung; betrieben wird nur auf Modal.
+Phantom-Katalog und Karten gibt es dort nur mit `MRX_VISITOR_KEY` in der Umgebung
+(Aufrufe ans echte Gateway als `visitor`).
 
 ## Deployment
 

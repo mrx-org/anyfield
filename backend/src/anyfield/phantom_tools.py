@@ -8,17 +8,15 @@ from collections.abc import Awaitable, Callable
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Annotated, Any
-from urllib.parse import quote
 
 from fastmcp import FastMCP
 from fastmcp.apps.config import AppConfig
 from fastmcp.exceptions import ToolError
-from pydantic import Field
-from starlette.requests import Request
-from starlette.responses import FileResponse, Response
+from pydantic import Field, ValidationError
 
-from .models import PhantomChoice, Session, View
-from .phantoms import PROPERTY_KEYS, Catalog, PhantomError, PhantomLibrary, stem
+from . import fov as fov_ops
+from .models import Fov, PhantomChoice, Session, View
+from .phantoms import DEFAULT_PHANTOM, PROPERTY_KEYS, Catalog, PhantomError, PhantomMaps, public_maps
 
 PHANTOM_APP_URI = "ui://anyfield/phantom-browser.html"
 SessionKey = Annotated[str, Field(description="Key of the session (from create_session or a shared link)")]
@@ -35,7 +33,7 @@ CollectionArg = Annotated[str, Field(description="Collection name from list_phan
 PhantomArg = Annotated[
     str, Field(description="Phantom file name from list_phantoms, e.g. 'subj04-3T-1mm.json'")
 ]
-DEFAULT_PROPERTIES = [{"key": "density", "label": "PD", "unit": "a.u.", "range": None}]
+MAX_MATRIX = 1024
 
 
 @dataclass
@@ -54,18 +52,12 @@ async def check(catalog: Catalog, collection: str, name: str) -> None:
         raise ToolError(str(e)) from e
 
 
-def map_url(base_url: str, collection: str | None, name: str, prop: str) -> str:
-    if collection is None:
-        return f"{base_url}/files/phantom.nii.gz"
-    return f"{base_url}/files/phantoms/{quote(collection)}/{quote(stem(name))}/{prop}.nii.gz"
-
-
 def register(
     mcp: FastMCP,
     ctx: Ctx,
     *,
-    library: PhantomLibrary | None,
     catalog: Catalog,
+    maps: PhantomMaps,
     static_dir: Path | None,
 ) -> None:
     from .server import app_html
@@ -122,31 +114,42 @@ def register(
             str | None, Field(description="Collection; omit for the default phantom")
         ] = None,
         phantom: Annotated[str | None, Field(description="Phantom file name; omit for the default")] = None,
+        fov: Annotated[
+            dict[str, Any] | None,
+            Field(
+                description="Optional FOV {center_mm, rotation_deg, size_mm} as in the state: "
+                "resample the maps onto the planned scan grid (reslicing)"
+            ),
+        ] = None,
+        matrix: Annotated[
+            list[int] | None,
+            Field(min_length=3, max_length=3, description="Scan matrix for `fov`, default [128, 128, 1]"),
+        ] = None,
     ) -> dict[str, Any]:
-        """Display maps of a phantom: one NIfTI per property (PD, T1, T2, ...; tissues
-        combined), with label, unit, value range (2nd/98th percentile) and URL. The
-        first call for a phantom prepares it, which can take up to a minute."""
-        if collection is None or phantom is None:
-            props = [{**p, "url": map_url(ctx.base_url, None, "", "density")} for p in DEFAULT_PROPERTIES]
-            return {"phantom": None, "properties": props}
-        if library is None:
-            raise ToolError("Phantom maps are not available on this server.")
-        await check(catalog, collection, phantom)
+        """Display maps of a phantom from the MRX gateway: one NIfTI per property (PD,
+        T1, T2, ...; tissues combined) with label, unit, value range (2nd/98th
+        percentile) and a URL that loads without login. Without a phantom: the
+        default phantom (endres-brainweb-001 / subj04-3T-1mm.json). With `fov` the
+        maps are on the scan grid (FOV and matrix), as the planned scan would see
+        the phantom. The first call for a phantom or grid can take up to a minute."""
+        if (collection is None) != (phantom is None):
+            raise ToolError("Give both collection and phantom, or neither for the default phantom.")
+        choice = PhantomChoice(collection=collection, name=phantom) if collection else DEFAULT_PHANTOM
+        if collection is not None:
+            await check(catalog, collection, phantom)
         try:
-            meta = await library.ensure(collection, phantom)
-        except PhantomError as e:
+            if fov is None:
+                raw = await maps.get(choice)
+            else:
+                f = Fov.model_validate(fov)
+                f = fov_ops.set_fov(f, f.center_mm, f.rotation_deg, f.size_mm)
+                m = tuple(matrix or (128, 128, 1))
+                if any(not (1 <= v <= MAX_MATRIX) for v in m):
+                    raise ToolError(f"matrix values must be in [1, {MAX_MATRIX}]")
+                raw = await maps.on_fov(choice, f, m)
+        except (ValueError, ValidationError) as e:
             raise ToolError(str(e)) from e
-        except Exception as e:
-            raise ToolError(f"Could not prepare phantom: {type(e).__name__}: {e}") from e
-        props = [
-            {**p, "url": map_url(ctx.base_url, collection, phantom, p["key"])} for p in meta["properties"]
-        ]
-        return {
-            "phantom": {"collection": collection, "name": phantom},
-            "shape": meta.get("shape"),
-            "spacing_mm": meta.get("spacing_mm"),
-            "properties": props,
-        }
+        return public_maps(raw, choice, default=collection is None)
 
     @mcp.tool(app=AppConfig(resource_uri=PHANTOM_APP_URI), annotations={"readOnlyHint": True})
     async def open_phantom_browser(session_key: OptionalSessionKey = None) -> dict[str, Any]:
@@ -156,17 +159,3 @@ def register(
         return await ctx.opened(session_key)
 
     app_html(mcp, PHANTOM_APP_URI, "Phantom browser", "phantom-app.html", ctx.base_url, static_dir)
-
-    @mcp.custom_route("/files/phantoms/{collection}/{name}/{prop}.nii.gz", methods=["GET"])
-    async def phantom_file(request: Request) -> Response:
-        p = request.path_params
-        try:
-            path = await library.ensure_visible(p["collection"], p["name"], p["prop"]) if library else None
-        except PhantomError:
-            path = None
-        if path is None:
-            return Response("Not found", status_code=404)
-        # Prepared maps never change (registry phantoms are immutable)
-        return FileResponse(
-            path, media_type="application/gzip", headers={"Cache-Control": "public, max-age=86400"}
-        )

@@ -1,7 +1,9 @@
 import { describe, expect, it } from "vitest";
 import { AnyfieldClient } from "../client/anyfield";
 import { MockTransport } from "../client/mock";
+import type { ScanGrid } from "../types";
 import { LocalSelection } from "./local.svelte";
+import { niftiName } from "./maps.svelte";
 import { mergePatch } from "./patch";
 import { SessionStore } from "./session.svelte";
 
@@ -98,5 +100,24 @@ describe("AnyfieldClient", () => {
     await c.getPhantomMaps(p);
     await c.getPhantomMaps(null);
     expect(t.calls.filter((x) => x.name === "get_phantom_maps").length).toBe(2);
+  });
+
+  it("reslices onto the scan grid, uncached", async () => {
+    const t = new MockTransport();
+    const c = new AnyfieldClient(t);
+    const grid = { fov: { center_mm: [0, 0, 0], rotation_deg: [0, 0, 0], size_mm: [200, 200, 5] }, matrix: [128, 128, 1] } as ScanGrid;
+    const m = await c.getPhantomMaps(null, grid);
+    await c.getPhantomMaps(null, grid);
+    const calls = t.calls.filter((x) => x.name === "get_phantom_maps");
+    expect(calls.length).toBe(2);
+    expect(calls[0].args).toEqual({ fov: grid.fov, matrix: [128, 128, 1] });
+    expect(m.default).toBe(true);
+  });
+});
+
+describe("niftiName", () => {
+  it("gives gateway URLs (a bare hash) a NIfTI extension", () => {
+    expect(niftiName("https://gw.test/files/abc123")).toBe("abc123.nii.gz");
+    expect(niftiName("https://x.test/a/T1.nii.gz")).toBe("T1.nii.gz");
   });
 });

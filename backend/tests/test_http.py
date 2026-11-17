@@ -69,7 +69,6 @@ def test_key_tools_work_anonymously(http):
 
 
 def test_web_routes(http):
-    assert http.get("/files/phantom.nii.gz").status_code == 200
     assert http.get("/health").json() == {"ok": True}
     assert http.get("/s/abc").status_code == 200
 

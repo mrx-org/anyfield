@@ -47,7 +47,8 @@ class View(BaseModel):
 
 
 class State(BaseModel):
-    """What the user (or the AI) chose. `phantom=None` is the built-in default phantom."""
+    """What the user (or the AI) chose. `phantom=None` is the default phantom
+    (`phantoms.DEFAULT_PHANTOM`, from the gateway like every other)."""
 
     model_config = ConfigDict(extra="forbid")
 

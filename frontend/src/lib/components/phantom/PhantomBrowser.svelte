@@ -39,30 +39,49 @@
   const maps = new MapsLoader(sel.client);
 
   const phantom = $derived(sel.state?.phantom ?? null);
+  // The phantom actually shown: for `phantom: null` the default one, once its maps say which
+  const current = $derived(phantom ?? (maps.maps?.default ? maps.maps.phantom : null));
   const property = $derived(sel.state?.view.property ?? "density");
   const shown = $derived(maps.property(property));
-  const selected = $derived(phantom ? find(tree.rootNode.children ?? [], phantom).map((n) => n.id) : []);
+  const selected = $derived(current ? find(tree.rootNode.children ?? [], current).map((n) => n.id) : []);
+  let revealed: string | null = null;
 
   $effect(() => {
     if (sel.state) maps.load(phantom);
   });
 
+  // Whenever another phantom is chosen (here, by the AI, on another device), open the tree to it.
+  $effect(() => {
+    if (loaded && current) void reveal(current);
+  });
+
   onMount(async () => {
     try {
-      const collections = await sel.client.listPhantomCollections();
-      const nodes = collections.map(collectionNode);
-      // Open the chosen phantom's collection right away, with the path to it expanded.
-      const open = phantom && nodes.find((n) => n.collection === phantom.collection);
-      if (open) {
-        open.children = phantomNodes(open.collection, await sel.client.listPhantoms(open.collection));
-        expanded = [open.id, ...(pathTo(open.children, phantom.name) ?? [])];
-      }
-      tree = catalog(nodes);
+      tree = catalog((await sel.client.listPhantomCollections()).map(collectionNode));
       loaded = true;
     } catch (e) {
       loadError = message(e);
     }
   });
+
+  async function reveal(choice: PhantomChoice) {
+    const id = `${choice.collection}/${choice.name}`;
+    if (revealed === id) return;
+    revealed = id;
+    const nodes = tree.rootNode.children ?? [];
+    const node = nodes.find((n) => n.collection === choice.collection);
+    if (!node) return;
+    try {
+      if (!node.children) {
+        node.children = phantomNodes(node.collection, await sel.client.listPhantoms(node.collection));
+        tree = catalog(nodes);
+      }
+      const path = [node.id, ...(pathTo(node.children, choice.name) ?? [])];
+      expanded = [...new Set([...expanded, ...path])];
+    } catch (e) {
+      loadError = message(e);
+    }
+  }
 
   function collectionNode(c: PhantomCollection): Node {
     return {
@@ -127,12 +146,13 @@
     <h2 class="text-xs font-semibold uppercase tracking-wide text-muted">Phantom</h2>
     {#if sel.state}
       <div class="flex items-baseline gap-2">
-        <span class="truncate font-medium" title={phantom?.name}>
-          {phantom ? phantom.name.replace(/\.json$/, "") : "Standard (BrainWeb subj04, 2 mm)"}
+        <span class="truncate font-medium" title={current?.name}>
+          {current ? current.name.replace(/\.json$/, "") : "Standard-Phantom"}{#if !phantom}<span
+              class="ml-1 text-xs font-normal text-muted">(Standard)</span>{/if}
         </span>
         {#if maps.loading}<span class="text-xs text-accent">wird vorbereitet …</span>{/if}
       </div>
-      {#if phantom}<span class="-mt-1 text-xs text-muted">{phantom.collection}</span>{/if}
+      {#if current}<span class="-mt-1 text-xs text-muted">{current.collection}</span>{/if}
       {#if maps.error}<p class="text-xs text-error-500">{maps.error}</p>{/if}
       <div class="flex flex-wrap gap-1">
         {#each maps.maps?.properties ?? [] as p (p.key)}
@@ -214,7 +234,7 @@
     {:else}
       <TreeView.Item class="truncate py-1 data-selected:preset-tonal-primary" title={node.file}>
         {node.name}
-        {#if maps.loading && phantom?.collection === node.collection && phantom.name === node.file}
+        {#if maps.loading && current?.collection === node.collection && current.name === node.file}
           <span class="ml-1 text-muted">· lädt …</span>
         {/if}
       </TreeView.Item>

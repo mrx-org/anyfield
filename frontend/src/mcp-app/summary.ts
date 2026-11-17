@@ -5,7 +5,7 @@ const v = (x: Vec3) => `(${x.map((n) => Math.round(n * 10) / 10).join(", ")})`;
 /** What the phantom browser hands back to the chat. */
 export function phantomSummary(s: State): string {
   const p = s.phantom;
-  const name = p ? `${p.name} (collection ${p.collection})` : "the built-in default phantom";
+  const name = p ? `${p.name} (collection ${p.collection})` : "the default phantom (subj04-3T-1mm.json, collection endres-brainweb-001)";
   return `Chosen phantom: ${name}, shown property: ${s.view.property}.`;
 }
 

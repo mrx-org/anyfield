@@ -2,6 +2,7 @@
   // Small single-plane NiiVue view of one volume (e.g. the selected phantom map).
   import { Niivue, SLICE_TYPE } from "@niivue/niivue";
   import { onMount } from "svelte";
+  import { niftiName } from "../../state/maps.svelte";
 
   let { url, range = null }: { url: string | null; range?: [number, number] | null } = $props();
 
@@ -21,7 +22,7 @@
     if (!ready || !nv || !url || url === loaded) return;
     loaded = url;
     const opts = range ? { cal_min: range[0], cal_max: range[1] } : {};
-    void nv.loadVolumes([{ url, name: url.split("/").pop() ?? "map.nii.gz", ...opts }]);
+    void nv.loadVolumes([{ url, name: niftiName(url), ...opts }]);
   });
 </script>
 

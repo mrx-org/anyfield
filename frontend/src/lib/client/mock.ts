@@ -23,8 +23,12 @@ export class MockTransport implements Transport {
   async callTool(name: string, args: Record<string, unknown> = {}): Promise<unknown> {
     this.calls.push({ name, args });
     if (name === "get_phantom_maps") {
-      const props = ["density", "T1", "T2"].map((k) => ({ key: k, label: k, unit: "", range: null, url: `/files/${args.phantom ?? "default"}/${k}.nii.gz` }));
-      return { phantom: args.collection ? { collection: args.collection, name: args.phantom } : null, properties: props };
+      const phantom = args.collection
+        ? { collection: args.collection as string, name: args.phantom as string }
+        : { collection: "endres-brainweb-001", name: "subj04-3T-1mm.json" };
+      const props = ["density", "T1", "T2"].map((k) => ({ key: k, label: k, unit: "", range: null, url: `https://gateway.test/files/${phantom.name}-${k}` }));
+      const shape = args.matrix ?? [181, 217, 181];
+      return { phantom, default: !args.collection, shape, spacing_mm: [1, 1, 1], affine: [[1, 0, 0, 0], [0, 1, 0, 0], [0, 0, 1, 0]], coarsening: 1, properties: props };
     }
     const s = this.sessions.get(args.session_key as string);
     if (!s) throw new ToolCallError(name, "Unknown session key.");

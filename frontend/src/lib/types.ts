@@ -13,7 +13,7 @@ export interface PhantomChoice {
   name: string;
 }
 
-/** A session's state: the user's choices only, no data. `phantom: null` is the built-in default. */
+/** A session's state: the user's choices only, no data. `phantom: null` is the default phantom. */
 export interface State {
   phantom: PhantomChoice | null;
   view: { property: string };
@@ -45,15 +45,29 @@ export interface PhantomProperty {
   unit: string;
   /** 2nd and 98th percentile inside the phantom, for windowing. */
   range: [number, number] | null;
+  /** NIfTI (gzip) at the gateway, loads without login. */
   url: string;
 }
 
-/** Display maps of a phantom (`get_phantom_maps`): data, never stored in the state. */
+/** Display maps of a phantom (`get_phantom_maps`, from the MRX gateway): data, never stored in the state. */
 export interface PhantomMaps {
-  phantom: PhantomChoice | null;
-  shape?: Vec3;
-  spacing_mm?: Vec3;
+  /** The phantom shown; for `phantom: null` in the state the default one. */
+  phantom: PhantomChoice;
+  /** True if `phantom` is the default (the state has `phantom: null`). */
+  default: boolean;
+  shape: Vec3;
+  spacing_mm: Vec3;
+  /** Voxel-to-world affine (upper 3 rows) of the maps. */
+  affine: [number[], number[], number[]];
+  /** Integer factor the grid was coarsened by (1: not at all). */
+  coarsening: number;
   properties: PhantomProperty[];
+}
+
+/** The planned scan grid to reslice the maps onto. */
+export interface ScanGrid {
+  fov: Fov;
+  matrix: Vec3;
 }
 
 /** A collection of the BIfTI registry (from the gateway's `bifti_list_collections`). */

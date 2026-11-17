@@ -2,9 +2,30 @@
 
 from __future__ import annotations
 
+import math
+
+import numpy as np
+
 from .models import Fov, Vec3
 
 MAX_SIZE_MM = 600.0
+
+
+def rotation_matrix(rotation_deg: Vec3) -> np.ndarray:
+    """Rotation about x first, then y, then z: R = Rz·Ry·Rx (as in the frontend and v3)."""
+    ax, ay, az = (math.radians(a) for a in rotation_deg)
+    cx, sx, cy, sy, cz, sz = (
+        math.cos(ax),
+        math.sin(ax),
+        math.cos(ay),
+        math.sin(ay),
+        math.cos(az),
+        math.sin(az),
+    )
+    rx = np.array([[1, 0, 0], [0, cx, -sx], [0, sx, cx]])
+    ry = np.array([[cy, 0, sy], [0, 1, 0], [-sy, 0, cy]])
+    rz = np.array([[cz, -sz, 0], [sz, cz, 0], [0, 0, 1]])
+    return rz @ ry @ rx
 
 
 def normalize_angle(deg: float) -> float:

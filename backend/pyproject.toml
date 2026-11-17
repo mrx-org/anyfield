@@ -6,9 +6,7 @@ requires-python = ">=3.12"
 dependencies = [
     "fastmcp[apps]==4.0.0b3",
     "modal>=1.2",
-    "bifti>=0.3.1",
     "httpx>=0.28",
-    "nibabel>=5.2",
     "numpy>=2",
 ]
 

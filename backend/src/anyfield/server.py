@@ -28,11 +28,9 @@ from . import phantom_tools
 from .auth import AuthProvider, make_login_on_demand, require_user
 from .gateway import GATEWAY_URL, GatewayClient
 from .models import Session, State, Vec3, merge_patch, new_key
-from .phantoms import PROPERTY_KEYS, Catalog, PhantomLibrary
+from .phantoms import PROPERTY_KEYS, Catalog, PhantomMaps
 from .store import SessionStore
 
-DATA_DIR = Path(__file__).parent / "data"
-PHANTOM_FILE = DATA_DIR / "phantom_pd_2mm.nii.gz"
 FOV_APP_URI = "ui://anyfield/fov-planner.html"
 MAX_SESSIONS_PER_USER = 200
 MAX_MATRIX = 1024
@@ -56,12 +54,15 @@ def build(
     *,
     auth: AuthProvider | None = None,
     static_dir: Path | None = None,
-    library: PhantomLibrary | None = None,
     catalog: Catalog | None = None,
+    maps: PhantomMaps | None = None,
     gateway: GatewayClient | None = None,
 ) -> FastMCP:
+    """`gateway` serves the phantom catalog and maps; tests pass `catalog` and `maps` instead."""
     base_url = base_url.rstrip("/")
-    catalog = catalog or Catalog(gateway.call_tool if gateway else None)
+    call = gateway.call_tool if gateway else None
+    catalog = catalog or Catalog(call)
+    maps = maps or PhantomMaps(call)
     mcp = FastMCP(
         "anyfield",
         instructions=(
@@ -200,7 +201,7 @@ def build(
             Field(
                 description="JSON Merge Patch (RFC 7386) on the state, e.g. "
                 '{"view": {"property": "T1"}, "matrix": [256, 256, 1]}; '
-                '{"phantom": null} selects the built-in default phantom'
+                '{"phantom": null} selects the default phantom'
             ),
         ],
         expected_rev: ExpectedRev = None,
@@ -279,18 +280,12 @@ def build(
     phantom_tools.register(
         mcp,
         phantom_tools.Ctx(base_url=base_url, change=change, public=public, opened=opened),
-        library=library,
         catalog=catalog,
+        maps=maps,
         static_dir=static_dir,
     )
 
     # --- HTTP routes ----------------------------------------------------------
-
-    @mcp.custom_route("/files/phantom.nii.gz", methods=["GET"])
-    async def phantom(_: Request) -> Response:
-        return FileResponse(
-            PHANTOM_FILE, media_type="application/gzip", headers={"Cache-Control": "max-age=3600"}
-        )
 
     @mcp.custom_route("/health", methods=["GET"])
     async def health(_: Request) -> Response:
@@ -333,7 +328,7 @@ def app_html(mcp: FastMCP, uri: str, name: str, file: str, base_url: str, static
 
 
 def http_app(mcp: FastMCP):
-    """ASGI app: `/mcp` (login on demand), OAuth routes, files, web app."""
+    """ASGI app: `/mcp` (login on demand), OAuth routes, web app."""
     app = mcp.http_app(path="/mcp", stateless_http=True, middleware=_middleware())
     if mcp.auth is not None:
         make_login_on_demand(app, "/mcp")

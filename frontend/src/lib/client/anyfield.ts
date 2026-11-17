@@ -1,4 +1,4 @@
-import type { FovChange, PhantomCollection, PhantomMaps, PhantomTree, Session, SessionSummary, StatePatch, Vec3 } from "../types";
+import type { FovChange, PhantomChoice, PhantomCollection, PhantomMaps, PhantomTree, ScanGrid, Session, SessionSummary, StatePatch, Vec3 } from "../types";
 import type { Transport } from "./transport";
 
 export type SessionPoll = Session | { rev: number; unchanged: true };
@@ -30,12 +30,21 @@ export class AnyfieldClient {
   listPhantoms = (collection: string, path?: string[]) =>
     this.call<PhantomTree>("list_phantoms", { collection, ...(path ? { path } : {}) });
 
-  /** Maps of a phantom (null: the default). Cached per phantom; preparing can take a minute. */
-  getPhantomMaps(phantom: { collection: string; name: string } | null): Promise<PhantomMaps> {
+  /**
+   * Maps of a phantom (null: the default), from the gateway. With `grid` resliced
+   * onto the planned scan grid. Maps on the phantom's own grid are cached per
+   * phantom; computing new ones can take a minute.
+   */
+  getPhantomMaps(phantom: PhantomChoice | null, grid?: ScanGrid): Promise<PhantomMaps> {
+    const args = {
+      ...(phantom ? { collection: phantom.collection, phantom: phantom.name } : {}),
+      ...(grid ? { fov: grid.fov, matrix: grid.matrix } : {}),
+    };
+    if (grid) return this.call<PhantomMaps>("get_phantom_maps", args);
     const id = phantom ? `${phantom.collection}/${phantom.name}` : "";
     let p = this.maps.get(id);
     if (!p) {
-      p = this.call<PhantomMaps>("get_phantom_maps", phantom ? { collection: phantom.collection, phantom: phantom.name } : {});
+      p = this.call<PhantomMaps>("get_phantom_maps", args);
       p.catch(() => this.maps.delete(id));
       this.maps.set(id, p);
     }

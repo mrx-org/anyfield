@@ -3,6 +3,7 @@
   import { NVMesh, Niivue, SHOW_RENDER, SLICE_TYPE } from "@niivue/niivue";
   import { onDestroy, onMount } from "svelte";
   import { fovMesh } from "../../geometry/fov";
+  import { niftiName } from "../../state/maps.svelte";
   import type { Fov } from "../../types";
 
   let {
@@ -52,7 +53,7 @@
     const url = phantomUrl;
     loadedUrl = url;
     const opts = range ? { cal_min: range[0], cal_max: range[1] } : {};
-    nv.loadVolumes([{ url, name: url.split("/").pop() ?? "phantom.nii.gz", ...opts }])
+    nv.loadVolumes([{ url, name: niftiName(url), ...opts }])
       .then(() => nv?.drawScene())
       .catch((e) => (loadError = e instanceof Error ? e.message : String(e)));
   });
