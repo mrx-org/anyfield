@@ -17,6 +17,7 @@ import time
 from typing import Any
 
 import httpx
+from fastmcp import Client
 from fastmcp.exceptions import ToolError
 from fastmcp.server.dependencies import get_access_token
 
@@ -102,34 +103,16 @@ class GatewayClient:
     async def call_tool(self, name: str, arguments: dict[str, Any] | None = None) -> Any:
         """Call a gateway tool for the caller of the current request (see
         `token`). Returns the tool's structured result (or its text parsed as
-        JSON); raises `ToolError` if it failed.
-
-        One plain JSON-RPC `tools/call`: the gateway is stateless, so there is
-        no session to open. (fastmcp's `Client` would send `initialize` and,
-        to check the output schema, `tools/list` before every call.)"""
+        JSON); raises `ToolError` if it failed."""
         access = get_access_token()
         token = await self.token(access.token if access is not None else None)
-        response = await self._post(
-            f"{self.url}/mcp",
-            json={
-                "jsonrpc": "2.0",
-                "id": 1,
-                "method": "tools/call",
-                "params": {"name": name, "arguments": arguments or {}},
-            },
-            headers={"Authorization": f"Bearer {token}", "Accept": "application/json, text/event-stream"},
-        )
-        if response.status_code != 200:
-            raise ToolError(f"MRX gateway, {name}: HTTP {response.status_code}")
-        message = _jsonrpc_message(response)
-        if "error" in message:
-            raise ToolError(f"MRX gateway, {name}: {message['error'].get('message', 'failed')}")
-        result = message.get("result", {})
-        text = "\n".join(c.get("text", "") for c in result.get("content", []) if c.get("type") == "text")
-        if result.get("isError"):
+        async with Client(f"{self.url}/mcp", auth=token) as client:
+            result = await client.call_tool(name, arguments or {}, raise_on_error=False)
+        text = "\n".join(getattr(c, "text", "") for c in result.content)
+        if result.is_error:
             raise ToolError(f"MRX gateway, {name}: {text or 'failed'}")
-        if result.get("structuredContent") is not None:
-            return result["structuredContent"]
+        if result.structured_content is not None:
+            return result.structured_content
         try:
             return json.loads(text)
         except ValueError:
@@ -138,18 +121,5 @@ class GatewayClient:
     async def _post(self, url: str, **kwargs: Any) -> httpx.Response:
         if self.http is not None:
             return await self.http.post(url, **kwargs)
-        # Long timeout: gateway tools can compute for minutes
-        async with httpx.AsyncClient(timeout=httpx.Timeout(600, connect=30)) as http:
+        async with httpx.AsyncClient(timeout=30) as http:
             return await http.post(url, **kwargs)
-
-
-def _jsonrpc_message(response: httpx.Response) -> dict[str, Any]:
-    """The JSON-RPC response from a streamable-HTTP answer (plain JSON or SSE)."""
-    if response.headers.get("content-type", "").startswith("text/event-stream"):
-        for line in response.text.splitlines():
-            if line.startswith("data:"):
-                message = json.loads(line[5:])
-                if "id" in message:
-                    return message
-        raise ToolError("MRX gateway: no response in the event stream")
-    return response.json()
