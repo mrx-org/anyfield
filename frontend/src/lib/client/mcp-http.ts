@@ -8,10 +8,11 @@ import type {
 } from "@modelcontextprotocol/sdk/shared/auth.js";
 import { type Transport, unwrapResult } from "./transport";
 
-const STORE_PREFIX = "anyfield.oauth.";
+// v2: AuthKit. Older entries (GitHub OAuth app) are not reused.
+const STORE_PREFIX = "anyfield.oauth.v2.";
 const RETURN_PATH = `${STORE_PREFIX}returnPath`;
 
-/** Thrown when a tool needed a login and the page is now on its way to GitHub. */
+/** Thrown when a tool needed a login and the page is now on its way to the login (AuthKit). */
 export class LoginRedirect extends Error {
   constructor() {
     super("Redirecting to login");
@@ -22,7 +23,9 @@ export class LoginRedirect extends Error {
 /**
  * Web app: MCP over HTTP to `/mcp`. Session tools go out without a token.
  * The first call of a login tool gets a 401; the SDK then runs the OAuth flow
- * (dynamic client registration, PKCE) and the page goes to GitHub and back.
+ * (dynamic client registration at AuthKit, PKCE) and the page goes to the
+ * login and back. Access tokens live 5 min: `offline_access` gets a refresh
+ * token, so the SDK renews them instead of sending the user to log in again.
  */
 export class McpHttpTransport implements Transport {
   private client: Client | null = null;
@@ -87,6 +90,7 @@ class BrowserOAuthProvider implements OAuthClientProvider {
       grant_types: ["authorization_code", "refresh_token"],
       response_types: ["code"],
       token_endpoint_auth_method: "none",
+      scope: "openid offline_access",
     };
   }
 

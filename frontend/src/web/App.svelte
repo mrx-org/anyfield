@@ -1,5 +1,5 @@
 <script lang="ts">
-  // Standalone web app: `/` lists your sessions (GitHub login), `/s/{key}` opens one.
+  // Standalone web app: `/` lists your sessions (login), `/s/{key}` opens one.
   import { onMount } from "svelte";
   import { AnyfieldClient } from "../lib/client/anyfield";
   import { LoginRedirect, McpHttpTransport } from "../lib/client/mcp-http";
@@ -124,7 +124,7 @@
         </div>
         {#if sessions === null}
           <button class="self-start rounded border border-border px-3 py-1 hover:bg-panel" onclick={loadSessions}>
-            Mit GitHub anmelden
+            Anmelden
           </button>
         {:else}
           <ul class="flex flex-col divide-y divide-border rounded border border-border">

@@ -1,8 +1,11 @@
 """Deployment on Modal (workspace mrx-org): `modal deploy -m anyfield.modal_app`.
 
-Serves `web` at `https://mrx-org--anyfield-web.modal.run`. Needs the Modal
-secret `gh_oauth` with GITHUB_OAUTH_CLIENT_ID and GITHUB_OAUTH_CLIENT_SECRET
-(a GitHub OAuth app whose callback URL is `<BASE_URL>/auth/callback`).
+Serves `web` at `https://mrx-org--anyfield-web.us-east.modal.run` (the URL
+Modal reports; the host without `us-east` is an alias that redirects there).
+Login through WorkOS AuthKit: needs the Modal secrets `workos-anyfield`
+(WORKOS_AUTHKIT_DOMAIN, WORKOS_CLIENT_ID, WORKOS_CLIENT_SECRET) and
+`mrx-visitor` (MRX_VISITOR_KEY, shared with the gateway). `<BASE_URL>/mcp` must
+be a Resource Indicator in WorkOS.
 """
 
 from __future__ import annotations
@@ -13,13 +16,12 @@ from pathlib import Path
 import modal
 
 APP_NAME = "anyfield"
-BASE_URL = os.environ.get("ANYFIELD_BASE_URL", f"https://mrx-org--{APP_NAME}-web.modal.run")
+BASE_URL = os.environ.get("ANYFIELD_BASE_URL", f"https://mrx-org--{APP_NAME}-web.us-east.modal.run")
 STATE_PATH = Path("/state")
 STATIC_DIR = Path("/static")
 
 app = modal.App(APP_NAME)
 sessions_dict = modal.Dict.from_name("anyfield-sessions", create_if_missing=True)
-oauth_dict = modal.Dict.from_name("anyfield-oauth-state", create_if_missing=True)
 state_volume = modal.Volume.from_name("anyfield-state", create_if_missing=True, version=2)
 
 image = modal.Image.debian_slim(python_version="3.13")
@@ -59,7 +61,7 @@ def prepare_phantom(collection: str, name: str) -> dict:
 
 @app.function(
     image=image,
-    secrets=[modal.Secret.from_name("gh_oauth")],
+    secrets=[modal.Secret.from_name("workos-anyfield"), modal.Secret.from_name("mrx-visitor")],
     volumes={str(STATE_PATH): state_volume},
     min_containers=0,
     scaledown_window=300,
@@ -68,12 +70,12 @@ def prepare_phantom(collection: str, name: str) -> dict:
 @modal.concurrent(max_inputs=100)
 @modal.asgi_app()
 def web():
-    from .auth import DictKeyValue, encrypted, github_auth
+    from .auth import authkit_auth
     from .phantoms import PhantomLibrary
     from .server import build, http_app
     from .store import ModalStore
 
     store = ModalStore(sessions_dict, state_volume, STATE_PATH / "sessions")
-    auth = github_auth(BASE_URL, client_storage=encrypted(DictKeyValue(oauth_dict)))
+    auth = authkit_auth(BASE_URL)
     library = PhantomLibrary(PHANTOM_ROOT, prepare_phantom.remote.aio, reload=state_volume.reload)
     return http_app(build(store, BASE_URL, auth=auth, static_dir=STATIC_DIR, library=library))

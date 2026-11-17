@@ -11,7 +11,7 @@ export class AnyfieldClient {
     return this.transport.callTool(name, args) as Promise<T>;
   }
 
-  // Session management (needs a GitHub login)
+  // Session management (needs a login)
   listSessions = () => this.call<SessionSummary[]>("list_sessions");
   createSession = (name?: string) => this.call<SessionState>("create_session", name ? { name } : {});
   renameSession = (key: string, name: string) => this.call<SessionState>("rename_session", { session_key: key, name });

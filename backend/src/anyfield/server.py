@@ -1,4 +1,4 @@
-"""The anyfield MCP server: session management (GitHub login) and session tools
+"""The anyfield MCP server: session management (login) and session tools
 (session key as argument). Browser, MCP App and AI all use these same tools."""
 
 from __future__ import annotations
@@ -8,6 +8,7 @@ import time
 from collections import defaultdict
 from pathlib import Path
 from typing import Annotated, Any
+from urllib.parse import urlsplit
 
 from fastmcp import FastMCP
 from fastmcp.apps.config import AppConfig, ResourceCSP
@@ -16,7 +17,7 @@ from pydantic import Field
 from starlette.middleware import Middleware
 from starlette.middleware.cors import CORSMiddleware
 from starlette.requests import Request
-from starlette.responses import FileResponse, HTMLResponse, JSONResponse, Response
+from starlette.responses import FileResponse, HTMLResponse, JSONResponse, RedirectResponse, Response
 from starlette.routing import Mount
 from starlette.staticfiles import StaticFiles
 
@@ -53,7 +54,7 @@ def build(
         "anyfield",
         instructions=(
             "anyfield plans virtual MRI scans. Work happens in sessions, identified by a session key. "
-            "Managing sessions (list/create/rename/delete) needs a GitHub login; all other tools only "
+            "Managing sessions (list/create/rename/delete) needs a login; all other tools only "
             "need the session key. The user and you share the session: changes you make appear in "
             "the user's browser within a second, and vice versa. Coordinates are world RAS in mm."
         ),
@@ -233,7 +234,14 @@ def build(
     async def health(_: Request) -> Response:
         return JSONResponse({"ok": True})
 
-    async def index(_: Request) -> Response:
+    base_host = urlsplit(base_url).netloc
+
+    async def index(request: Request) -> Response:
+        # Login only works on the base URL: it is the token audience, and the
+        # browser's origin must be allowed at AuthKit. Send aliases there.
+        if request.url.netloc != base_host:
+            target = base_url + request.url.path + (f"?{request.url.query}" if request.url.query else "")
+            return RedirectResponse(target, status_code=308)
         page = static_dir / "index.html" if static_dir else None
         if page and page.exists():
             return FileResponse(page)

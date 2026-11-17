@@ -74,18 +74,26 @@ def test_web_routes(http):
     assert http.get("/s/abc").status_code == 200
 
 
-def test_github_provider_wiring(monkeypatch):
-    """The real provider: OAuth metadata exists and the challenge points to it."""
-    from anyfield.auth import github_auth
+def test_authkit_provider_wiring():
+    """The real provider: metadata points to AuthKit, the audience is our /mcp."""
+    from anyfield.auth import authkit_auth
 
-    monkeypatch.setenv("GITHUB_OAUTH_CLIENT_ID", "id")
-    monkeypatch.setenv("GITHUB_OAUTH_CLIENT_SECRET", "secret")
-    mcp = build(MemoryStore(), "https://testserver", auth=github_auth("https://testserver"))
+    auth = authkit_auth("https://testserver", "https://example.authkit.app")
+    mcp = build(MemoryStore(), "https://testserver", auth=auth)
     with TestClient(http_app(mcp), base_url="https://testserver") as c:
         meta = c.get("/.well-known/oauth-protected-resource/mcp").json()
         assert meta["resource"] == "https://testserver/mcp"
-        assert c.get("/.well-known/oauth-authorization-server").status_code == 200
+        assert meta["authorization_servers"] == ["https://example.authkit.app/"]
+        assert auth.token_verifier.audience == "https://testserver/mcp"
         r, _ = call(c, "create_session")
         assert r.status_code == 401 and "resource_metadata" in r.headers["www-authenticate"]
         r, _ = rpc(c, "tools/list")
         assert r.status_code == 200
+
+
+def test_alias_host_redirects_pages_to_base_url():
+    mcp = build(MemoryStore(), "https://testserver")
+    with TestClient(http_app(mcp), base_url="https://alias.test") as c:
+        r = c.get("/s/abc?x=1", follow_redirects=False)
+        assert r.status_code == 308
+        assert r.headers["location"] == "https://testserver/s/abc?x=1"

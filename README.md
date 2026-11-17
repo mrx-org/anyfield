@@ -4,13 +4,15 @@ Neubau von anyfield: Ein MCP-Server auf Modal hält den Zustand jeder Session.
 Browser, MCP App und KI ändern ihn über dieselben Tools. Plan und Design:
 Linear [MRX-71](https://linear.app/mrx-org/issue/MRX-71/studie-anyfield-redesign-v4-mit-mcp-state-server).
 
-Produktiv: `https://mrx-org--anyfield-web.modal.run` (MCP-Endpunkt `/mcp`).
+Produktiv: `https://mrx-org--anyfield-web.us-east.modal.run` (MCP-Endpunkt `/mcp`).
+Der Host ohne `us-east` ist ein Alias; Seiten leiten auf `us-east` um, denn nur
+dort klappt der Login (Token-Audience, CORS bei AuthKit).
 
 ## Zugriff
 
 | Was | Wie |
 | -- | -- |
-| Sessions auflisten, anlegen, umbenennen, löschen | GitHub-Login (OAuth). Der Server verlangt ihn erst, wenn eines dieser Tools aufgerufen wird. |
+| Sessions auflisten, anlegen, umbenennen, löschen | Login über WorkOS AuthKit (GitHub oder E-Mail). Der Server verlangt ihn erst, wenn eines dieser Tools aufgerufen wird. |
 | Alle anderen Tools | Nur der Session-Key als Tool-Parameter `session_key`. Wer ihn kennt, darf die Session lesen und ändern; er lässt sich teilen. |
 
 Web-App: `/` (eigene Sessions), `/s/{key}` (eine Session).
@@ -38,7 +40,7 @@ Anzeige-Karten berechnet (PD, T1, T2, T2′, ADC, dB0, B1±; dichtegewichtete Mi
 ```
 backend/   Python (uv), FastMCP, Modal
   src/anyfield/server.py     Tools, Routen
-  src/anyfield/auth.py       GitHub-OAuth nur für Session-Verwaltung
+  src/anyfield/auth.py       Login (AuthKit) nur für Session-Verwaltung
   src/anyfield/store.py      Modal Dict + Volume (Dict-Einträge verfallen nach 7 Tagen)
   src/anyfield/phantoms.py   BIfTI-Katalog, Anzeige-Karten (PhantomLibrary)
   src/anyfield/phantom_tools.py  Phantom-Tool
@@ -70,8 +72,9 @@ Der Testserver ist nur für Tests und Frontend-Entwicklung; betrieben wird nur a
 Jeder Push auf `mcp-redesign` deployt nach Tests per GitHub Actions auf Modal
 (Workspace mrx-org). Einmalig einzurichten:
 
-1. GitHub-OAuth-App in der mrx-org anlegen, Callback-URL
-   `https://mrx-org--anyfield-web.modal.run/auth/callback`.
-2. Modal-Secret im Workspace mrx-org:
-   `modal secret create gh_oauth GITHUB_OAUTH_CLIENT_ID=… GITHUB_OAUTH_CLIENT_SECRET=…`
+1. WorkOS AuthKit (Umgebung Production): `<BASE_URL>/mcp` als Resource Indicator,
+   `<BASE_URL>` als CORS-Origin (`workos authkit cors set …`, ersetzt die ganze Liste).
+2. Modal-Secrets im Workspace mrx-org: `workos-anyfield` (`WORKOS_AUTHKIT_DOMAIN`,
+   `WORKOS_CLIENT_ID`, `WORKOS_CLIENT_SECRET`) und `mrx-visitor` (`MRX_VISITOR_KEY`,
+   mit dem Gateway geteilt).
 3. Modal-Token für mrx-org als Repository-Secrets `MODAL_TOKEN_ID` und `MODAL_TOKEN_SECRET`.
