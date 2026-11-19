@@ -10,7 +10,8 @@ Leitbild [MRX-74](https://linear.app/mrx-org/issue/MRX-74/anyfield-modulare-ui-t
 Produktiv: `https://app.anyfield.net` (Website, Login, MCP-Endpunkt `/mcp`;
 Env `ANYFIELD_PUBLIC_URL`), auf Modal in Region eu-west. Ein Cloudflare Worker leitet
 die Domain an die modal.run-URL weiter (die der Deploy meldet) und setzt
-`X-Forwarded-Host`/`-Proto`; daraus nimmt der Server Host und Schema. Seiten, die für
+`X-Original-Host: app.anyfield.net`; daraus nimmt der Server den öffentlichen Host
+(Modal verwirft `X-Forwarded-Host`/`-Proto`; `X-Forwarded-Host` wird gelesen, wo er ankommt). Seiten, die für
 einen anderen Host angefragt werden (z. B. direkt modal.run), leiten auf
 `app.anyfield.net` um, denn nur dort klappt der Login (Token-Audience, CORS bei AuthKit).
 Das MRX-Gateway liegt unter `https://mcp.anyfield.net/mcp`; Tokens dafür tauscht

@@ -107,6 +107,8 @@ def test_forwarded_host_decides_redirect():
     with TestClient(http_app(mcp), base_url="http://anyfield-web.modal.test") as c:
         r = c.get("/s/abc", headers=forwarded, follow_redirects=False)
         assert r.status_code == 200
+        r = c.get("/s/abc", headers={"x-original-host": "app.anyfield.net"}, follow_redirects=False)
+        assert r.status_code == 200
         r = c.get("/s/abc", headers={"x-forwarded-host": "other.test"}, follow_redirects=False)
         assert r.status_code == 308
         r = c.get("/s/abc?x=1", follow_redirects=False)
@@ -131,7 +133,7 @@ def test_forwarded_headers_set_public_url():
         headers = {"x-forwarded-host": "app.anyfield.net, proxy.test", "x-forwarded-proto": "https"}
         assert c.get("/?a=1", headers=headers).text == "https://app.anyfield.net/?a=1"
         assert c.get("/").text == "http://anyfield-web.modal.test/"
-        # Modal's proxy appends its own header lines after the worker's
+        # Several lines: the first counts
         headers = [
             ("x-forwarded-host", "app.anyfield.net"),
             ("x-forwarded-host", "anyfield-web.modal.test"),
@@ -139,6 +141,8 @@ def test_forwarded_headers_set_public_url():
             ("x-forwarded-proto", "http"),
         ]
         assert c.get("/", headers=headers).text == "https://app.anyfield.net/"
+        # Modal drops X-Forwarded-*: the worker's X-Original-Host carries the host
+        assert c.get("/", headers={"x-original-host": "app.anyfield.net"}).text == "http://app.anyfield.net/"
 
 
 def test_protected_resource_behind_worker():

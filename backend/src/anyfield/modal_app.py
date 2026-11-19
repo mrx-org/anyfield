@@ -2,8 +2,8 @@
 
 Runs `web` in region eu-west. Public URL: PUBLIC_URL (pages, login and
 `/mcp`). A Cloudflare worker forwards it to the modal.run URL that `modal
-deploy` reports, with X-Forwarded-Host/-Proto; pages requested for any other
-host redirect to PUBLIC_URL.
+deploy` reports, with X-Original-Host (Modal drops X-Forwarded-Host/-Proto);
+pages requested for any other host redirect to PUBLIC_URL.
 Login through WorkOS AuthKit: needs the Modal secrets `workos-anyfield`
 (WORKOS_AUTHKIT_DOMAIN, WORKOS_CLIENT_ID, WORKOS_CLIENT_SECRET) and
 `mrx-visitor` (MRX_VISITOR_KEY, shared with the gateway). `<PUBLIC_URL>/mcp`
