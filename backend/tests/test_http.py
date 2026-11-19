@@ -131,6 +131,14 @@ def test_forwarded_headers_set_public_url():
         headers = {"x-forwarded-host": "app.anyfield.net, proxy.test", "x-forwarded-proto": "https"}
         assert c.get("/?a=1", headers=headers).text == "https://app.anyfield.net/?a=1"
         assert c.get("/").text == "http://anyfield-web.modal.test/"
+        # Modal's proxy appends its own header lines after the worker's
+        headers = [
+            ("x-forwarded-host", "app.anyfield.net"),
+            ("x-forwarded-host", "anyfield-web.modal.test"),
+            ("x-forwarded-proto", "https"),
+            ("x-forwarded-proto", "http"),
+        ]
+        assert c.get("/", headers=headers).text == "https://app.anyfield.net/"
 
 
 def test_protected_resource_behind_worker():

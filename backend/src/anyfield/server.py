@@ -348,7 +348,7 @@ def _v(v: list[float] | None) -> Vec3 | None:
 class ForwardedHeaders:
     """Behind the Cloudflare worker, requests arrive for the modal.run host.
     Take the public host from X-Forwarded-Host and the scheme from
-    X-Forwarded-Proto (first entry each), so `request.url` and everything built
+    X-Forwarded-Proto (first line and entry each), so `request.url` and everything built
     from it shows the public URL. Without the headers nothing changes."""
 
     def __init__(self, app: ASGIApp) -> None:
@@ -356,7 +356,10 @@ class ForwardedHeaders:
 
     async def __call__(self, scope: Scope, receive: Receive, send: Send) -> None:
         if scope["type"] in ("http", "websocket"):
-            headers = {k.lower(): v for k, v in scope["headers"]}
+            # The first line counts: Modal's proxy adds its own lines after the worker's
+            headers: dict[bytes, bytes] = {}
+            for k, v in scope["headers"]:
+                headers.setdefault(k.lower(), v)
             host = _first(headers.get(b"x-forwarded-host"))
             proto = _first(headers.get(b"x-forwarded-proto"))
             if host or proto:
