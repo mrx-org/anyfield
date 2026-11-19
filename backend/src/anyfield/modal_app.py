@@ -1,11 +1,13 @@
 """Deployment on Modal (workspace mrx-org): `modal deploy -m anyfield.modal_app`.
 
-Serves `web` at `https://mrx-org--anyfield-web.us-east.modal.run` (the URL
-Modal reports; the host without `us-east` is an alias that redirects there).
+Runs `web` in region eu-west. Public URL: PUBLIC_URL (pages, login and
+`/mcp`). A Cloudflare worker forwards it to the modal.run URL that `modal
+deploy` reports, with X-Forwarded-Host/-Proto; pages requested for any other
+host redirect to PUBLIC_URL.
 Login through WorkOS AuthKit: needs the Modal secrets `workos-anyfield`
 (WORKOS_AUTHKIT_DOMAIN, WORKOS_CLIENT_ID, WORKOS_CLIENT_SECRET) and
-`mrx-visitor` (MRX_VISITOR_KEY, shared with the gateway). `<BASE_URL>/mcp` must
-be a Resource Indicator in WorkOS.
+`mrx-visitor` (MRX_VISITOR_KEY, shared with the gateway). `<PUBLIC_URL>/mcp`
+must be a Resource Indicator in WorkOS, PUBLIC_URL a CORS origin.
 """
 
 from __future__ import annotations
@@ -16,7 +18,8 @@ from pathlib import Path
 import modal
 
 APP_NAME = "anyfield"
-BASE_URL = os.environ.get("ANYFIELD_BASE_URL", f"https://mrx-org--{APP_NAME}-web.us-east.modal.run")
+PUBLIC_URL = os.environ.get("ANYFIELD_PUBLIC_URL", "https://app.anyfield.net")
+REGION = "eu-west"
 STATE_PATH = Path("/state")
 STATIC_DIR = Path("/static")
 
@@ -34,7 +37,7 @@ if modal.is_local():
         raise RuntimeError(f"Build the frontend first: {frontend_dist} is missing")
     image = (
         image.uv_sync(str(backend_dir), extra_options="--no-dev")
-        .env({"ANYFIELD_BASE_URL": BASE_URL})
+        .env({"ANYFIELD_PUBLIC_URL": PUBLIC_URL})
         .add_local_dir(frontend_dist, str(STATIC_DIR))
         .add_local_python_source("anyfield")
     )
@@ -44,6 +47,8 @@ if modal.is_local():
     image=image,
     secrets=[modal.Secret.from_name("workos-anyfield"), modal.Secret.from_name("mrx-visitor")],
     volumes={str(STATE_PATH): state_volume},
+    region=REGION,  # where containers run
+    routing_region=REGION,  # where requests enter Modal
     min_containers=0,
     scaledown_window=300,
     timeout=900,  # get_phantom_maps waits while the gateway computes new maps
@@ -57,11 +62,11 @@ def web():
     from .store import ModalStore
 
     store = ModalStore(sessions_dict, state_volume, STATE_PATH / "sessions")
-    auth = authkit_auth(BASE_URL)
+    auth = authkit_auth(PUBLIC_URL)
     return http_app(
         build(
             store,
-            BASE_URL,
+            PUBLIC_URL,
             auth=auth,
             static_dir=STATIC_DIR,
             gateway=GatewayClient.from_env(),

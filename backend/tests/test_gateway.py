@@ -6,7 +6,7 @@ import httpx
 import pytest
 from fastmcp.exceptions import ToolError
 
-from anyfield.gateway import ACCESS_TOKEN_TYPE, TOKEN_EXCHANGE, GatewayClient
+from anyfield.gateway import ACCESS_TOKEN_TYPE, GATEWAY_URL, TOKEN_EXCHANGE, GatewayClient
 
 
 def gateway(requests: list[httpx.Request], status: int = 200, **kwargs) -> GatewayClient:
@@ -50,6 +50,26 @@ async def test_user_token_is_exchanged_once():
         "client_id": "client_1",
         "client_secret": "secret",
     }
+
+
+def test_from_env_uses_public_gateway(monkeypatch):
+    monkeypatch.setenv("MRX_VISITOR_KEY", "visitor-key")
+    monkeypatch.delenv("MRX_GATEWAY_URL", raising=False)
+    client = GatewayClient.from_env()
+    assert client.url == GATEWAY_URL == "https://mcp.anyfield.net"
+
+
+async def test_from_env_exchange_resource(monkeypatch):
+    """Token exchange with resource https://mcp.anyfield.net/mcp."""
+    requests = []
+    monkeypatch.setenv("MRX_VISITOR_KEY", "visitor-key")
+    monkeypatch.delenv("MRX_GATEWAY_URL", raising=False)
+    client = GatewayClient.from_env()
+    client.authkit_domain, client.client_id, client.client_secret = "https://auth.test", "c", "s"
+    client.http = gateway(requests).http
+    await client.token("alice")
+    form = {k: v[0] for k, v in parse_qs(requests[0].content.decode()).items()}
+    assert form["resource"] == "https://mcp.anyfield.net/mcp"
 
 
 async def test_refused_exchange_is_a_tool_error():

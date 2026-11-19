@@ -85,7 +85,7 @@ async def test_fov_planner_is_an_app(client):
     assert res.mime_type.startswith("text/html")
     assert res.meta["ui"]["csp"]["connectDomains"] == [
         "https://anyfield.test",
-        "https://mrx-org--mcp-gateway-func.modal.run",
+        "https://mcp.anyfield.net",
     ]
 
 

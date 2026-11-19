@@ -25,8 +25,8 @@ def http(monkeypatch):
         yield c
 
 
-def rpc(http, method, params=None, token=None):
-    headers = dict(HEADERS, **({"Authorization": f"Bearer {token}"} if token else {}))
+def rpc(http, method, params=None, token=None, headers=None):
+    headers = dict(HEADERS, **(headers or {}), **({"Authorization": f"Bearer {token}"} if token else {}))
     body = {"jsonrpc": "2.0", "id": 1, "method": method, "params": params or {}}
     r = http.post("/mcp", content=json.dumps(body), headers=headers)
     if r.status_code != 200:
@@ -96,3 +96,57 @@ def test_alias_host_redirects_pages_to_base_url():
         r = c.get("/s/abc?x=1", follow_redirects=False)
         assert r.status_code == 308
         assert r.headers["location"] == "https://testserver/s/abc?x=1"
+
+
+def test_forwarded_host_decides_redirect():
+    """Behind the Cloudflare worker: Host is modal.run, X-Forwarded-Host the public
+    host. No redirect then (else an endless loop), but a direct modal.run
+    request, or one for another host, is sent to the public URL."""
+    mcp = build(MemoryStore(), "https://app.anyfield.net")
+    forwarded = {"x-forwarded-host": "app.anyfield.net", "x-forwarded-proto": "https"}
+    with TestClient(http_app(mcp), base_url="http://anyfield-web.modal.test") as c:
+        r = c.get("/s/abc", headers=forwarded, follow_redirects=False)
+        assert r.status_code == 200
+        r = c.get("/s/abc", headers={"x-forwarded-host": "other.test"}, follow_redirects=False)
+        assert r.status_code == 308
+        r = c.get("/s/abc?x=1", follow_redirects=False)
+        assert r.status_code == 308
+        assert r.headers["location"] == "https://app.anyfield.net/s/abc?x=1"
+
+
+def test_forwarded_headers_set_public_url():
+    """X-Forwarded-Host and -Proto reach `request.url` (first entry each)."""
+    from starlette.applications import Starlette
+    from starlette.middleware import Middleware
+    from starlette.responses import PlainTextResponse
+    from starlette.routing import Route
+
+    from anyfield.server import ForwardedHeaders
+
+    app = Starlette(
+        routes=[Route("/", lambda request: PlainTextResponse(str(request.url)))],
+        middleware=[Middleware(ForwardedHeaders)],
+    )
+    with TestClient(app, base_url="http://anyfield-web.modal.test") as c:
+        headers = {"x-forwarded-host": "app.anyfield.net, proxy.test", "x-forwarded-proto": "https"}
+        assert c.get("/?a=1", headers=headers).text == "https://app.anyfield.net/?a=1"
+        assert c.get("/").text == "http://anyfield-web.modal.test/"
+
+
+def test_protected_resource_behind_worker():
+    """Resource metadata and audience are the public URL, also via modal.run."""
+    from anyfield.auth import authkit_auth
+
+    auth = authkit_auth("https://app.anyfield.net", "https://example.authkit.app")
+    mcp = build(MemoryStore(), "https://app.anyfield.net", auth=auth)
+    forwarded = {"x-forwarded-host": "app.anyfield.net", "x-forwarded-proto": "https"}
+    with TestClient(http_app(mcp), base_url="http://anyfield-web.modal.test") as c:
+        meta = c.get("/.well-known/oauth-protected-resource/mcp", headers=forwarded).json()
+        assert meta["resource"] == "https://app.anyfield.net/mcp"
+        assert auth.token_verifier.audience == "https://app.anyfield.net/mcp"
+        r, _ = rpc(c, "tools/call", {"name": "list_sessions", "arguments": {}}, headers=forwarded)
+        assert r.status_code == 401
+        assert (
+            "https://app.anyfield.net/.well-known/oauth-protected-resource/mcp"
+            in r.headers["www-authenticate"]
+        )

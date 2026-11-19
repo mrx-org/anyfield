@@ -67,3 +67,7 @@ jobs:
           fi
           uv sync --locked --no-dev
           uv run --no-dev modal deploy -m anyfield.modal_app
+          # The modal.run URL the Cloudflare worker must forward app.anyfield.net to
+          url=$(uv run --no-dev python -c 'import modal; print(modal.Function.from_name("anyfield", "web").get_web_url())')
+          echo "Modal web URL: $url"
+          echo "Modal web URL: <$url> (target of the Cloudflare worker for app.anyfield.net)" >> "$GITHUB_STEP_SUMMARY"

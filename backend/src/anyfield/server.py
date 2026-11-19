@@ -22,6 +22,7 @@ from starlette.requests import Request
 from starlette.responses import FileResponse, HTMLResponse, JSONResponse, RedirectResponse, Response
 from starlette.routing import Mount
 from starlette.staticfiles import StaticFiles
+from starlette.types import ASGIApp, Receive, Scope, Send
 
 from . import fov as fov_ops
 from . import phantom_tools
@@ -295,7 +296,9 @@ def build(
 
     async def index(request: Request) -> Response:
         # Login only works on the base URL: it is the token audience, and the
-        # browser's origin must be allowed at AuthKit. Send aliases there.
+        # browser's origin must be allowed at AuthKit. Send other hosts (the
+        # modal.run URL) there. The host is the public one (`ForwardedHeaders`),
+        # so requests through the Cloudflare worker are not redirected again.
         if request.url.netloc != base_host:
             target = base_url + request.url.path + (f"?{request.url.query}" if request.url.query else "")
             return RedirectResponse(target, status_code=308)
@@ -342,13 +345,45 @@ def _v(v: list[float] | None) -> Vec3 | None:
     return None if v is None else (v[0], v[1], v[2])
 
 
+class ForwardedHeaders:
+    """Behind the Cloudflare worker, requests arrive for the modal.run host.
+    Take the public host from X-Forwarded-Host and the scheme from
+    X-Forwarded-Proto (first entry each), so `request.url` and everything built
+    from it shows the public URL. Without the headers nothing changes."""
+
+    def __init__(self, app: ASGIApp) -> None:
+        self.app = app
+
+    async def __call__(self, scope: Scope, receive: Receive, send: Send) -> None:
+        if scope["type"] in ("http", "websocket"):
+            headers = {k.lower(): v for k, v in scope["headers"]}
+            host = _first(headers.get(b"x-forwarded-host"))
+            proto = _first(headers.get(b"x-forwarded-proto"))
+            if host or proto:
+                scope = dict(scope)
+                if host:
+                    scope["headers"] = [(k, v) for k, v in scope["headers"] if k.lower() != b"host"]
+                    scope["headers"].append((b"host", host.encode("latin-1")))
+                if proto:
+                    ws = scope["type"] == "websocket"
+                    scope["scheme"] = {"https": "wss" if ws else "https", "http": "ws" if ws else "http"}.get(
+                        proto.lower(), scope.get("scheme", "http")
+                    )
+        await self.app(scope, receive, send)
+
+
+def _first(value: bytes | None) -> str:
+    return value.decode("latin-1").split(",")[0].strip() if value else ""
+
+
 def _middleware() -> list[Middleware]:
     return [
+        Middleware(ForwardedHeaders),
         Middleware(
             CORSMiddleware,
             allow_origins=["*"],
             allow_methods=["GET", "POST", "OPTIONS", "DELETE"],
             allow_headers=["*"],
             expose_headers=["Mcp-Session-Id", "WWW-Authenticate"],
-        )
+        ),
     ]

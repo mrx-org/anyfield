@@ -7,9 +7,14 @@ KI) und auf der Website. Plan und Design: Linear
 [MRX-71](https://linear.app/mrx-org/issue/MRX-71/studie-anyfield-redesign-v4-mit-mcp-state-server),
 Leitbild [MRX-74](https://linear.app/mrx-org/issue/MRX-74/anyfield-modulare-ui-tools-auf-den-mrx-mcp-tools-session-optional).
 
-Produktiv: `https://mrx-org--anyfield-web.us-east.modal.run` (MCP-Endpunkt `/mcp`).
-Der Host ohne `us-east` ist ein Alias; Seiten leiten auf `us-east` um, denn nur
-dort klappt der Login (Token-Audience, CORS bei AuthKit).
+Produktiv: `https://app.anyfield.net` (Website, Login, MCP-Endpunkt `/mcp`;
+Env `ANYFIELD_PUBLIC_URL`), auf Modal in Region eu-west. Ein Cloudflare Worker leitet
+die Domain an die modal.run-URL weiter (die der Deploy meldet) und setzt
+`X-Forwarded-Host`/`-Proto`; daraus nimmt der Server Host und Schema. Seiten, die für
+einen anderen Host angefragt werden (z. B. direkt modal.run), leiten auf
+`app.anyfield.net` um, denn nur dort klappt der Login (Token-Audience, CORS bei AuthKit).
+Das MRX-Gateway liegt unter `https://mcp.anyfield.net/mcp`; Tokens dafür tauscht
+anyfield mit `resource=https://mcp.anyfield.net/mcp`.
 
 ## Zugriff
 
@@ -100,9 +105,12 @@ Phantom-Katalog und Karten gibt es dort nur mit `MRX_VISITOR_KEY` in der Umgebun
 Jeder Push auf `mcp-redesign` deployt nach Tests per GitHub Actions auf Modal
 (Workspace mrx-org). Einmalig einzurichten:
 
-1. WorkOS AuthKit (Umgebung Production): `<BASE_URL>/mcp` als Resource Indicator,
-   `<BASE_URL>` als CORS-Origin (`workos authkit cors set …`, ersetzt die ganze Liste).
-2. Modal-Secrets im Workspace mrx-org: `workos-anyfield` (`WORKOS_AUTHKIT_DOMAIN`,
+1. Cloudflare Worker für `app.anyfield.net` auf die modal.run-URL aus dem Deploy-Log
+   (steht auch in der Job-Zusammenfassung).
+2. WorkOS AuthKit (Umgebung Production): `https://app.anyfield.net/mcp` als Resource
+   Indicator, `https://app.anyfield.net` als CORS-Origin (`workos authkit cors set …`,
+   ersetzt die ganze Liste).
+3. Modal-Secrets im Workspace mrx-org: `workos-anyfield` (`WORKOS_AUTHKIT_DOMAIN`,
    `WORKOS_CLIENT_ID`, `WORKOS_CLIENT_SECRET`) und `mrx-visitor` (`MRX_VISITOR_KEY`,
    mit dem Gateway geteilt).
-3. Modal-Token für mrx-org als Repository-Secrets `MODAL_TOKEN_ID` und `MODAL_TOKEN_SECRET`.
+4. Modal-Token für mrx-org als Repository-Secrets `MODAL_TOKEN_ID` und `MODAL_TOKEN_SECRET`.

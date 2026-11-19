@@ -21,7 +21,9 @@ from fastmcp import Client
 from fastmcp.exceptions import ToolError
 from fastmcp.server.dependencies import get_access_token
 
-GATEWAY_URL = "https://mrx-org--mcp-gateway-func.modal.run"
+# The gateway's public URL (Cloudflare worker in front of Modal). `<GATEWAY_URL>/mcp`
+# is also the resource (token audience) of exchanged tokens.
+GATEWAY_URL = "https://mcp.anyfield.net"
 TOKEN_EXCHANGE = "urn:ietf:params:oauth:grant-type:token-exchange"
 ACCESS_TOKEN_TYPE = "urn:ietf:params:oauth:token-type:access_token"
 
