@@ -68,15 +68,20 @@
     const id = `${choice.collection}/${choice.name}`;
     if (revealed === id) return;
     revealed = id;
-    const nodes = tree.rootNode.children ?? [];
-    const node = nodes.find((n) => n.collection === choice.collection);
+    const collectionOf = () => (tree.rootNode.children ?? []).find((n) => n.collection === choice.collection);
+    let node = collectionOf();
     if (!node) return;
     try {
       if (!node.children) {
-        node.children = phantomNodes(node.collection, await sel.client.listPhantoms(node.collection));
-        tree = catalog(nodes);
+        const children = phantomNodes(node.collection, await sel.client.listPhantoms(node.collection));
+        // A new node, not a mutated one: the keyed {#each} only re-renders a node
+        // whose object changed. Take the tree as it is now (other collections may
+        // have loaded meanwhile).
+        node = { ...(collectionOf() ?? node), children };
+        const loadedNode = node;
+        tree = catalog((tree.rootNode.children ?? []).map((n) => (n.id === loadedNode.id ? loadedNode : n)));
       }
-      const path = [node.id, ...(pathTo(node.children, choice.name) ?? [])];
+      const path = [node.id, ...(pathTo(node.children ?? [], choice.name) ?? [])];
       expanded = [...new Set([...expanded, ...path])];
     } catch (e) {
       loadError = message(e);
