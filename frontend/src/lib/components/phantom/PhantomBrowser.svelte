@@ -83,8 +83,11 @@
       }
       const path = [node.id, ...(pathTo(node.children ?? [], choice.name) ?? [])];
       expanded = [...new Set([...expanded, ...path])];
+      loadError = null;
     } catch (e) {
       loadError = message(e);
+      // Not revealed: the next run of the effect (state changed) tries again
+      if (revealed === id) revealed = null;
     }
   }
 
@@ -183,7 +186,10 @@
     <TreeView
       collection={tree}
       {loadChildren}
-      onLoadChildrenComplete={(d) => (tree = d.collection)}
+      onLoadChildrenComplete={(d) => {
+        tree = d.collection;
+        loadError = null;
+      }}
       onLoadChildrenError={(d) => (loadError = d.nodes.map((n) => message(n.error)).join("\n"))}
       expandedValue={expanded}
       onExpandedChange={(d) => (expanded = d.expandedValue)}
