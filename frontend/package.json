@@ -10,6 +10,7 @@
     "test": "vitest run"
   },
   "devDependencies": {
+    "@lucide/svelte": "^1.77.0",
     "@skeletonlabs/skeleton": "^5.0.4",
     "@skeletonlabs/skeleton-svelte": "^5.0.4",
     "@sveltejs/vite-plugin-svelte": "^7.3.1",

@@ -83,15 +83,19 @@ backend/   Python (uv), FastMCP, Modal
   src/anyfield/phantoms.py   Katalog und Karten vom Gateway, FOV → Scan-Raster
   src/anyfield/phantom_tools.py  Phantom-Tool
   src/anyfield/modal_app.py  Deployment
-frontend/  Svelte 5, TypeScript, Vite, NiiVue
+frontend/  Svelte 5, TypeScript, Vite, NiiVue, Skeleton (UI), Lucide (Icons)
   src/lib/client/            Transport: MCP-HTTP (Web), MCP App, Mock
   src/lib/state/             Selection: SessionStore (Polling, optimistisch) oder LocalSelection
   src/lib/components/fov/    FOV-Planer (eigenständige Komponente)
-  src/lib/components/phantom/  Phantom-Browser (eigenständige Komponente)
+  src/lib/components/phantom/  Phantom-Browser und Phantom-Vorschau (eigenständige Komponenten)
   src/web/                   Web-App
   src/mcp-app/               MCP Apps (je eine HTML-Datei, gemeinsame Hülle McpApp.svelte)
   dev/app-host.html          Test-Host für die MCP App
 ```
+
+UI-Bausteine kommen aus Skeleton (`@skeletonlabs/skeleton-svelte`), Icons **immer** aus
+Lucide (`@lucide/svelte`, je Icon importiert: `import ChevronRight from
+"@lucide/svelte/icons/chevron-right"`). Keine Unicode-Zeichen oder eigenen SVGs als Icons.
 
 ## Entwickeln
 

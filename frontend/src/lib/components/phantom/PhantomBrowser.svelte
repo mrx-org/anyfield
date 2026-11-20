@@ -15,6 +15,8 @@
   import type { PhantomChoice, PhantomCollection, PhantomTree } from "../../types";
   import ToolFrame from "../ToolFrame.svelte";
   import PhantomPreview from "./PhantomPreview.svelte";
+  import ChevronRight from "@lucide/svelte/icons/chevron-right";
+  import LoaderCircle from "@lucide/svelte/icons/loader-circle";
 
   let { sel }: { sel: Selection } = $props();
 
@@ -162,7 +164,8 @@
       {#if current}<span class="-mt-1 text-xs text-muted">{current.collection}</span>{/if}
       <Collapsible open={previewOpen} onOpenChange={(d) => (previewOpen = d.open)}>
         <Collapsible.Trigger class="btn btn-sm preset-outlined-surface-300-700 w-full justify-start text-xs">
-          <span aria-hidden="true">{previewOpen ? "▾" : "▸"}</span> Vorschau
+          <ChevronRight class="size-4 transition-transform {previewOpen ? 'rotate-90' : ''}" aria-hidden="true" />
+          Vorschau
         </Collapsible.Trigger>
         <Collapsible.Content class="mt-2">
           <!-- Only rendered while open: folded, the preview loads nothing -->
@@ -208,7 +211,10 @@
       <TreeView.Branch>
         <TreeView.BranchControl class="py-1">
           <TreeView.BranchIndicator class="data-loading:hidden" />
-          <TreeView.BranchIndicator class="hidden animate-spin data-loading:inline">⟳</TreeView.BranchIndicator>
+          <!-- Same size as the chevron (size-4), so the row keeps its height while loading -->
+          <TreeView.BranchIndicator class="hidden data-loading:inline-flex">
+            <LoaderCircle class="size-4 animate-spin" />
+          </TreeView.BranchIndicator>
           <TreeView.BranchText class="min-w-0 flex-1" title={node.description ?? node.name}>
             <span class="truncate {node.kind === 'collection' ? 'font-medium' : 'text-muted'}">{node.name}</span>
             {#if node.kind === "collection"}
