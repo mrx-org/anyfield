@@ -19,13 +19,25 @@
     "3d": SLICE_TYPE.RENDER,
   };
 
+  /** The body's background colour as RGBA in 0..1, for NiiVue. A 2D canvas turns
+   * any CSS colour (rgb, oklch, ...) into RGB. */
+  function pageBackground(): [number, number, number, number] {
+    const ctx = document.createElement("canvas").getContext("2d");
+    if (!ctx) return [0, 0, 0, 1];
+    ctx.fillStyle = getComputedStyle(document.body).backgroundColor;
+    ctx.fillRect(0, 0, 1, 1);
+    const [r, g, b] = ctx.getImageData(0, 0, 1, 1).data;
+    return [r / 255, g / 255, b / 255, 1];
+  }
+
   let canvas: HTMLCanvasElement;
   let nv: Niivue | null = null;
   let ready = $state(false);
   let loaded: string | null = null;
 
   onMount(async () => {
-    nv = new Niivue({ backColor: [0.06, 0.07, 0.08, 1], show3Dcrosshair: false, crosshairWidth: 0, loadingText: "" });
+    // The page's background (transparent comes out black)
+    nv = new Niivue({ backColor: pageBackground(), show3Dcrosshair: false, crosshairWidth: 0, loadingText: "" });
     await nv.attachToCanvas(canvas);
     ready = true;
   });
