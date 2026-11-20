@@ -7,10 +7,26 @@ export interface Fov {
   size_mm: Vec3;
 }
 
-export interface PhantomChoice {
+/** A phantom of the BIfTI registry (the catalog). */
+export interface CatalogPhantom {
   collection: string;
   /** Phantom file name, e.g. "subj04-3T-1mm.json". */
   name: string;
+}
+
+/** A phantom in the gateway's CAS: a bifti .zip. The hash is the permission. */
+export interface CasPhantom {
+  sha256: string;
+  /** File name, for display only. */
+  name: string;
+}
+
+export type PhantomChoice = CatalogPhantom | CasPhantom;
+
+/** A phantom in the caller's CAS files (`list_cas_phantoms`). */
+export interface CasPhantomEntry extends CasPhantom {
+  size: number | null;
+  uploaded_at: string | null;
 }
 
 /** Plane of the phantom preview: transversal, coronal, sagittal or a 3D rendering. */
@@ -33,7 +49,8 @@ export interface State {
 
 /** JSON Merge Patch (RFC 7386) of a State: objects merge, null removes, the rest replaces. */
 export type StatePatch = {
-  phantom?: PhantomChoice | null;
+  /** Merge patch: give `null` for the field of the other kind of phantom. */
+  phantom?: { collection?: string | null; name?: string; sha256?: string | null } | null;
   view?: Partial<View>;
   fov?: Partial<Fov>;
   matrix?: Vec3;

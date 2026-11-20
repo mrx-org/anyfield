@@ -1,4 +1,5 @@
-import type { FovChange, PhantomChoice, PhantomCollection, PhantomMaps, PhantomTree, ScanGrid, Session, SessionSummary, StatePatch, Vec3 } from "../types";
+import { phantomArgs, phantomKey } from "../phantom";
+import type { CasPhantomEntry, FovChange, PhantomChoice, PhantomCollection, PhantomMaps, PhantomTree, ScanGrid, Session, SessionSummary, StatePatch, Vec3 } from "../types";
 import type { Transport } from "./transport";
 
 export type SessionPoll = Session | { rev: number; unchanged: true };
@@ -29,6 +30,8 @@ export class AnyfieldClient {
   listPhantomCollections = () => this.call<PhantomCollection[]>("list_phantom_collections");
   listPhantoms = (collection: string, path?: string[]) =>
     this.call<PhantomTree>("list_phantoms", { collection, ...(path ? { path } : {}) });
+  /** The caller's bifti .zip files in the gateway's CAS. */
+  listCasPhantoms = () => this.call<CasPhantomEntry[]>("list_cas_phantoms");
 
   /**
    * Maps of a phantom (null: the default), from the gateway. With `grid` resliced
@@ -37,11 +40,11 @@ export class AnyfieldClient {
    */
   getPhantomMaps(phantom: PhantomChoice | null, grid?: ScanGrid): Promise<PhantomMaps> {
     const args = {
-      ...(phantom ? { collection: phantom.collection, phantom: phantom.name } : {}),
+      ...(phantom ? phantomArgs(phantom) : {}),
       ...(grid ? { fov: grid.fov, matrix: grid.matrix } : {}),
     };
     if (grid) return this.call<PhantomMaps>("get_phantom_maps", args);
-    const id = phantom ? `${phantom.collection}/${phantom.name}` : "";
+    const id = phantom ? phantomKey(phantom) : "";
     let p = this.maps.get(id);
     if (!p) {
       p = this.call<PhantomMaps>("get_phantom_maps", args);

@@ -2,6 +2,7 @@
   // The phantom preview: a large, square view of the chosen phantom, with the plane
   // and the property to pick (state field `view`). Loads the phantom's maps only
   // while it is shown. Standalone (open_phantom_preview) or nested in the browser.
+  import { phantomSource } from "../../phantom";
   import { MapsLoader } from "../../state/maps.svelte";
   import { DEFAULT_PHANTOM } from "../../state/patch";
   import type { Selection } from "../../state/selection";
@@ -20,7 +21,7 @@
   // svelte-ignore state_referenced_locally
   const maps = new MapsLoader(sel.client);
   const phantom = $derived(sel.state?.phantom ?? null);
-  const name = $derived((phantom ?? DEFAULT_PHANTOM).name.replace(/\.json$/, ""));
+  const name = $derived((phantom ?? DEFAULT_PHANTOM).name.replace(/\.(json|zip)$/, ""));
   const shown = $derived(maps.property(sel.state?.view.property ?? "density"));
   const plane = $derived(sel.state?.view.plane ?? "tra");
 
@@ -33,7 +34,7 @@
 
 <div class="flex flex-col gap-2 p-2 text-sm text-text">
   <div class="flex items-baseline gap-2">
-    <span class="truncate font-medium" title={(phantom ?? DEFAULT_PHANTOM).name}>
+    <span class="truncate font-medium" title="{(phantom ?? DEFAULT_PHANTOM).name} ({phantomSource(phantom ?? DEFAULT_PHANTOM)})">
       {name}{#if !phantom}<span class="ml-1 text-xs font-normal text-muted">(Standard)</span>{/if}
     </span>
     {#if maps.loading}<span class="shrink-0 text-xs text-accent">wird vorbereitet …</span>{/if}

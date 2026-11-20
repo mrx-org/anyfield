@@ -28,8 +28,8 @@ from . import fov as fov_ops
 from . import phantom_tools
 from .auth import AuthProvider, make_login_on_demand, require_user
 from .gateway import GATEWAY_URL, GatewayClient
-from .models import Session, State, Vec3, merge_patch, new_key
-from .phantoms import PROPERTY_KEYS, Catalog, PhantomMaps
+from .models import PhantomChoice, Session, State, Vec3, merge_patch, new_key
+from .phantoms import PROPERTY_KEYS, CasFiles, Catalog, PhantomMaps
 from .store import SessionStore
 
 FOV_APP_URI = "ui://anyfield/fov-planner.html"
@@ -57,13 +57,16 @@ def build(
     static_dir: Path | None = None,
     catalog: Catalog | None = None,
     maps: PhantomMaps | None = None,
+    cas: CasFiles | None = None,
     gateway: GatewayClient | None = None,
 ) -> FastMCP:
-    """`gateway` serves the phantom catalog and maps; tests pass `catalog` and `maps` instead."""
+    """`gateway` serves the phantom catalog, CAS phantoms and maps; tests pass
+    `catalog`, `cas` and `maps` instead."""
     base_url = base_url.rstrip("/")
     call = gateway.call_tool if gateway else None
     catalog = catalog or Catalog(call)
     maps = maps or PhantomMaps(call)
+    cas = cas or CasFiles(call)
     mcp = FastMCP(
         "anyfield",
         instructions=(
@@ -109,7 +112,8 @@ def build(
             raise ToolError(str(e)) from e
         if any(not (1 <= m <= MAX_MATRIX) for m in new.matrix):
             raise ToolError(f"matrix values must be in [1, {MAX_MATRIX}]")
-        if new.phantom is not None and new.phantom != old.phantom:
+        # A CAS phantom needs no check: its hash is the permission
+        if isinstance(new.phantom, PhantomChoice) and new.phantom != old.phantom:
             await phantom_tools.check(catalog, new.phantom.collection, new.phantom.name)
         if new.view.property not in PROPERTY_KEYS:
             raise ToolError(f"Unknown property {new.view.property!r}. Known: {', '.join(PROPERTY_KEYS)}")
@@ -283,6 +287,7 @@ def build(
         phantom_tools.Ctx(base_url=base_url, change=change, public=public, opened=opened),
         catalog=catalog,
         maps=maps,
+        cas=cas,
         static_dir=static_dir,
     )
 

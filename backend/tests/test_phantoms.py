@@ -9,6 +9,7 @@ from fastmcp.exceptions import ToolError
 from anyfield.models import Fov
 from anyfield.phantoms import (
     DEFAULT_PHANTOM,
+    CasFiles,
     Catalog,
     PhantomError,
     PhantomMaps,
@@ -27,6 +28,40 @@ TREE = {
     ]
 }
 IDENTITY = [[2.0, 0.0, 0.0, -100.0], [0.0, 2.0, 0.0, -100.0], [0.0, 0.0, 2.0, -50.0]]
+CAS_ZIP = "a" * 64
+OLD_ZIP = "b" * 64
+FILES = {
+    "result": [
+        {
+            "name": "old.zip",
+            "type": "application/zip",
+            "hash": OLD_ZIP,
+            "size": 10,
+            "uploaded_at": "2026-11-01",
+        },
+        {
+            "name": "map.nii.gz",
+            "type": "application/x-nifti",
+            "hash": "c" * 64,
+            "size": 5,
+            "uploaded_at": "2026-11-03",
+        },
+        {
+            "name": "mine.zip",
+            "type": "application/zip",
+            "hash": CAS_ZIP,
+            "size": 20,
+            "uploaded_at": "2026-11-02",
+        },
+        {
+            "name": "mine-again.zip",
+            "type": "application/zip",
+            "hash": CAS_ZIP,
+            "size": 20,
+            "uploaded_at": "2026-11-02",
+        },
+    ]
+}
 
 
 def maps_answer(name: str, affine=IDENTITY, affine_phantom=IDENTITY) -> dict:
@@ -65,8 +100,11 @@ class FakeGateway:
             return COLLECTIONS
         if tool == "bifti_list_phantoms" and arguments["collection"] == "demo-001":
             return TREE
+        if tool == "list_files":
+            return FILES
         if tool == "bifti_get_property_maps":
-            name = arguments["phantom"]["file_name"]
+            phantom = arguments["phantom"]
+            name = phantom["file_name"] if "file_name" in phantom else f"cas-{phantom['sha256'][:4]}.json"
             if name == "broken.json":
                 raise ToolError("MRX gateway, bifti_get_property_maps: download failed")
             answer = maps_answer(name)
@@ -88,7 +126,13 @@ def gateway():
 @pytest.fixture
 async def client(gateway, as_user):
     as_user("alice")
-    mcp = build(MemoryStore(), "https://anyfield.test", catalog=Catalog(gateway), maps=PhantomMaps(gateway))
+    mcp = build(
+        MemoryStore(),
+        "https://anyfield.test",
+        catalog=Catalog(gateway),
+        maps=PhantomMaps(gateway),
+        cas=CasFiles(gateway),
+    )
     async with Client(mcp) as c:
         c.key = (await c.call_tool("create_session", {})).structured_content["key"]
         yield c
@@ -255,3 +299,46 @@ async def test_phantom_preview_with_session_shows_the_session(client):
     assert r["key"] == client.key
     with pytest.raises(ToolError, match="leave out"):
         await call(client, "open_phantom_preview", session_key=client.key, phantom="shapes.json")
+
+
+async def test_cas_phantoms_are_the_zips_of_the_callers_files(client):
+    r = await client.call_tool("list_cas_phantoms", {})
+    phantoms = r.structured_content["result"]
+    # Only zips, each hash once, newest first
+    assert [(p["sha256"], p["name"]) for p in phantoms] == [(CAS_ZIP, "mine.zip"), (OLD_ZIP, "old.zip")]
+
+
+async def test_select_a_cas_phantom_in_a_session(client, gateway):
+    r = await call(client, "select_phantom", session_key=client.key, sha256=CAS_ZIP, phantom="mine.zip")
+    assert r["phantom"] == {"sha256": CAS_ZIP, "name": "mine.zip"}
+    s = await call(client, "get_state", session_key=client.key)
+    assert s["state"]["phantom"] == {"sha256": CAS_ZIP, "name": "mine.zip"}
+
+    maps = await call(client, "get_phantom_maps", sha256=CAS_ZIP)
+    assert maps["phantom"]["sha256"] == CAS_ZIP and maps["default"] is False
+    # The bifti tool gets the hash only, no collection
+    assert gateway.maps_calls()[-1] == {"phantom": {"sha256": CAS_ZIP}}
+
+    await call(
+        client, "get_phantom_maps", sha256=CAS_ZIP, fov={"size_mm": [100, 100, 10]}, matrix=[64, 64, 1]
+    )
+    assert gateway.maps_calls()[-1]["phantom"] == {"sha256": CAS_ZIP} and "grid" in gateway.maps_calls()[-1]
+
+
+async def test_cas_phantom_arguments_are_checked(client):
+    with pytest.raises(ToolError, match="64 hex digits"):
+        await call(client, "select_phantom", sha256="nope")
+    with pytest.raises(ToolError, match="not both"):
+        await call(client, "select_phantom", sha256=CAS_ZIP, collection="demo-001", phantom="shapes.json")
+    r = await call(client, "select_phantom", sha256=CAS_ZIP.upper())
+    assert r["phantom"]["sha256"] == CAS_ZIP and r["phantom"]["name"].startswith(CAS_ZIP[:12])
+
+
+async def test_cas_phantom_in_patch_state_and_preview(client):
+    r = await call(
+        client, "patch_state", session_key=client.key, patch={"phantom": {"sha256": CAS_ZIP, "name": "x.zip"}}
+    )
+    assert r["state"]["phantom"] == {"sha256": CAS_ZIP, "name": "x.zip"}
+
+    r = await call(client, "open_phantom_preview", sha256=CAS_ZIP, plane="cor")
+    assert r["state"]["phantom"]["sha256"] == CAS_ZIP and r["state"]["view"]["plane"] == "cor"

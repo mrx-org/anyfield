@@ -33,7 +33,7 @@ Web-App: `/` (eigene Sessions), `/s/{key}` (eine Session, mit Ansicht des Zustan
 | Sessions (Login) | `list_sessions`, `create_session`, `rename_session`, `delete_session` |
 | Zustand | `get_state`, `patch_state` (JSON Merge Patch) |
 | FOV-Planer | `set_fov`, `move_fov`, `rotate_fov`, `open_fov_planner` |
-| Phantom (BIfTI) | `list_phantom_collections`, `list_phantoms`, `select_phantom`, `set_phantom_view`, `get_phantom_maps`, `open_phantom_browser`, `open_phantom_preview` |
+| Phantom (BIfTI) | `list_phantom_collections`, `list_phantoms`, `list_cas_phantoms`, `select_phantom`, `set_phantom_view`, `get_phantom_maps`, `open_phantom_browser`, `open_phantom_preview` |
 
 Der Session-Zustand ist ein kleines JSON nur mit der Auswahl, keine Daten:
 
@@ -47,7 +47,12 @@ Der Session-Zustand ist ein kleines JSON nur mit der Auswahl, keine Daten:
 ```
 
 `phantom: null` ist das Standard-Phantom `endres-brainweb-001` / `subj04-3T-1mm.json`
-(vom Gateway wie jedes andere). Karten und Wertebereiche liefert `get_phantom_maps`;
+(vom Gateway wie jedes andere). Statt eines Katalog-Phantoms `{collection, name}` kann
+`phantom` auch ein Phantom im CAS des Gateways sein: `{"sha256": "<hash>", "name": "x.zip"}`
+(ein bifti-`.zip`, hochgeladen oder von `bifti_get_phantom`). Der Hash ist die Berechtigung:
+Wer eine Session mit einem CAS-Phantom geteilt bekommt, sieht es, auch als `visitor`. Per
+`patch_state` beim Wechsel der Art das andere Feld auf `null` setzen (Merge Patch), z. B.
+`{"phantom": {"sha256": "…", "name": "x.zip", "collection": null}}`. Karten und Wertebereiche liefert `get_phantom_maps`;
 sie werden nicht gespeichert. `view` ist die Ansicht der Phantom-Vorschau (Eigenschaft;
 Ebene `tra`, `cor`, `sag` oder `3d`); der FOV-Planer zeigt vorerst immer PD.
 
@@ -56,6 +61,12 @@ arbeitet es auf der Session; ohne wählt der Nutzer lokal, jede Änderung geht a
 Kontext an das Modell (`updateModelContext`), „In den Chat“ schickt die Auswahl als
 Nachricht. `select_phantom` geht auch ohne Session (prüft nur die Wahl). Die Website
 zeigt unter `/s/{key}` beide Tools nebeneinander.
+
+Der Phantom-Browser hat zwei Reiter: **Katalog** (bifti-Registry) und **CAS**, die
+`.zip`-Dateien des Aufrufers aus `list_files` des Gateways (`list_cas_phantoms`), dazu das
+gewählte CAS-Phantom, auch wenn es nicht in den eigenen Dateien liegt. Ob ein Zip ein
+Phantom ist, zeigt sich erst beim Laden der Karten. Wer was listen darf (z. B. kein
+`list_files` für `visitor`), regelt das Gateway.
 
 Tools lassen sich verschachteln: Der Phantom-Browser enthält die Phantom-Vorschau
 (`open_phantom_preview`) zum Aufklappen. Zugeklappt (Standard, pro Gerät) wird sie nicht

@@ -1,7 +1,7 @@
-"""Phantom tools: browse the BIfTI catalog (MRX gateway) and choose a phantom
-(browser), and view it (preview: plane and property). With a session the choice
-is stored in its state; without one it goes back to the chat. Independent of the
-FOV planner."""
+"""Phantom tools: browse the BIfTI catalog and the caller's phantoms in the CAS
+(MRX gateway) and choose a phantom (browser), and view it (preview: plane and
+property). With a session the choice is stored in its state; without one it goes
+back to the chat. Independent of the FOV planner."""
 
 from __future__ import annotations
 
@@ -16,8 +16,16 @@ from fastmcp.exceptions import ToolError
 from pydantic import Field, ValidationError
 
 from . import fov as fov_ops
-from .models import Fov, PhantomChoice, Plane, Session, State, View
-from .phantoms import DEFAULT_PHANTOM, PROPERTY_KEYS, Catalog, PhantomError, PhantomMaps, public_maps
+from .models import CasPhantom, Fov, Phantom, PhantomChoice, Plane, Session, State, View
+from .phantoms import (
+    DEFAULT_PHANTOM,
+    PROPERTY_KEYS,
+    CasFiles,
+    Catalog,
+    PhantomError,
+    PhantomMaps,
+    public_maps,
+)
 
 PHANTOM_APP_URI = "ui://anyfield/phantom-browser.html"
 PREVIEW_APP_URI = "ui://anyfield/phantom-preview.html"
@@ -31,9 +39,22 @@ OptionalSessionKey = Annotated[
 PropertyArg = Annotated[
     str, Field(description=f"Property to show: one of {', '.join(PROPERTY_KEYS)} (if the phantom has it)")
 ]
-CollectionArg = Annotated[str, Field(description="Collection name from list_phantom_collections")]
+CollectionArg = Annotated[
+    str | None, Field(description="Registry phantom: collection name from list_phantom_collections")
+]
 PhantomArg = Annotated[
-    str, Field(description="Phantom file name from list_phantoms, e.g. 'subj04-3T-1mm.json'")
+    str | None,
+    Field(
+        description="Registry phantom: file name from list_phantoms, e.g. 'subj04-3T-1mm.json'. "
+        "With `sha256`: optional display name of the CAS phantom"
+    ),
+]
+Sha256Arg = Annotated[
+    str | None,
+    Field(
+        description="CAS phantom: hash of a bifti .zip in the CAS "
+        "(from list_cas_phantoms, an upload or bifti_get_phantom)"
+    ),
 ]
 MAX_MATRIX = 1024
 
@@ -54,12 +75,35 @@ async def check(catalog: Catalog, collection: str, name: str) -> None:
         raise ToolError(str(e)) from e
 
 
+async def resolve(
+    catalog: Catalog, collection: str | None, phantom: str | None, sha256: str | None
+) -> Phantom | None:
+    """The phantom the arguments name: a CAS phantom (`sha256`, `phantom` its
+    optional display name), a registry phantom (`collection` and `phantom`, checked
+    against the catalog) or `None` for none at all. ToolError for anything else."""
+    if sha256 is not None:
+        if collection is not None:
+            raise ToolError("Give either sha256 (CAS phantom) or collection and phantom, not both.")
+        try:
+            h = sha256.lower()
+            return CasPhantom(sha256=h, name=phantom or f"{h[:12]}….zip")
+        except ValidationError as e:
+            raise ToolError("sha256 must be the 64 hex digits of a file in the CAS.") from e
+    if collection is None and phantom is None:
+        return None
+    if collection is None or phantom is None:
+        raise ToolError("Give both collection and phantom (or sha256 for a phantom in the CAS).")
+    await check(catalog, collection, phantom)
+    return PhantomChoice(collection=collection, name=phantom)
+
+
 def register(
     mcp: FastMCP,
     ctx: Ctx,
     *,
     catalog: Catalog,
     maps: PhantomMaps,
+    cas: CasFiles,
     static_dir: Path | None,
 ) -> None:
     from .server import app_html
@@ -87,16 +131,30 @@ def register(
         groups ({group, default, phantoms}). Narrow large collections with `path`."""
         return await guard(catalog.phantoms(collection, path))
 
+    @mcp.tool(annotations={"readOnlyHint": True})
+    async def list_cas_phantoms() -> list[dict[str, Any]]:
+        """The caller's phantoms in the gateway's CAS (uploads and bifti_get_phantom
+        results): the bifti .zip files among their files, newest first, each with
+        `sha256`, `name`, `size` and `uploaded_at`. Choose one with select_phantom
+        (`sha256`); a zip that is no phantom fails when its maps are loaded."""
+        return await guard(cas.phantoms())
+
     @mcp.tool
     async def select_phantom(
-        collection: CollectionArg, phantom: PhantomArg, session_key: OptionalSessionKey = None
+        collection: CollectionArg = None,
+        phantom: PhantomArg = None,
+        sha256: Sha256Arg = None,
+        session_key: OptionalSessionKey = None,
     ) -> dict[str, Any]:
-        """Choose a phantom of the catalog. With a session it becomes the session's
-        phantom (state field `phantom`); the property shown stays. Returns the choice.
-        Its maps and value ranges: get_phantom_maps."""
-        choice = PhantomChoice(collection=collection, name=phantom)
+        """Choose a phantom: one of the catalog (`collection` and `phantom`) or one in
+        the CAS (`sha256`, optionally `phantom` as its display name). With a session it
+        becomes the session's phantom (state field `phantom`), and everyone with the
+        session key sees it; the view stays. Returns the choice. Its maps and value
+        ranges: get_phantom_maps. The default phantom: patch_state {"phantom": null}."""
+        choice = await resolve(catalog, collection, phantom, sha256)
+        if choice is None:
+            raise ToolError("Give collection and phantom, or sha256 for a phantom in the CAS.")
         if session_key is None:
-            await check(catalog, collection, phantom)
             return {"phantom": choice.model_dump()}
         session = await ctx.change(session_key, lambda st: st.model_copy(update={"phantom": choice}))
         return {"rev": session.rev, "phantom": choice.model_dump()}
@@ -121,10 +179,9 @@ def register(
 
     @mcp.tool(annotations={"readOnlyHint": True})
     async def get_phantom_maps(
-        collection: Annotated[
-            str | None, Field(description="Collection; omit for the default phantom")
-        ] = None,
-        phantom: Annotated[str | None, Field(description="Phantom file name; omit for the default")] = None,
+        collection: CollectionArg = None,
+        phantom: PhantomArg = None,
+        sha256: Sha256Arg = None,
         fov: Annotated[
             dict[str, Any] | None,
             Field(
@@ -139,15 +196,13 @@ def register(
     ) -> dict[str, Any]:
         """Display maps of a phantom from the MRX gateway: one NIfTI per property (PD,
         T1, T2, ...; tissues combined) with label, unit, value range (2nd/98th
-        percentile) and a URL that loads without login. Without a phantom: the
-        default phantom (endres-brainweb-001 / subj04-3T-1mm.json). With `fov` the
+        percentile) and a URL that loads without login. The phantom: one of the
+        catalog (`collection`, `phantom`), one in the CAS (`sha256`) or, without
+        either, the default one (endres-brainweb-001 / subj04-3T-1mm.json). With `fov` the
         maps are on the scan grid (FOV and matrix), as the planned scan would see
         the phantom. The first call for a phantom or grid can take up to a minute."""
-        if (collection is None) != (phantom is None):
-            raise ToolError("Give both collection and phantom, or neither for the default phantom.")
-        choice = PhantomChoice(collection=collection, name=phantom) if collection else DEFAULT_PHANTOM
-        if collection is not None:
-            await check(catalog, collection, phantom)
+        chosen = await resolve(catalog, collection, phantom, sha256)
+        choice = chosen or DEFAULT_PHANTOM
         try:
             if fov is None:
                 raw = await maps.get(choice)
@@ -160,12 +215,12 @@ def register(
                 raw = await maps.on_fov(choice, f, m)
         except (ValueError, ValidationError) as e:
             raise ToolError(str(e)) from e
-        return public_maps(raw, choice, default=collection is None)
+        return public_maps(raw, choice, default=chosen is None)
 
     @mcp.tool(app=AppConfig(resource_uri=PHANTOM_APP_URI), annotations={"readOnlyHint": True})
     async def open_phantom_browser(session_key: OptionalSessionKey = None) -> dict[str, Any]:
-        """Show the interactive phantom browser (catalog and selection, with the phantom
-        preview to fold out). With a session the choice goes into the session; without
+        """Show the interactive phantom browser (catalog and the user's CAS phantoms,
+        selection, with the phantom preview to fold out). With a session the choice goes into the session; without
         one the user picks and the choice comes back to the chat. In clients without
         MCP Apps this returns the state."""
         return await ctx.opened(session_key)
@@ -173,12 +228,9 @@ def register(
     @mcp.tool(app=AppConfig(resource_uri=PREVIEW_APP_URI), annotations={"readOnlyHint": True})
     async def open_phantom_preview(
         session_key: OptionalSessionKey = None,
-        collection: Annotated[
-            str | None, Field(description="Without a session: collection of the phantom to show")
-        ] = None,
-        phantom: Annotated[
-            str | None, Field(description="Without a session: phantom file name, e.g. 'subj04-3T-1mm.json'")
-        ] = None,
+        collection: CollectionArg = None,
+        phantom: PhantomArg = None,
+        sha256: Sha256Arg = None,
         property: Annotated[
             str | None,
             Field(description=f"Without a session: property to start with ({', '.join(PROPERTY_KEYS)})"),
@@ -191,25 +243,29 @@ def register(
         cor, sag, 3D) and the property (PD, T1, T2, ...) to pick.
         With a session: the session's phantom and view (state field `view`), edited
         there; leave out the other arguments.
-        Without a session: a quick look at any phantom of the catalog - give
-        `collection` and `phantom` (from list_phantoms), optionally the property and
-        plane to start with; the view the user ends up with comes back to the chat.
+        Without a session: a quick look at any phantom - give `collection` and
+        `phantom` (from list_phantoms) or `sha256` (a phantom in the CAS), optionally
+        the property and plane to start with; the view the user ends up with comes
+        back to the chat.
         In clients without MCP Apps this returns the state."""
         if session_key is not None:
-            if any(v is not None for v in (collection, phantom, property, plane)):
+            if any(v is not None for v in (collection, phantom, sha256, property, plane)):
                 raise ToolError(
                     "With a session the preview shows the session's phantom and view: leave out "
-                    "collection, phantom, property and plane (change them with select_phantom and "
-                    "set_phantom_view)."
+                    "collection, phantom, sha256, property and plane (change them with select_phantom "
+                    "and set_phantom_view)."
                 )
             return await ctx.opened(session_key)
-        if collection is None or phantom is None:
-            raise ToolError("Without a session give collection and phantom (from list_phantoms).")
         if property is not None and property not in PROPERTY_KEYS:
             raise ToolError(f"Unknown property {property!r}. Known: {', '.join(PROPERTY_KEYS)}")
-        await check(catalog, collection, phantom)
+        choice = await resolve(catalog, collection, phantom, sha256)
+        if choice is None:
+            raise ToolError(
+                "Without a session give collection and phantom (from list_phantoms), or sha256 "
+                "for a phantom in the CAS."
+            )
         view = View(**{k: v for k, v in {"property": property, "plane": plane}.items() if v is not None})
-        state = State(phantom=PhantomChoice(collection=collection, name=phantom), view=view)
+        state = State(phantom=choice, view=view)
         return {"key": None, "state": state.model_dump()}
 
     app_html(mcp, PHANTOM_APP_URI, "Phantom browser", "phantom-app.html", ctx.base_url, static_dir)

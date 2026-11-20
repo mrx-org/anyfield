@@ -1,11 +1,18 @@
-import type { State, Vec3 } from "../lib/types";
+import { isCas } from "../lib/phantom";
+import type { PhantomChoice, State, Vec3 } from "../lib/types";
 
 const v = (x: Vec3) => `(${x.map((n) => Math.round(n * 10) / 10).join(", ")})`;
 
+const describe = (p: PhantomChoice | null) =>
+  !p
+    ? "the default phantom (subj04-3T-1mm.json, collection endres-brainweb-001)"
+    : isCas(p)
+      ? `${p.name} (in the CAS, sha256 ${p.sha256})`
+      : `${p.name} (collection ${p.collection})`;
+
 /** What the phantom browser hands back to the chat. */
 export function phantomSummary(s: State): string {
-  const p = s.phantom;
-  const name = p ? `${p.name} (collection ${p.collection})` : "the default phantom (subj04-3T-1mm.json, collection endres-brainweb-001)";
+  const name = describe(s.phantom);
   return `Chosen phantom: ${name}.`;
 }
 
@@ -13,8 +20,7 @@ const PLANES = { tra: "transversal", cor: "coronal", sag: "sagittal", "3d": "3D 
 
 /** What the phantom preview hands back to the chat. */
 export function previewSummary(s: State): string {
-  const p = s.phantom;
-  const name = p ? `${p.name} (collection ${p.collection})` : "the default phantom (subj04-3T-1mm.json)";
+  const name = describe(s.phantom);
   return `Phantom preview of ${name}: property ${s.view.property}, ${PLANES[s.view.plane]} view.`;
 }
 

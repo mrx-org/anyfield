@@ -1,22 +1,27 @@
 <script lang="ts">
-  // The phantom browser: browse the BIfTI catalog (gateway) and pick a phantom.
+  // The phantom browser: browse the BIfTI catalog or the phantoms in the gateway's
+  // CAS and pick one. The CAS tab lists the caller's .zip files plus the chosen CAS
+  // phantom, so whoever opens a shared session sees it even if it is not theirs.
   // Bound to a Selection: a session or local (MCP App without session, result back
   // to the chat). The phantom preview folds out below the choice; folded (the
   // default) it is not rendered, so changing the phantom loads no maps here.
   import {
     Collapsible,
+    Tabs,
     TreeView,
     createTreeViewCollection,
     type TreeViewRootProps,
   } from "@skeletonlabs/skeleton-svelte";
   import { onMount } from "svelte";
+  import { isCas, phantomPatch, phantomSource } from "../../phantom";
   import { DEFAULT_PHANTOM } from "../../state/patch";
   import type { Selection } from "../../state/selection";
-  import type { PhantomChoice, PhantomCollection, PhantomTree } from "../../types";
+  import type { CasPhantomEntry, CatalogPhantom, PhantomCollection, PhantomTree } from "../../types";
   import ToolFrame from "../ToolFrame.svelte";
   import PhantomPreview from "./PhantomPreview.svelte";
   import ChevronRight from "@lucide/svelte/icons/chevron-right";
   import LoaderCircle from "@lucide/svelte/icons/loader-circle";
+  import RefreshCw from "@lucide/svelte/icons/refresh-cw";
 
   let { sel }: { sel: Selection } = $props();
 
@@ -50,13 +55,54 @@
   const phantom = $derived(sel.state?.phantom ?? null);
   // The phantom chosen: for `phantom: null` the default one
   const current = $derived(sel.state ? (phantom ?? DEFAULT_PHANTOM) : null);
-  const selected = $derived(current ? find(tree.rootNode.children ?? [], current).map((n) => n.id) : []);
+  const currentCas = $derived(current && isCas(current) ? current : null);
+  const currentCatalog = $derived(current && !isCas(current) ? current : null);
+  const selected = $derived(currentCatalog ? find(tree.rootNode.children ?? [], currentCatalog).map((n) => n.id) : []);
   let revealed: string | null = null;
+
+  /** Open tab: per view, follows the kind of phantom chosen (here, by the AI, elsewhere). */
+  let tab = $state<"catalog" | "cas">("catalog");
+  let casList = $state<CasPhantomEntry[] | null>(null);
+  let casLoading = $state(false);
+  let casError = $state<string | null>(null);
+  // The CAS phantom chosen comes first, also when it is not among the caller's files
+  const casShown = $derived.by(() => {
+    const own = casList ?? [];
+    if (!currentCas || own.some((e) => e.sha256 === currentCas.sha256)) return own;
+    return [{ ...currentCas, size: null, uploaded_at: null }, ...own];
+  });
+  let kindShown: string | null = null;
 
   // Whenever another phantom is chosen (here, by the AI, on another device), open the tree to it.
   $effect(() => {
-    if (loaded && current) void reveal(current);
+    if (loaded && currentCatalog) void reveal(currentCatalog);
   });
+
+  // ... and the tab of its kind, once per change of kind
+  $effect(() => {
+    if (!current) return;
+    const kind = isCas(current) ? "cas" : "catalog";
+    if (kind === kindShown) return;
+    kindShown = kind;
+    tab = kind;
+  });
+
+  // The CAS list loads when its tab is first shown
+  $effect(() => {
+    if (tab === "cas" && casList === null && !casLoading && !casError) void loadCas();
+  });
+
+  async function loadCas() {
+    casLoading = true;
+    casError = null;
+    try {
+      casList = await sel.client.listCasPhantoms();
+    } catch (e) {
+      casError = message(e);
+    } finally {
+      casLoading = false;
+    }
+  }
 
   onMount(async () => {
     try {
@@ -67,7 +113,7 @@
     }
   });
 
-  async function reveal(choice: PhantomChoice) {
+  async function reveal(choice: CatalogPhantom) {
     const id = `${choice.collection}/${choice.name}`;
     if (revealed === id) return;
     revealed = id;
@@ -121,7 +167,7 @@
   }
 
   /** The phantom nodes for a choice (a file may appear in several groups). */
-  function find(nodes: Node[], choice: PhantomChoice): Node[] {
+  function find(nodes: Node[], choice: CatalogPhantom): Node[] {
     return nodes.flatMap((n) =>
       n.kind === "phantom" && n.collection === choice.collection && n.file === choice.name
         ? [n]
@@ -144,9 +190,17 @@
 
   function choose(name: string | undefined, collection: string) {
     if (!name) return;
-    if (phantom?.collection === collection && phantom.name === name) return;
-    sel.patch({ phantom: { collection, name } });
+    if (currentCatalog === phantom && phantom?.collection === collection && phantom.name === name) return;
+    sel.patch({ phantom: phantomPatch({ collection, name }) });
   }
+
+  function chooseCas(entry: CasPhantomEntry) {
+    if (currentCas?.sha256 === entry.sha256) return;
+    sel.patch({ phantom: phantomPatch({ sha256: entry.sha256, name: entry.name }) });
+  }
+
+  const size = (n: number | null) =>
+    n === null ? "" : n >= 1e6 ? `${(n / 1e6).toFixed(1)} MB` : n >= 1e3 ? `${(n / 1e3).toFixed(0)} kB` : `${n} B`;
 
   const message = (e: unknown) => (e instanceof Error ? e.message : String(e));
 </script>
@@ -157,11 +211,11 @@
     {#if sel.state}
       <div class="flex items-baseline gap-2">
         <span class="truncate font-medium" title={current?.name}>
-          {current?.name.replace(/\.json$/, "")}{#if !phantom}<span
+          {current?.name.replace(/\.(json|zip)$/, "")}{#if !phantom}<span
               class="ml-1 text-xs font-normal text-muted">(Standard)</span>{/if}
         </span>
       </div>
-      {#if current}<span class="-mt-1 text-xs text-muted">{current.collection}</span>{/if}
+      {#if current}<span class="-mt-1 truncate text-xs text-muted" title={currentCas?.sha256}>{phantomSource(current)}</span>{/if}
       <Collapsible open={previewOpen} onOpenChange={(d) => (previewOpen = d.open)}>
         <Collapsible.Trigger class="btn btn-sm preset-outlined-surface-300-700 w-full justify-start text-xs">
           <ChevronRight class="size-4 transition-transform {previewOpen ? 'rotate-90' : ''}" aria-hidden="true" />
@@ -176,6 +230,13 @@
     {#if sel.error}<p class="text-xs text-error-500">{sel.error}</p>{/if}
   </section>
 
+  <Tabs value={tab} onValueChange={(d) => (tab = d.value as "catalog" | "cas")}>
+    <Tabs.List class="text-xs">
+      <Tabs.Trigger value="catalog">Katalog</Tabs.Trigger>
+      <Tabs.Trigger value="cas">CAS</Tabs.Trigger>
+      <Tabs.Indicator />
+    </Tabs.List>
+  <Tabs.Content value="catalog">
   <section class="flex flex-col gap-1">
     {#if loadError}<p class="text-xs text-error-500">{loadError}</p>{/if}
     {#if !loaded && !loadError}<p class="text-xs text-muted">Lade Katalog …</p>{/if}
@@ -195,7 +256,6 @@
         if (n?.kind === "phantom") choose(n.file, n.collection);
       }}
     >
-      <TreeView.Label class="text-xs font-semibold uppercase tracking-wide text-muted">Katalog</TreeView.Label>
       <TreeView.Tree class="w-full text-xs">
         {#each tree.rootNode.children ?? [] as node, index (node.id)}
           {@render treeNode(node, [index])}
@@ -203,6 +263,37 @@
       </TreeView.Tree>
     </TreeView>
   </section>
+  </Tabs.Content>
+  <Tabs.Content value="cas">
+    <section class="flex flex-col gap-1 text-xs">
+      <div class="flex items-center gap-2">
+        <span class="flex-1 text-muted">Phantome (bifti .zip) in deinen Dateien</span>
+        <button class="btn-icon btn-icon-sm" title="Aktualisieren" aria-label="Aktualisieren" disabled={casLoading} onclick={loadCas}>
+          <RefreshCw class="size-4 {casLoading ? 'animate-spin' : ''}" />
+        </button>
+      </div>
+      {#if casError}<p class="text-error-500">{casError}</p>{/if}
+      {#if casLoading && casList === null}<p class="text-muted">Lade CAS …</p>{/if}
+      <ul class="flex flex-col">
+        {#each casShown as e (e.sha256)}
+          <li>
+            <button
+              class="flex w-full items-baseline gap-2 rounded px-2 py-1 text-left hover:preset-tonal {currentCas?.sha256 === e.sha256 ? 'preset-tonal-primary' : ''}"
+              title="{e.name} · sha256 {e.sha256}"
+              aria-pressed={currentCas?.sha256 === e.sha256}
+              onclick={() => chooseCas(e)}
+            >
+              <span class="min-w-0 flex-1 truncate">{e.name}</span>
+              <span class="shrink-0 text-muted">{e.uploaded_at === null ? "aus der Session" : size(e.size)}</span>
+            </button>
+          </li>
+        {:else}
+          {#if casList !== null}<li class="px-2 py-1 text-muted">Keine Phantome im CAS.</li>{/if}
+        {/each}
+      </ul>
+    </section>
+  </Tabs.Content>
+  </Tabs>
 </div>
 
 {#snippet treeNode(node: Node, indexPath: number[])}

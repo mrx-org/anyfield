@@ -1,10 +1,11 @@
 import { describe, expect, it } from "vitest";
 import { AnyfieldClient } from "../client/anyfield";
 import { MockTransport } from "../client/mock";
-import type { ScanGrid } from "../types";
+import type { ScanGrid, StatePatch } from "../types";
 import { LocalSelection } from "./local.svelte";
 import { niftiName } from "./maps.svelte";
-import { mergePatch } from "./patch";
+import { composePatch, mergePatch } from "./patch";
+import { phantomPatch } from "../phantom";
 import { SessionStore } from "./session.svelte";
 
 const setup = () => {
@@ -119,5 +120,41 @@ describe("niftiName", () => {
   it("gives gateway URLs (a bare hash) a NIfTI extension", () => {
     expect(niftiName("https://gw.test/files/abc123")).toBe("abc123.nii.gz");
     expect(niftiName("https://x.test/a/T1.nii.gz")).toBe("T1.nii.gz");
+  });
+});
+
+describe("phantom kinds", () => {
+  const cas = { sha256: "a".repeat(64), name: "mine.zip" };
+
+  it("composes patches and keeps their nulls", () => {
+    const p = composePatch<StatePatch>({ phantom: phantomPatch({ collection: "c", name: "p.json" }) }, {
+      phantom: phantomPatch(cas),
+    });
+    expect(p).toEqual({ phantom: { sha256: cas.sha256, name: "mine.zip", collection: null } });
+    expect(composePatch<StatePatch>({ phantom: null }, { view: { plane: "cor" } })).toEqual({
+      phantom: null,
+      view: { plane: "cor" },
+    });
+  });
+
+  it("switches a session from a catalog to a CAS phantom and back", async () => {
+    const { t, store } = setup();
+    await store.refresh();
+    store.patch({ phantom: phantomPatch({ collection: "c", name: "p.json" }) });
+    store.patch({ phantom: phantomPatch(cas) }); // before the first commit: both in one patch
+    expect(store.state?.phantom).toEqual(cas);
+    await store.settled();
+    expect(t.sessions.get("mock-key")?.state.phantom).toEqual(cas);
+
+    store.patch({ phantom: phantomPatch({ collection: "c", name: "p.json" }) });
+    await store.settled();
+    expect(t.sessions.get("mock-key")?.state.phantom).toEqual({ collection: "c", name: "p.json" });
+  });
+
+  it("asks the gateway for a CAS phantom's maps by its hash", async () => {
+    const t = new MockTransport();
+    const maps = await new AnyfieldClient(t).getPhantomMaps(cas);
+    expect(t.calls.at(-1)?.args).toEqual({ sha256: cas.sha256 });
+    expect(maps.default).toBe(false);
   });
 });

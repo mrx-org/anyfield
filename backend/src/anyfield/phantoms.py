@@ -1,6 +1,7 @@
 """BIfTI phantoms, all from the MRX gateway: the catalog (`bifti_list_collections`,
-`bifti_list_phantoms`) and the display maps of a phantom (`bifti_get_property_maps`).
-anyfield keeps no phantom data of its own; it only shows what the gateway returns.
+`bifti_list_phantoms`), the caller's phantoms in the CAS (`list_files`) and the
+display maps of a phantom (`bifti_get_property_maps`). anyfield keeps no phantom
+data of its own; it only shows what the gateway returns.
 """
 
 from __future__ import annotations
@@ -15,7 +16,7 @@ from typing import Any
 import numpy as np
 
 from .fov import rotation_matrix
-from .models import Fov, Int3, PhantomChoice
+from .models import CasPhantom, Fov, Int3, Phantom, PhantomChoice
 
 # What `phantom: null` in the state stands for
 DEFAULT_PHANTOM = PhantomChoice(collection="endres-brainweb-001", name="subj04-3T-1mm.json")
@@ -111,6 +112,37 @@ class Catalog(_Cached):
             raise PhantomError(f"No phantom {name!r} in {collection!r}")
 
 
+# --- Phantoms in the CAS ----------------------------------------------------------
+
+
+class CasFiles:
+    """The caller's bifti phantoms in the gateway's CAS: the `.zip` files of
+    `list_files`. Not cached: the answer depends on who asks. Whether a zip really
+    is a phantom shows only when its maps are loaded."""
+
+    def __init__(self, call: Call | None) -> None:
+        self._call = call
+
+    async def phantoms(self) -> list[dict[str, Any]]:
+        """`{sha256, name, size, uploaded_at}` per phantom, newest first."""
+        if self._call is None:
+            raise PhantomError("The MRX gateway is not available on this server.")
+        files = await self._call("list_files", {})
+        if isinstance(files, dict):
+            files = files.get("result", files.get("files", []))
+        seen: dict[str, dict[str, Any]] = {}
+        for f in files or []:
+            name, sha = str(f.get("name", "")), str(f.get("hash", ""))
+            if sha and sha not in seen and (name.lower().endswith(".zip") or "zip" in str(f.get("type", ""))):
+                seen[sha] = {
+                    "sha256": sha,
+                    "name": name,
+                    "size": f.get("size"),
+                    "uploaded_at": f.get("uploaded_at"),
+                }
+        return sorted(seen.values(), key=lambda p: str(p["uploaded_at"] or ""), reverse=True)
+
+
 # --- Display maps ---------------------------------------------------------------
 
 
@@ -149,19 +181,22 @@ class PhantomMaps(_Cached):
     def __init__(self, call: Call | None, ttl_s: float = 600) -> None:
         super().__init__(call, ttl_s)
 
-    async def get(self, choice: PhantomChoice, grid: list[list[float]] | None = None, matrix=None):
-        args: dict[str, Any] = {"collection": choice.collection, "phantom": {"file_name": choice.name}}
+    async def get(self, choice: Phantom, grid: list[list[float]] | None = None, matrix=None):
+        if isinstance(choice, CasPhantom):
+            args: dict[str, Any] = {"phantom": {"sha256": choice.sha256}}
+        else:
+            args = {"collection": choice.collection, "phantom": {"file_name": choice.name}}
         if grid is not None:
             args["grid"] = {"affine": grid, "resolution": list(matrix)}
         return await self._cached("bifti_get_property_maps", args)
 
-    async def on_fov(self, choice: PhantomChoice, fov: Fov, matrix: Int3) -> dict[str, Any]:
+    async def on_fov(self, choice: Phantom, fov: Fov, matrix: Int3) -> dict[str, Any]:
         """The maps resampled onto the planned scan grid (FOV and matrix)."""
         native = await self.get(choice)
         return await self.get(choice, to_phantom_frame(native, fov_affine(fov, matrix)), matrix)
 
 
-def public_maps(raw: dict[str, Any], choice: PhantomChoice, default: bool) -> dict[str, Any]:
+def public_maps(raw: dict[str, Any], choice: Phantom, default: bool) -> dict[str, Any]:
     """What `get_phantom_maps` returns: the grid and per property what a viewer needs."""
     keep = ("key", "label", "unit", "range", "url")
     return {

@@ -40,6 +40,20 @@ class PhantomChoice(BaseModel):
     name: str = Field(description="Phantom file name, e.g. 'subj04-3T-1mm.json'")
 
 
+class CasPhantom(BaseModel):
+    """A phantom in the gateway's CAS: a bifti .zip (an upload or a get_phantom
+    result). The hash is the permission: whoever has it (e.g. in a shared
+    session) can see the phantom, whatever their own files are."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    sha256: str = Field(pattern=r"^[0-9a-f]{64}$", description="Hash of the phantom's .zip in the CAS")
+    name: str = Field(description="File name, for display only, e.g. 'my-phantom.zip'")
+
+
+Phantom = PhantomChoice | CasPhantom
+
+
 Plane = Literal["tra", "cor", "sag", "3d"]
 
 
@@ -53,12 +67,13 @@ class View(BaseModel):
 
 
 class State(BaseModel):
-    """What the user (or the AI) chose. `phantom=None` is the default phantom
-    (`phantoms.DEFAULT_PHANTOM`, from the gateway like every other)."""
+    """What the user (or the AI) chose. `phantom` is a registry phantom
+    ({collection, name}) or one in the CAS ({sha256, name}); `None` is the default
+    phantom (`phantoms.DEFAULT_PHANTOM`, from the gateway like every other)."""
 
     model_config = ConfigDict(extra="forbid")
 
-    phantom: PhantomChoice | None = None
+    phantom: Phantom | None = None
     view: View = Field(default_factory=View)
     fov: Fov = Field(default_factory=Fov)
     matrix: Int3 = Field(default=(128, 128, 1), description="Resolution (x, y, z) of the planned scan")

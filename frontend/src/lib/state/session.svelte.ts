@@ -1,6 +1,6 @@
 import type { AnyfieldClient } from "../client/anyfield";
 import type { Session, State, StatePatch } from "../types";
-import { applyPatch, mergePatch } from "./patch";
+import { applyPatch, composePatch } from "./patch";
 import type { Selection } from "./selection";
 
 export interface SessionStoreOptions {
@@ -85,9 +85,9 @@ export class SessionStore implements Selection {
   /** Change the state locally right away; commit to the server throttled. */
   patch(patch: StatePatch): void {
     if (!this.server) return;
-    this.pending = mergePatch(this.pending ? ($state.snapshot(this.pending) as StatePatch) : {}, patch) as StatePatch;
-    // A removed phantom must stay a `null` in the patch, not vanish from it
-    if (patch.phantom === null) this.pending = { ...this.pending, phantom: null };
+    // Composed, not merged: a `null` (removed phantom, or the field of the other kind
+    // of phantom) must stay in the patch, not vanish from it
+    this.pending = composePatch(this.pending ? ($state.snapshot(this.pending) as StatePatch) : {}, patch);
     this.scheduleCommit();
   }
 
