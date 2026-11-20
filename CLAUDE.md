@@ -17,5 +17,6 @@ https://linear.app/mrx-org/issue/MRX-71/studie-anyfield-redesign-v4-mit-mcp-stat
 - Aufbau, Befehle und Deployment: siehe `README.md`.
 - Vor jedem Commit: `pnpm check && pnpm test` (frontend), `uv run ruff check src tests && uv run ruff format --check src tests && uv run pytest` (backend).
 - Betrieb nur auf Modal; `python -m anyfield` ist nur ein Testserver.
+- UI lokal testen (auch Phantom-Selektor mit Gateway-Aufrufen): kein Deploy, kein OAuth. Erster Tipp: persönlichen Gateway-API-Key (`https://mcp.anyfield.net/keys`) als `MRX_VISITOR_KEY` setzen, `uv run -m anyfield` + `pnpm dev`, dann `/dev/app-host.html?tool=open_phantom_browser`. Den echten Visitor-Key nicht rotieren (siehe README, „Entwickeln“).
 - Komponenten sprechen nie direkt MCP, sondern über `Transport`/`AnyfieldClient` und hängen an einer `Selection` (`SessionStore` oder `LocalSelection`), nie direkt an einer Session.
 - anyfield ist nur UI: Daten und Rechnen liegen bei den MRX-MCP-Tools des Gateways (`GatewayClient`). Der Session-Zustand enthält nur die Auswahl.

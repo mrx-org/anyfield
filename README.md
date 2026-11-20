@@ -92,14 +92,27 @@ frontend/  Svelte 5, TypeScript, Vite, NiiVue
 ```sh
 cd frontend && pnpm install && pnpm build      # dist/ wird vom Backend ausgeliefert
 cd backend && uv run pytest                    # Tests
-cd backend && uv run python -m anyfield        # Testserver im Speicher, ohne Login (Nutzer "dev")
+cd backend && uv run -m anyfield               # Testserver im Speicher, ohne Login (Nutzer "dev")
 cd frontend && pnpm dev                        # Web-App mit Hot Reload, Proxy auf den Testserver
 # MCP App testen: http://localhost:5173/dev/app-host.html[?key=<session key>][&tool=open_phantom_browser]
 ```
 
 Der Testserver ist nur für Tests und Frontend-Entwicklung; betrieben wird nur auf Modal.
 Phantom-Katalog und Karten gibt es dort nur mit `MRX_VISITOR_KEY` in der Umgebung
-(Aufrufe ans echte Gateway als `visitor`).
+(Aufrufe ans echte Gateway). Lokal kein OAuth und keinen eigenen Visitor-Key nötig:
+einfach den **persönlichen API-Key** des Gateways eintragen (einmal angezeigt, erzeugen
+unter `https://mcp.anyfield.net/keys`). Der Server schickt ihn als Bearer-Token, die
+Gateway-Aufrufe laufen dann als du statt als `visitor`:
+
+```powershell
+$env:MRX_VISITOR_KEY = "mrx_..."   # sh: export MRX_VISITOR_KEY=mrx_...
+cd backend; uv run -m anyfield
+```
+
+Den echten Visitor-Key (Modal-Secret `mrx-visitor`) nicht dafür rotieren: Gateway und
+anyfield teilen ihn, ein neuer Wert braucht einen Deploy beider Apps.
+
+pnpm fehlt (Node ≥ 25 hat kein Corepack mehr): `npm install -g pnpm@10.28.0`.
 
 ## Deployment
 
