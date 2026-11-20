@@ -16,7 +16,7 @@ from fastmcp.exceptions import ToolError
 from pydantic import Field, ValidationError
 
 from . import fov as fov_ops
-from .models import Fov, PhantomChoice, Plane, Session
+from .models import Fov, PhantomChoice, Plane, Session, State, View
 from .phantoms import DEFAULT_PHANTOM, PROPERTY_KEYS, Catalog, PhantomError, PhantomMaps, public_maps
 
 PHANTOM_APP_URI = "ui://anyfield/phantom-browser.html"
@@ -171,12 +171,46 @@ def register(
         return await ctx.opened(session_key)
 
     @mcp.tool(app=AppConfig(resource_uri=PREVIEW_APP_URI), annotations={"readOnlyHint": True})
-    async def open_phantom_preview(session_key: OptionalSessionKey = None) -> dict[str, Any]:
-        """Show the phantom preview: a large view of the chosen phantom, with the plane
-        (tra, cor, sag, 3D) and the property (PD, T1, T2, ...) to pick. With a session
-        it shows and edits the session's view (state field `view`); without one the
-        view comes back to the chat. In clients without MCP Apps this returns the state."""
-        return await ctx.opened(session_key)
+    async def open_phantom_preview(
+        session_key: OptionalSessionKey = None,
+        collection: Annotated[
+            str | None, Field(description="Without a session: collection of the phantom to show")
+        ] = None,
+        phantom: Annotated[
+            str | None, Field(description="Without a session: phantom file name, e.g. 'subj04-3T-1mm.json'")
+        ] = None,
+        property: Annotated[
+            str | None,
+            Field(description=f"Without a session: property to start with ({', '.join(PROPERTY_KEYS)})"),
+        ] = None,
+        plane: Annotated[
+            Plane | None, Field(description="Without a session: tra, cor, sag or 3d to start with")
+        ] = None,
+    ) -> dict[str, Any]:
+        """Show the phantom preview: a large view of a phantom, with the plane (tra,
+        cor, sag, 3D) and the property (PD, T1, T2, ...) to pick.
+        With a session: the session's phantom and view (state field `view`), edited
+        there; leave out the other arguments.
+        Without a session: a quick look at any phantom of the catalog - give
+        `collection` and `phantom` (from list_phantoms), optionally the property and
+        plane to start with; the view the user ends up with comes back to the chat.
+        In clients without MCP Apps this returns the state."""
+        if session_key is not None:
+            if any(v is not None for v in (collection, phantom, property, plane)):
+                raise ToolError(
+                    "With a session the preview shows the session's phantom and view: leave out "
+                    "collection, phantom, property and plane (change them with select_phantom and "
+                    "set_phantom_view)."
+                )
+            return await ctx.opened(session_key)
+        if collection is None or phantom is None:
+            raise ToolError("Without a session give collection and phantom (from list_phantoms).")
+        if property is not None and property not in PROPERTY_KEYS:
+            raise ToolError(f"Unknown property {property!r}. Known: {', '.join(PROPERTY_KEYS)}")
+        await check(catalog, collection, phantom)
+        view = View(**{k: v for k, v in {"property": property, "plane": plane}.items() if v is not None})
+        state = State(phantom=PhantomChoice(collection=collection, name=phantom), view=view)
+        return {"key": None, "state": state.model_dump()}
 
     app_html(mcp, PHANTOM_APP_URI, "Phantom browser", "phantom-app.html", ctx.base_url, static_dir)
     app_html(mcp, PREVIEW_APP_URI, "Phantom preview", "phantom-preview-app.html", ctx.base_url, static_dir)

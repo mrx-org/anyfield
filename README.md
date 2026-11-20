@@ -62,6 +62,12 @@ Tools lassen sich verschachteln: Der Phantom-Browser enthält die Phantom-Vorsch
 gerendert und lädt keine Karten; so lässt sich das Phantom einer Session z. B. vom Handy
 aus wechseln, ohne es dort zu laden.
 
+`open_phantom_preview` ohne Session ist ein schneller Blick auf ein beliebiges Phantom:
+Die KI gibt `collection` und `phantom` an (Pflicht), optional `property` und `plane` zum
+Start. Mit Session zeigt es Phantom und Ansicht der Session, die anderen Argumente
+entfallen. Im Test-Host werden weitere Query-Parameter zu Tool-Argumenten, z. B.
+`/dev/app-host.html?tool=open_phantom_preview&collection=endres-brainweb-001&phantom=subj04-3T-1mm.json&plane=cor`.
+
 anyfield hält keine Phantomdaten. Katalog und Karten liefern die bifti-Tools des
 MRX-Gateways (`bifti_list_collections`, `bifti_list_phantoms`,
 `bifti_get_property_maps`). Gateway-Aufrufe laufen mit Login als der Nutzer (Token

@@ -227,3 +227,31 @@ async def test_phantom_browser_is_an_app(client):
     tools = {t.name: t for t in await client.list_tools()}
     assert tools["open_phantom_browser"].meta["ui"]["resourceUri"] == "ui://anyfield/phantom-browser.html"
     assert tools["open_phantom_preview"].meta["ui"]["resourceUri"] == "ui://anyfield/phantom-preview.html"
+
+
+async def test_phantom_preview_without_session_needs_a_phantom(client):
+    with pytest.raises(ToolError, match="give collection and phantom"):
+        await call(client, "open_phantom_preview")
+    with pytest.raises(ToolError, match="No phantom"):
+        await call(client, "open_phantom_preview", collection="demo-001", phantom="nope.json")
+    with pytest.raises(ToolError, match="Unknown property"):
+        await call(client, "open_phantom_preview", collection="demo-001", phantom="shapes.json", property="x")
+
+    r = await call(
+        client,
+        "open_phantom_preview",
+        collection="demo-001",
+        phantom="shapes.json",
+        property="T2",
+        plane="sag",
+    )
+    assert r["key"] is None
+    assert r["state"]["phantom"] == {"collection": "demo-001", "name": "shapes.json"}
+    assert r["state"]["view"] == {"property": "T2", "plane": "sag"}
+
+
+async def test_phantom_preview_with_session_shows_the_session(client):
+    r = await call(client, "open_phantom_preview", session_key=client.key)
+    assert r["key"] == client.key
+    with pytest.raises(ToolError, match="leave out"):
+        await call(client, "open_phantom_preview", session_key=client.key, phantom="shapes.json")

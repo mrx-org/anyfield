@@ -54,7 +54,10 @@
   }
 
   function openLocal(initial?: State) {
-    if (sel instanceof LocalSelection) return;
+    if (sel instanceof LocalSelection) {
+      if (initial) sel.state = structuredClone(initial);
+      return;
+    }
     sel = new LocalSelection(client, initial, (state) => {
       sent = false;
       app.updateModelContext({ content: [{ type: "text", text: summary(state) }] }).catch(() => {});
@@ -68,10 +71,11 @@
   }
 
   // Register before connect(): the host may send these right after the handshake.
+  // Without a session the local selection starts from the tool result's state (e.g.
+  // the phantom the preview was opened for), so it opens only once that arrives.
   app.ontoolinput = (params) => {
     const key = params.arguments?.session_key;
     if (typeof key === "string" && key) openSession(key);
-    else openLocal();
   };
   app.ontoolresult = (result) => {
     const r = result.structuredContent as (Partial<Session> & { state?: State }) | undefined;
