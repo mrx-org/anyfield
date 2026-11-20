@@ -3,9 +3,8 @@
   // the property and the tissues to pick (state field `view`). Loads the phantom's
   // maps only while it is shown. Standalone (open_phantom_preview) or nested in the browser.
   import ChevronDown from "@lucide/svelte/icons/chevron-down";
-  import Square from "@lucide/svelte/icons/square";
-  import SquareCheck from "@lucide/svelte/icons/square-check";
-  import { Menu } from "@skeletonlabs/skeleton-svelte";
+  import Check from "@lucide/svelte/icons/check";
+  import { Menu, Portal } from "@skeletonlabs/skeleton-svelte";
   import { phantomKey, phantomSource } from "../../phantom";
   import { MapsLoader } from "../../state/maps.svelte";
   import { DEFAULT_PHANTOM } from "../../state/patch";
@@ -120,7 +119,8 @@
     >
       {#each maps.maps?.properties ?? [] as p (p.key)}<option value={p.key}>{p.label}</option>{/each}
     </select>
-    <!-- Tissues: several at once, so a menu of checkboxes that stays open -->
+    <!-- Tissues: several at once, so a menu of checkbox items that stays open. Skeleton's
+         standard anatomy; the Portal puts it on <body>, out of the column that would clip it. -->
     <Menu closeOnSelect={false}>
       <Menu.Trigger
         class="input flex min-w-0 items-center gap-1 px-2 py-1 text-left text-xs"
@@ -131,32 +131,34 @@
         <span class="min-w-0 flex-1 truncate">{tissueList ? tissueLabel : "Gewebe …"}</span>
         <ChevronDown class="size-4 shrink-0 text-muted" aria-hidden="true" />
       </Menu.Trigger>
-      <Menu.Positioner>
-        <Menu.Content class="max-h-64 overflow-y-auto text-xs">
-          <Menu.OptionItem
-            type="checkbox"
-            value="*"
-            checked={chosen === null}
-            onCheckedChange={() => sel.patch({ view: { tissues: null } })}
-          >
-            {#if chosen === null}<SquareCheck class="size-4" />{:else}<Square class="size-4" />{/if}
-            <Menu.ItemText>Alle</Menu.ItemText>
-          </Menu.OptionItem>
-          <Menu.Separator />
-          {#each tissueList ?? [] as t (t)}
+      <Portal>
+        <Menu.Positioner>
+          <Menu.Content>
             <Menu.OptionItem
               type="checkbox"
-              value={t}
-              checked={isOn(t)}
-              disabled={chosen?.length === 1 && chosen[0] === t}
-              onCheckedChange={(on) => toggle(t, on)}
+              value="*"
+              checked={chosen === null}
+              onCheckedChange={() => sel.patch({ view: { tissues: null } })}
             >
-              {#if isOn(t)}<SquareCheck class="size-4" />{:else}<Square class="size-4" />{/if}
-              <Menu.ItemText>{t}</Menu.ItemText>
+              <Menu.ItemText>Alle</Menu.ItemText>
+              <Menu.ItemIndicator><Check class="size-4" /></Menu.ItemIndicator>
             </Menu.OptionItem>
-          {/each}
-        </Menu.Content>
-      </Menu.Positioner>
+            <Menu.Separator />
+            {#each tissueList ?? [] as t (t)}
+              <Menu.OptionItem
+                type="checkbox"
+                value={t}
+                checked={isOn(t)}
+                disabled={chosen?.length === 1 && chosen[0] === t}
+                onCheckedChange={(on) => toggle(t, on)}
+              >
+                <Menu.ItemText>{t}</Menu.ItemText>
+                <Menu.ItemIndicator><Check class="size-4" /></Menu.ItemIndicator>
+              </Menu.OptionItem>
+            {/each}
+          </Menu.Content>
+        </Menu.Positioner>
+      </Portal>
     </Menu>
   </div>
 
