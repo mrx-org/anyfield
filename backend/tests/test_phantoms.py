@@ -120,8 +120,10 @@ async def test_select_phantom_in_session(client):
         client, "select_phantom", session_key=client.key, collection="demo-001", phantom="shapes.json"
     )
     assert r == {"rev": 2, "phantom": {"collection": "demo-001", "name": "shapes.json"}}
-    r = await call(client, "set_phantom_property", session_key=client.key, property="dB0")
-    assert r["view"] == {"property": "dB0"}
+    r = await call(client, "set_phantom_view", session_key=client.key, property="dB0")
+    assert r["view"] == {"property": "dB0", "plane": "tra"}
+    r = await call(client, "set_phantom_view", session_key=client.key, plane="cor")
+    assert r["view"] == {"property": "dB0", "plane": "cor"}
     s = await call(client, "get_state", session_key=client.key)
     assert s["state"]["phantom"]["name"] == "shapes.json" and s["state"]["view"]["property"] == "dB0"
 
@@ -224,3 +226,4 @@ def test_grid_is_rotated_back_into_the_phantom_frame():
 async def test_phantom_browser_is_an_app(client):
     tools = {t.name: t for t in await client.list_tools()}
     assert tools["open_phantom_browser"].meta["ui"]["resourceUri"] == "ui://anyfield/phantom-browser.html"
+    assert tools["open_phantom_preview"].meta["ui"]["resourceUri"] == "ui://anyfield/phantom-preview.html"

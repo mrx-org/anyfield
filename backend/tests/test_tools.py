@@ -99,7 +99,9 @@ async def test_patch_state(client, as_user):
         patch={"view": {"property": "T1"}, "matrix": [256, 256, 3], "fov": {"rotation_deg": [0, 0, 190]}},
     )
     st = r["state"]
-    assert r["rev"] == 2 and st["view"] == {"property": "T1"} and st["matrix"] == [256, 256, 3]
+    assert (
+        r["rev"] == 2 and st["view"] == {"property": "T1", "plane": "tra"} and st["matrix"] == [256, 256, 3]
+    )
     assert st["fov"]["rotation_deg"] == [0.0, 0.0, -170.0]  # normalized like set_fov
     assert st["fov"]["size_mm"] == [200.0, 200.0, 100.0]  # merged, not replaced
 

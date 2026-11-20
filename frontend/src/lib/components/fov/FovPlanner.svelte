@@ -14,7 +14,8 @@
   const maps = new MapsLoader(sel.client);
   // svelte-ignore state_referenced_locally
   const resliced = new MapsLoader(sel.client);
-  const property = $derived(sel.state?.view.property ?? "density");
+  // Always PD for now: the preview's view (state field `view`) is not the planner's
+  const property = "density";
   const shown = $derived(maps.property(property));
   const reslicedShown = $derived(resliced.property(property));
 

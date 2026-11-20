@@ -1,6 +1,7 @@
-"""Phantom tool: browse the BIfTI catalog (MRX gateway), choose a phantom and the
-property (PD, T1, ...) it is shown with. With a session the choice is stored in
-its state; without one it goes back to the chat. Independent of the FOV planner."""
+"""Phantom tools: browse the BIfTI catalog (MRX gateway) and choose a phantom
+(browser), and view it (preview: plane and property). With a session the choice
+is stored in its state; without one it goes back to the chat. Independent of the
+FOV planner."""
 
 from __future__ import annotations
 
@@ -15,10 +16,11 @@ from fastmcp.exceptions import ToolError
 from pydantic import Field, ValidationError
 
 from . import fov as fov_ops
-from .models import Fov, PhantomChoice, Session, View
+from .models import Fov, PhantomChoice, Plane, Session
 from .phantoms import DEFAULT_PHANTOM, PROPERTY_KEYS, Catalog, PhantomError, PhantomMaps, public_maps
 
 PHANTOM_APP_URI = "ui://anyfield/phantom-browser.html"
+PREVIEW_APP_URI = "ui://anyfield/phantom-preview.html"
 SessionKey = Annotated[str, Field(description="Key of the session (from create_session or a shared link)")]
 OptionalSessionKey = Annotated[
     str | None,
@@ -100,11 +102,20 @@ def register(
         return {"rev": session.rev, "phantom": choice.model_dump()}
 
     @mcp.tool
-    async def set_phantom_property(session_key: SessionKey, property: PropertyArg) -> dict[str, Any]:
-        """Show another property of the session's phantom (PD, T1, T2, T2', ADC, dB0, B1+ ...).
-        Which ones a phantom has: get_phantom_maps."""
+    async def set_phantom_view(
+        session_key: SessionKey,
+        property: PropertyArg | None = None,
+        plane: Annotated[
+            Plane | None,
+            Field(description="tra (transversal), cor (coronal), sag (sagittal) or 3d (rendering)"),
+        ] = None,
+    ) -> dict[str, Any]:
+        """How the phantom preview shows the session's phantom: the property (PD, T1,
+        T2, T2', ADC, dB0, B1+ ...; which ones a phantom has: get_phantom_maps) and the
+        plane. Fields left out stay as they are. The FOV planner always shows PD."""
+        changes = {k: v for k, v in {"property": property, "plane": plane}.items() if v is not None}
         session = await ctx.change(
-            session_key, lambda st: st.model_copy(update={"view": View(property=property)})
+            session_key, lambda st: st.model_copy(update={"view": st.view.model_copy(update=changes)})
         )
         return {"rev": session.rev, "view": session.state.view.model_dump()}
 
@@ -153,9 +164,19 @@ def register(
 
     @mcp.tool(app=AppConfig(resource_uri=PHANTOM_APP_URI), annotations={"readOnlyHint": True})
     async def open_phantom_browser(session_key: OptionalSessionKey = None) -> dict[str, Any]:
-        """Show the interactive phantom browser (catalog, selection, preview). With a
-        session the choice goes into the session; without one the user picks and the
-        choice comes back to the chat. In clients without MCP Apps this returns the state."""
+        """Show the interactive phantom browser (catalog and selection, with the phantom
+        preview to fold out). With a session the choice goes into the session; without
+        one the user picks and the choice comes back to the chat. In clients without
+        MCP Apps this returns the state."""
+        return await ctx.opened(session_key)
+
+    @mcp.tool(app=AppConfig(resource_uri=PREVIEW_APP_URI), annotations={"readOnlyHint": True})
+    async def open_phantom_preview(session_key: OptionalSessionKey = None) -> dict[str, Any]:
+        """Show the phantom preview: a large view of the chosen phantom, with the plane
+        (tra, cor, sag, 3D) and the property (PD, T1, T2, ...) to pick. With a session
+        it shows and edits the session's view (state field `view`); without one the
+        view comes back to the chat. In clients without MCP Apps this returns the state."""
         return await ctx.opened(session_key)
 
     app_html(mcp, PHANTOM_APP_URI, "Phantom browser", "phantom-app.html", ctx.base_url, static_dir)
+    app_html(mcp, PREVIEW_APP_URI, "Phantom preview", "phantom-preview-app.html", ctx.base_url, static_dir)

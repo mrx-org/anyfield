@@ -1,15 +1,22 @@
 <script lang="ts">
-  // The phantom tool: browse the BIfTI catalog (gateway), pick a phantom and the
-  // property it is shown with. Bound to a Selection: a session or local (MCP App
-  // without session, result back to the chat).
-  import { TreeView, createTreeViewCollection, type TreeViewRootProps } from "@skeletonlabs/skeleton-svelte";
+  // The phantom browser: browse the BIfTI catalog (gateway) and pick a phantom.
+  // Bound to a Selection: a session or local (MCP App without session, result back
+  // to the chat). The phantom preview folds out below the choice; folded (the
+  // default) it is not rendered, so changing the phantom loads no maps here.
+  import {
+    Collapsible,
+    TreeView,
+    createTreeViewCollection,
+    type TreeViewRootProps,
+  } from "@skeletonlabs/skeleton-svelte";
   import { onMount } from "svelte";
-  import { MapsLoader } from "../../state/maps.svelte";
+  import { DEFAULT_PHANTOM } from "../../state/patch";
   import type { Selection } from "../../state/selection";
   import type { PhantomChoice, PhantomCollection, PhantomTree } from "../../types";
-  import VolumePreview from "./VolumePreview.svelte";
+  import ToolFrame from "../ToolFrame.svelte";
+  import PhantomPreview from "./PhantomPreview.svelte";
 
-  let { sel, preview = true }: { sel: Selection; preview?: boolean } = $props();
+  let { sel }: { sel: Selection } = $props();
 
   /** A catalog node: a collection (children loaded on expand), a group or a phantom file. */
   interface Node {
@@ -35,20 +42,14 @@
   let loaded = $state(false);
   let expanded = $state<string[]>([]);
   let loadError = $state<string | null>(null);
-  // svelte-ignore state_referenced_locally
-  const maps = new MapsLoader(sel.client);
+  /** Preview folded out: per view (device), not in the state. */
+  let previewOpen = $state(false);
 
   const phantom = $derived(sel.state?.phantom ?? null);
-  // The phantom actually shown: for `phantom: null` the default one, once its maps say which
-  const current = $derived(phantom ?? (maps.maps?.default ? maps.maps.phantom : null));
-  const property = $derived(sel.state?.view.property ?? "density");
-  const shown = $derived(maps.property(property));
+  // The phantom chosen: for `phantom: null` the default one
+  const current = $derived(sel.state ? (phantom ?? DEFAULT_PHANTOM) : null);
   const selected = $derived(current ? find(tree.rootNode.children ?? [], current).map((n) => n.id) : []);
   let revealed: string | null = null;
-
-  $effect(() => {
-    if (sel.state) maps.load(phantom);
-  });
 
   // Whenever another phantom is chosen (here, by the AI, on another device), open the tree to it.
   $effect(() => {
@@ -140,13 +141,12 @@
     node.kind === "collection" ? phantomNodes(node.collection, await sel.client.listPhantoms(node.collection)) : [];
 
   function choose(name: string | undefined, collection: string) {
-    if (!name || maps.loading) return;
+    if (!name) return;
     if (phantom?.collection === collection && phantom.name === name) return;
     sel.patch({ phantom: { collection, name } });
   }
 
   const message = (e: unknown) => (e instanceof Error ? e.message : String(e));
-  const fmt = (v: number) => (Math.abs(v) >= 100 ? v.toFixed(0) : Math.abs(v) >= 1 ? v.toFixed(2) : v.toPrecision(2));
 </script>
 
 <div class="flex h-full flex-col gap-3 overflow-y-auto p-3 text-sm text-text">
@@ -155,27 +155,20 @@
     {#if sel.state}
       <div class="flex items-baseline gap-2">
         <span class="truncate font-medium" title={current?.name}>
-          {current ? current.name.replace(/\.json$/, "") : "Standard-Phantom"}{#if !phantom}<span
+          {current?.name.replace(/\.json$/, "")}{#if !phantom}<span
               class="ml-1 text-xs font-normal text-muted">(Standard)</span>{/if}
         </span>
-        {#if maps.loading}<span class="text-xs text-accent">wird vorbereitet …</span>{/if}
       </div>
       {#if current}<span class="-mt-1 text-xs text-muted">{current.collection}</span>{/if}
-      {#if maps.error}<p class="text-xs text-error-500">{maps.error}</p>{/if}
-      <div class="flex flex-wrap gap-1">
-        {#each maps.maps?.properties ?? [] as p (p.key)}
-          <button
-            class="chip text-xs {p.key === shown?.key ? 'preset-filled-primary-500' : 'preset-outlined-surface-300-700'}"
-            onclick={() => sel.patch({ view: { property: p.key } })}
-            title="{p.label} ({p.unit})"
-            aria-pressed={p.key === shown?.key}
-          >{p.label}</button>
-        {/each}
-      </div>
-      {#if shown?.range}
-        <span class="text-xs text-muted">{shown.label}: {fmt(shown.range[0])} … {fmt(shown.range[1])} {shown.unit}</span>
-      {/if}
-      {#if preview}<VolumePreview url={maps.loading ? null : (shown?.url ?? null)} range={shown?.range ?? null} />{/if}
+      <Collapsible open={previewOpen} onOpenChange={(d) => (previewOpen = d.open)}>
+        <Collapsible.Trigger class="btn btn-sm preset-outlined-surface-300-700 w-full justify-start text-xs">
+          <span aria-hidden="true">{previewOpen ? "▾" : "▸"}</span> Vorschau
+        </Collapsible.Trigger>
+        <Collapsible.Content class="mt-2">
+          <!-- Only rendered while open: folded, the preview loads nothing -->
+          {#if previewOpen}<ToolFrame name="phantom_preview"><PhantomPreview {sel} /></ToolFrame>{/if}
+        </Collapsible.Content>
+      </Collapsible>
     {/if}
     {#if sel.error}<p class="text-xs text-error-500">{sel.error}</p>{/if}
   </section>
@@ -226,7 +219,6 @@
             <button
               class="btn btn-sm ml-auto px-1 py-0 text-[10px] text-muted hover:text-accent"
               title="Standard dieser Gruppe: {node.file}"
-              disabled={maps.loading}
               onclick={(e) => {
                 e.stopPropagation();
                 choose(node.file, node.collection);
@@ -245,9 +237,6 @@
     {:else}
       <TreeView.Item class="truncate py-1 data-selected:preset-tonal-primary" title={node.file}>
         {node.name}
-        {#if maps.loading && current?.collection === node.collection && current.name === node.file}
-          <span class="ml-1 text-muted">· lädt …</span>
-        {/if}
       </TreeView.Item>
     {/if}
   </TreeView.NodeProvider>

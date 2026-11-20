@@ -1,4 +1,4 @@
-import type { State, StatePatch } from "../types";
+import type { PhantomChoice, State, StatePatch } from "../types";
 
 /** RFC 7386 JSON Merge Patch: objects merge, null removes, the rest replaces. */
 export function mergePatch<T>(target: T, patch: unknown): T {
@@ -20,7 +20,10 @@ export function applyPatch(state: State, patch: StatePatch): State {
 
 export const DEFAULT_STATE: State = {
   phantom: null,
-  view: { property: "density" },
+  view: { property: "density", plane: "tra" },
   fov: { center_mm: [0, 0, 0], rotation_deg: [0, 0, 0], size_mm: [200, 200, 100] },
   matrix: [128, 128, 1],
 };
+
+/** What `phantom: null` stands for (the backend's `DEFAULT_PHANTOM`). */
+export const DEFAULT_PHANTOM: PhantomChoice = { collection: "endres-brainweb-001", name: "subj04-3T-1mm.json" };

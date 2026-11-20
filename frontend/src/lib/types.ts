@@ -13,10 +13,19 @@ export interface PhantomChoice {
   name: string;
 }
 
+/** Plane of the phantom preview: transversal, coronal, sagittal or a 3D rendering. */
+export type Plane = "tra" | "cor" | "sag" | "3d";
+
+/** How the phantom preview shows the phantom (the FOV planner always shows PD). */
+export interface View {
+  property: string;
+  plane: Plane;
+}
+
 /** A session's state: the user's choices only, no data. `phantom: null` is the default phantom. */
 export interface State {
   phantom: PhantomChoice | null;
-  view: { property: string };
+  view: View;
   fov: Fov;
   /** Resolution (x, y, z) of the planned scan. */
   matrix: Vec3;
@@ -25,7 +34,7 @@ export interface State {
 /** JSON Merge Patch (RFC 7386) of a State: objects merge, null removes, the rest replaces. */
 export type StatePatch = {
   phantom?: PhantomChoice | null;
-  view?: { property: string };
+  view?: Partial<View>;
   fov?: Partial<Fov>;
   matrix?: Vec3;
 };

@@ -9,7 +9,7 @@ from __future__ import annotations
 
 import secrets
 import time
-from typing import Any
+from typing import Any, Literal
 
 from pydantic import BaseModel, ConfigDict, Field
 
@@ -40,10 +40,16 @@ class PhantomChoice(BaseModel):
     name: str = Field(description="Phantom file name, e.g. 'subj04-3T-1mm.json'")
 
 
+Plane = Literal["tra", "cor", "sag", "3d"]
+
+
 class View(BaseModel):
+    """How the phantom preview shows the phantom (the FOV planner always shows PD)."""
+
     model_config = ConfigDict(extra="forbid")
 
     property: str = Field(default="density", description="Shown property: density, T1, T2, ...")
+    plane: Plane = Field(default="tra", description="Transversal, coronal, sagittal or 3D rendering")
 
 
 class State(BaseModel):
