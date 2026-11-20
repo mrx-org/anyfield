@@ -334,7 +334,7 @@ async def test_cas_phantom_arguments_are_checked(client):
     with pytest.raises(ToolError, match="not both"):
         await call(client, "select_phantom", sha256=CAS_ZIP, collection="demo-001", phantom="shapes.json")
     r = await call(client, "select_phantom", sha256=CAS_ZIP.upper())
-    assert r["phantom"]["sha256"] == CAS_ZIP and r["phantom"]["name"].startswith(CAS_ZIP[:12])
+    assert r["phantom"]["sha256"] == CAS_ZIP and r["phantom"]["name"] == "mine.zip"
 
 
 async def test_cas_phantom_in_patch_state_and_preview(client):
@@ -389,3 +389,10 @@ async def test_tissues_in_the_view(client):
         },
     )
     assert r["state"]["view"]["tissues"] == ["CSF"]
+
+
+async def test_a_cas_phantom_without_a_name_gets_its_file_name(client):
+    r = await call(client, "open_phantom_preview", sha256=CAS_ZIP)
+    assert r["state"]["phantom"]["name"] == "mine.zip"  # from the caller's files
+    r = await call(client, "select_phantom", sha256="d" * 64)
+    assert r["phantom"]["name"] == "dddddddddddd….zip"  # not among them: the hash

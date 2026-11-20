@@ -80,7 +80,11 @@ async def check(catalog: Catalog, collection: str, name: str) -> None:
 
 
 async def resolve(
-    catalog: Catalog, collection: str | None, phantom: str | None, sha256: str | None
+    catalog: Catalog,
+    collection: str | None,
+    phantom: str | None,
+    sha256: str | None,
+    cas: CasFiles | None = None,
 ) -> Phantom | None:
     """The phantom the arguments name: a CAS phantom (`sha256`, `phantom` its
     optional display name), a registry phantom (`collection` and `phantom`, checked
@@ -88,17 +92,30 @@ async def resolve(
     if sha256 is not None:
         if collection is not None:
             raise ToolError("Give either sha256 (CAS phantom) or collection and phantom, not both.")
+        h = sha256.lower()
         try:
-            h = sha256.lower()
-            return CasPhantom(sha256=h, name=phantom or f"{h[:12]}….zip")
+            CasPhantom(sha256=h, name="check")
         except ValidationError as e:
             raise ToolError("sha256 must be the 64 hex digits of a file in the CAS.") from e
+        return CasPhantom(sha256=h, name=phantom or await cas_name(cas, h))
     if collection is None and phantom is None:
         return None
     if collection is None or phantom is None:
         raise ToolError("Give both collection and phantom (or sha256 for a phantom in the CAS).")
     await check(catalog, collection, phantom)
     return PhantomChoice(collection=collection, name=phantom)
+
+
+async def cas_name(cas: CasFiles | None, sha256: str) -> str:
+    """The file name of a CAS phantom, from the caller's files; the shortened hash if
+    it is not among them (e.g. someone else's, or the gateway does not list files)."""
+    try:
+        for entry in await cas.phantoms() if cas else []:
+            if entry["sha256"] == sha256 and entry["name"]:
+                return entry["name"]
+    except (PhantomError, ToolError):
+        pass
+    return f"{sha256[:12]}….zip"
 
 
 def register(
@@ -155,7 +172,7 @@ def register(
         becomes the session's phantom (state field `phantom`), and everyone with the
         session key sees it; the view stays. Returns the choice. Its maps and value
         ranges: get_phantom_maps. The default phantom: patch_state {"phantom": null}."""
-        choice = await resolve(catalog, collection, phantom, sha256)
+        choice = await resolve(catalog, collection, phantom, sha256, cas)
         if choice is None:
             raise ToolError("Give collection and phantom, or sha256 for a phantom in the CAS.")
         if session_key is None:
@@ -171,7 +188,7 @@ def register(
         ones the maps combine (get_phantom_maps, set_phantom_view `tissues`). The
         phantom as in get_phantom_maps; without one the default phantom. The first
         call for a large phantom can take a while."""
-        choice = await resolve(catalog, collection, phantom, sha256) or DEFAULT_PHANTOM
+        choice = await resolve(catalog, collection, phantom, sha256, cas) or DEFAULT_PHANTOM
         return {"phantom": choice.model_dump(), "tissues": await guard(maps.tissues(choice))}
 
     @mcp.tool
@@ -230,7 +247,7 @@ def register(
         either, the default one (endres-brainweb-001 / subj04-3T-1mm.json). With `fov` the
         maps are on the scan grid (FOV and matrix), as the planned scan would see
         the phantom. The first call for a phantom or grid can take up to a minute."""
-        chosen = await resolve(catalog, collection, phantom, sha256)
+        chosen = await resolve(catalog, collection, phantom, sha256, cas)
         choice = chosen or DEFAULT_PHANTOM
         try:
             if fov is None:
@@ -293,7 +310,7 @@ def register(
             return await ctx.opened(session_key)
         if property is not None and property not in PROPERTY_KEYS:
             raise ToolError(f"Unknown property {property!r}. Known: {', '.join(PROPERTY_KEYS)}")
-        choice = await resolve(catalog, collection, phantom, sha256)
+        choice = await resolve(catalog, collection, phantom, sha256, cas)
         if choice is None:
             raise ToolError(
                 "Without a session give collection and phantom (from list_phantoms), or sha256 "
