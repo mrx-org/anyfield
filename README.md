@@ -33,14 +33,14 @@ Web-App: `/` (eigene Sessions), `/s/{key}` (eine Session, mit Ansicht des Zustan
 | Sessions (Login) | `list_sessions`, `create_session`, `rename_session`, `delete_session` |
 | Zustand | `get_state`, `patch_state` (JSON Merge Patch) |
 | FOV-Planer | `set_fov`, `move_fov`, `rotate_fov`, `open_fov_planner` |
-| Phantom (BIfTI) | `list_phantom_collections`, `list_phantoms`, `list_cas_phantoms`, `select_phantom`, `set_phantom_view`, `get_phantom_maps`, `open_phantom_browser`, `open_phantom_preview` |
+| Phantom (BIfTI) | `list_phantom_collections`, `list_phantoms`, `list_cas_phantoms`, `list_phantom_tissues`, `select_phantom`, `set_phantom_view`, `get_phantom_maps`, `open_phantom_browser`, `open_phantom_preview` |
 
 Der Session-Zustand ist ein kleines JSON nur mit der Auswahl, keine Daten:
 
 ```json
 {
   "phantom": { "collection": "endres-brainweb-001", "name": "subj04-3T-1mm.json" },
-  "view": { "property": "T1", "plane": "tra" },
+  "view": { "property": "T1", "plane": "tra", "tissues": ["GM", "WM"] },
   "fov": { "center_mm": [0, 0, 10], "rotation_deg": [0, 0, 20], "size_mm": [220, 220, 60] },
   "matrix": [128, 128, 1]
 }
@@ -54,7 +54,10 @@ Wer eine Session mit einem CAS-Phantom geteilt bekommt, sieht es, auch als `visi
 `patch_state` beim Wechsel der Art das andere Feld auf `null` setzen (Merge Patch), z. B.
 `{"phantom": {"sha256": "…", "name": "x.zip", "collection": null}}`. Karten und Wertebereiche liefert `get_phantom_maps`;
 sie werden nicht gespeichert. `view` ist die Ansicht der Phantom-Vorschau (Eigenschaft;
-Ebene `tra`, `cor`, `sag` oder `3d`); der FOV-Planer zeigt vorerst immer PD.
+Ebene `tra`, `cor`, `sag` oder `3d`; Gewebe, die die Karten kombinieren, Namen aus
+`list_phantom_tissues`, `null` für alle). Ein anderes Phantom setzt die Gewebe auf alle
+zurück, außer sie werden mit ihm zusammen gesetzt. Der FOV-Planer zeigt vorerst immer PD
+aller Gewebe.
 
 `open_*` zeigen in Clients mit MCP Apps das jeweilige Tool im Chat. Mit `session_key`
 arbeitet es auf der Session; ohne wählt der Nutzer lokal, jede Änderung geht als

@@ -40,7 +40,7 @@ export function applyPatch(state: State, patch: StatePatch): State {
 
 export const DEFAULT_STATE: State = {
   phantom: null,
-  view: { property: "density", plane: "tra" },
+  view: { property: "density", plane: "tra", tissues: null },
   fov: { center_mm: [0, 0, 0], rotation_deg: [0, 0, 0], size_mm: [200, 200, 100] },
   matrix: [128, 128, 1],
 };

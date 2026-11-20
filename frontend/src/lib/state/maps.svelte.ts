@@ -13,14 +13,14 @@ export class MapsLoader {
 
   constructor(private client: AnyfieldClient) {}
 
-  /** Load the maps of `phantom` (on `grid`) unless they are already loaded or loading. */
-  load(phantom: PhantomChoice | null, grid?: ScanGrid): void {
-    const id = JSON.stringify([phantom, grid ?? null]);
+  /** Load the maps of `phantom` (on `grid`, of `tissues` only) unless they are already loaded or loading. */
+  load(phantom: PhantomChoice | null, grid?: ScanGrid, tissues?: string[] | null): void {
+    const id = JSON.stringify([phantom, grid ?? null, tissues ?? null]);
     if (id === this.id) return;
     this.id = id;
     this.loading = true;
     this.error = null;
-    this.client.getPhantomMaps(phantom, grid && $state.snapshot(grid)).then(
+    this.client.getPhantomMaps(phantom, grid && $state.snapshot(grid), tissues && [...tissues]).then(
       (m) => {
         if (this.id !== id) return;
         this.maps = m;

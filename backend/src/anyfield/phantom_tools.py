@@ -56,6 +56,10 @@ Sha256Arg = Annotated[
         "(from list_cas_phantoms, an upload or bifti_get_phantom)"
     ),
 ]
+TissuesArg = Annotated[
+    list[str] | None,
+    Field(description="Tissues to combine, names from list_phantom_tissues (e.g. ['GM']); omit for all"),
+]
 MAX_MATRIX = 1024
 
 
@@ -159,6 +163,17 @@ def register(
         session = await ctx.change(session_key, lambda st: st.model_copy(update={"phantom": choice}))
         return {"rev": session.rev, "phantom": choice.model_dump()}
 
+    @mcp.tool(annotations={"readOnlyHint": True})
+    async def list_phantom_tissues(
+        collection: CollectionArg = None, phantom: PhantomArg = None, sha256: Sha256Arg = None
+    ) -> dict[str, Any]:
+        """The tissues of a phantom (sorted names, e.g. GM, WM, CSF), to choose which
+        ones the maps combine (get_phantom_maps, set_phantom_view `tissues`). The
+        phantom as in get_phantom_maps; without one the default phantom. The first
+        call for a large phantom can take a while."""
+        choice = await resolve(catalog, collection, phantom, sha256) or DEFAULT_PHANTOM
+        return {"phantom": choice.model_dump(), "tissues": await guard(maps.tissues(choice))}
+
     @mcp.tool
     async def set_phantom_view(
         session_key: SessionKey,
@@ -167,14 +182,27 @@ def register(
             Plane | None,
             Field(description="tra (transversal), cor (coronal), sag (sagittal) or 3d (rendering)"),
         ] = None,
+        tissues: Annotated[
+            list[str] | None,
+            Field(
+                description="Tissues the maps combine, names from list_phantom_tissues "
+                "(e.g. ['GM', 'WM']); [] for all of them"
+            ),
+        ] = None,
     ) -> dict[str, Any]:
         """How the phantom preview shows the session's phantom: the property (PD, T1,
-        T2, T2', ADC, dB0, B1+ ...; which ones a phantom has: get_phantom_maps) and the
-        plane. Fields left out stay as they are. The FOV planner always shows PD."""
+        T2, T2', ADC, dB0, B1+ ...; which ones a phantom has: get_phantom_maps), the
+        plane and the tissues combined. Fields left out stay as they are. Choosing
+        another phantom resets the tissues to all. The FOV planner always shows PD of
+        all tissues."""
         changes = {k: v for k, v in {"property": property, "plane": plane}.items() if v is not None}
-        session = await ctx.change(
-            session_key, lambda st: st.model_copy(update={"view": st.view.model_copy(update=changes)})
-        )
+        if tissues is not None:
+            changes["tissues"] = tissues
+
+        def update(st: State) -> State:
+            return st.model_copy(update={"view": View.model_validate({**st.view.model_dump(), **changes})})
+
+        session = await ctx.change(session_key, update)
         return {"rev": session.rev, "view": session.state.view.model_dump()}
 
     @mcp.tool(annotations={"readOnlyHint": True})
@@ -193,9 +221,10 @@ def register(
             list[int] | None,
             Field(min_length=3, max_length=3, description="Scan matrix for `fov`, default [128, 128, 1]"),
         ] = None,
+        tissues: TissuesArg = None,
     ) -> dict[str, Any]:
         """Display maps of a phantom from the MRX gateway: one NIfTI per property (PD,
-        T1, T2, ...; tissues combined) with label, unit, value range (2nd/98th
+        T1, T2, ...; its tissues combined, all or those in `tissues`) with label, unit, value range (2nd/98th
         percentile) and a URL that loads without login. The phantom: one of the
         catalog (`collection`, `phantom`), one in the CAS (`sha256`) or, without
         either, the default one (endres-brainweb-001 / subj04-3T-1mm.json). With `fov` the
@@ -205,14 +234,14 @@ def register(
         choice = chosen or DEFAULT_PHANTOM
         try:
             if fov is None:
-                raw = await maps.get(choice)
+                raw = await maps.get(choice, tissues=tissues or None)
             else:
                 f = Fov.model_validate(fov)
                 f = fov_ops.set_fov(f, f.center_mm, f.rotation_deg, f.size_mm)
                 m = tuple(matrix or (128, 128, 1))
                 if any(not (1 <= v <= MAX_MATRIX) for v in m):
                     raise ToolError(f"matrix values must be in [1, {MAX_MATRIX}]")
-                raw = await maps.on_fov(choice, f, m)
+                raw = await maps.on_fov(choice, f, m, tissues or None)
         except (ValueError, ValidationError) as e:
             raise ToolError(str(e)) from e
         return public_maps(raw, choice, default=chosen is None)
@@ -238,21 +267,27 @@ def register(
         plane: Annotated[
             Plane | None, Field(description="Without a session: tra, cor, sag or 3d to start with")
         ] = None,
+        tissues: Annotated[
+            list[str] | None,
+            Field(
+                description="Without a session: tissues to start with (list_phantom_tissues); omit for all"
+            ),
+        ] = None,
     ) -> dict[str, Any]:
         """Show the phantom preview: a large view of a phantom, with the plane (tra,
-        cor, sag, 3D) and the property (PD, T1, T2, ...) to pick.
+        cor, sag, 3D), the property (PD, T1, T2, ...) and the tissues to pick.
         With a session: the session's phantom and view (state field `view`), edited
         there; leave out the other arguments.
         Without a session: a quick look at any phantom - give `collection` and
         `phantom` (from list_phantoms) or `sha256` (a phantom in the CAS), optionally
-        the property and plane to start with; the view the user ends up with comes
+        the property, plane and tissues to start with; the view the user ends up with comes
         back to the chat.
         In clients without MCP Apps this returns the state."""
         if session_key is not None:
-            if any(v is not None for v in (collection, phantom, sha256, property, plane)):
+            if any(v is not None for v in (collection, phantom, sha256, property, plane, tissues)):
                 raise ToolError(
                     "With a session the preview shows the session's phantom and view: leave out "
-                    "collection, phantom, sha256, property and plane (change them with select_phantom "
+                    "collection, phantom, sha256, property, plane and tissues (change them with select_phantom "
                     "and set_phantom_view)."
                 )
             return await ctx.opened(session_key)
@@ -264,7 +299,13 @@ def register(
                 "Without a session give collection and phantom (from list_phantoms), or sha256 "
                 "for a phantom in the CAS."
             )
-        view = View(**{k: v for k, v in {"property": property, "plane": plane}.items() if v is not None})
+        view = View(
+            **{
+                k: v
+                for k, v in {"property": property, "plane": plane, "tissues": tissues}.items()
+                if v is not None
+            }
+        )
         state = State(phantom=choice, view=view)
         return {"key": None, "state": state.model_dump()}
 

@@ -11,7 +11,7 @@ import secrets
 import time
 from typing import Any, Literal
 
-from pydantic import BaseModel, ConfigDict, Field
+from pydantic import BaseModel, ConfigDict, Field, field_validator
 
 Vec3 = tuple[float, float, float]
 Int3 = tuple[int, int, int]
@@ -64,6 +64,16 @@ class View(BaseModel):
 
     property: str = Field(default="density", description="Shown property: density, T1, T2, ...")
     plane: Plane = Field(default="tra", description="Transversal, coronal, sagittal or 3D rendering")
+    tissues: list[str] | None = Field(
+        default=None,
+        description="Tissues combined into the maps (names from list_phantom_tissues); null: all",
+    )
+
+    @field_validator("tissues")
+    @classmethod
+    def _tissues(cls, v: list[str] | None) -> list[str] | None:
+        # Sorted, each once; none at all means all (the gateway refuses an empty list)
+        return sorted(set(v)) or None if v is not None else None
 
 
 class State(BaseModel):

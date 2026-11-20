@@ -158,3 +158,16 @@ describe("phantom kinds", () => {
     expect(maps.default).toBe(false);
   });
 });
+
+describe("tissues", () => {
+  it("asks for the maps of some tissues and caches them apart from all", async () => {
+    const t = new MockTransport();
+    const client = new AnyfieldClient(t);
+    await client.getPhantomMaps(null, undefined, ["WM", "GM"]);
+    expect(t.calls.at(-1)?.args).toEqual({ tissues: ["WM", "GM"] });
+    await client.getPhantomMaps(null, undefined, ["GM", "WM"]); // same set: cached
+    await client.getPhantomMaps(null);
+    expect(t.calls.filter((c) => c.name === "get_phantom_maps")).toHaveLength(2);
+    expect(t.calls.at(-1)?.args).toEqual({});
+  });
+});

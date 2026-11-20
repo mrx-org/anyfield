@@ -115,6 +115,9 @@ def build(
         # A CAS phantom needs no check: its hash is the permission
         if isinstance(new.phantom, PhantomChoice) and new.phantom != old.phantom:
             await phantom_tools.check(catalog, new.phantom.collection, new.phantom.name)
+        # Another phantom has other tissues: unless they were chosen with it, show all
+        if new.phantom != old.phantom and new.view.tissues == old.view.tissues:
+            new = new.model_copy(update={"view": new.view.model_copy(update={"tissues": None})})
         if new.view.property not in PROPERTY_KEYS:
             raise ToolError(f"Unknown property {new.view.property!r}. Known: {', '.join(PROPERTY_KEYS)}")
         return new.model_copy(update={"fov": fov})

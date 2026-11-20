@@ -7,6 +7,7 @@ export type SessionPoll = Session | { rev: number; unchanged: true };
 /** Typed wrappers for the anyfield MCP tools. */
 export class AnyfieldClient {
   private maps = new Map<string, Promise<PhantomMaps>>();
+  private tissues = new Map<string, Promise<string[]>>();
 
   constructor(readonly transport: Transport) {}
 
@@ -33,18 +34,33 @@ export class AnyfieldClient {
   /** The caller's bifti .zip files in the gateway's CAS. */
   listCasPhantoms = () => this.call<CasPhantomEntry[]>("list_cas_phantoms");
 
+  /** The tissue names of a phantom (null: the default), cached per phantom. */
+  listTissues(phantom: PhantomChoice | null): Promise<string[]> {
+    const id = phantom ? phantomKey(phantom) : "";
+    let p = this.tissues.get(id);
+    if (!p) {
+      p = this.call<{ tissues: string[] }>("list_phantom_tissues", phantom ? phantomArgs(phantom) : {}).then(
+        (r) => r.tissues,
+      );
+      p.catch(() => this.tissues.delete(id));
+      this.tissues.set(id, p);
+    }
+    return p;
+  }
+
   /**
    * Maps of a phantom (null: the default), from the gateway. With `grid` resliced
    * onto the planned scan grid. Maps on the phantom's own grid are cached per
    * phantom; computing new ones can take a minute.
    */
-  getPhantomMaps(phantom: PhantomChoice | null, grid?: ScanGrid): Promise<PhantomMaps> {
+  getPhantomMaps(phantom: PhantomChoice | null, grid?: ScanGrid, tissues?: string[] | null): Promise<PhantomMaps> {
     const args = {
       ...(phantom ? phantomArgs(phantom) : {}),
       ...(grid ? { fov: grid.fov, matrix: grid.matrix } : {}),
+      ...(tissues?.length ? { tissues } : {}),
     };
     if (grid) return this.call<PhantomMaps>("get_phantom_maps", args);
-    const id = phantom ? phantomKey(phantom) : "";
+    const id = `${phantom ? phantomKey(phantom) : ""}|${tissues?.length ? [...tissues].sort().join(",") : ""}`;
     let p = this.maps.get(id);
     if (!p) {
       p = this.call<PhantomMaps>("get_phantom_maps", args);

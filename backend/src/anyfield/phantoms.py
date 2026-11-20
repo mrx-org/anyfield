@@ -181,19 +181,39 @@ class PhantomMaps(_Cached):
     def __init__(self, call: Call | None, ttl_s: float = 600) -> None:
         super().__init__(call, ttl_s)
 
-    async def get(self, choice: Phantom, grid: list[list[float]] | None = None, matrix=None):
-        if isinstance(choice, CasPhantom):
-            args: dict[str, Any] = {"phantom": {"sha256": choice.sha256}}
-        else:
-            args = {"collection": choice.collection, "phantom": {"file_name": choice.name}}
+    async def get(
+        self,
+        choice: Phantom,
+        grid: list[list[float]] | None = None,
+        matrix=None,
+        tissues: list[str] | None = None,
+    ):
+        """Maps of all tissues combined, or of `tissues` only."""
+        args = phantom_args(choice)
         if grid is not None:
             args["grid"] = {"affine": grid, "resolution": list(matrix)}
+        if tissues is not None:
+            args["tissues"] = sorted(set(tissues))
         return await self._cached("bifti_get_property_maps", args)
 
-    async def on_fov(self, choice: Phantom, fov: Fov, matrix: Int3) -> dict[str, Any]:
+    async def on_fov(
+        self, choice: Phantom, fov: Fov, matrix: Int3, tissues: list[str] | None = None
+    ) -> dict[str, Any]:
         """The maps resampled onto the planned scan grid (FOV and matrix)."""
         native = await self.get(choice)
-        return await self.get(choice, to_phantom_frame(native, fov_affine(fov, matrix)), matrix)
+        return await self.get(choice, to_phantom_frame(native, fov_affine(fov, matrix)), matrix, tissues)
+
+    async def tissues(self, choice: Phantom) -> list[str]:
+        """The tissue names of a phantom (sorted), to choose which the maps combine."""
+        answer = await self._cached("bifti_list_tissues", phantom_args(choice))
+        return list(answer.get("tissues", []))
+
+
+def phantom_args(choice: Phantom) -> dict[str, Any]:
+    """How the bifti tools name a phantom: registry file name or CAS hash."""
+    if isinstance(choice, CasPhantom):
+        return {"phantom": {"sha256": choice.sha256}}
+    return {"collection": choice.collection, "phantom": {"file_name": choice.name}}
 
 
 def public_maps(raw: dict[str, Any], choice: Phantom, default: bool) -> dict[str, Any]:
@@ -206,5 +226,7 @@ def public_maps(raw: dict[str, Any], choice: Phantom, default: bool) -> dict[str
         "spacing_mm": raw.get("spacing_mm"),
         "affine": raw.get("affine"),
         "coarsening": raw.get("coarsening", 1),
+        # The tissues combined (all of them unless some were chosen)
+        "tissues": raw.get("tissues"),
         "properties": [{k: p.get(k) for k in keep} for p in raw.get("properties", [])],
     }

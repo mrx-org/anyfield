@@ -102,12 +102,15 @@ class FakeGateway:
             return TREE
         if tool == "list_files":
             return FILES
+        if tool == "bifti_list_tissues":
+            return {"file_name": "x.json", "tissues": ["CSF", "GM", "WM"]}
         if tool == "bifti_get_property_maps":
             phantom = arguments["phantom"]
             name = phantom["file_name"] if "file_name" in phantom else f"cas-{phantom['sha256'][:4]}.json"
             if name == "broken.json":
                 raise ToolError("MRX gateway, bifti_get_property_maps: download failed")
             answer = maps_answer(name)
+            answer["tissues"] = arguments.get("tissues", ["CSF", "GM", "WM"])
             if "grid" in arguments:
                 answer["affine"] = answer["affine_phantom"] = arguments["grid"]["affine"]
                 answer["shape"] = arguments["grid"]["resolution"]
@@ -165,9 +168,9 @@ async def test_select_phantom_in_session(client):
     )
     assert r == {"rev": 2, "phantom": {"collection": "demo-001", "name": "shapes.json"}}
     r = await call(client, "set_phantom_view", session_key=client.key, property="dB0")
-    assert r["view"] == {"property": "dB0", "plane": "tra"}
+    assert r["view"] == {"property": "dB0", "plane": "tra", "tissues": None}
     r = await call(client, "set_phantom_view", session_key=client.key, plane="cor")
-    assert r["view"] == {"property": "dB0", "plane": "cor"}
+    assert r["view"] == {"property": "dB0", "plane": "cor", "tissues": None}
     s = await call(client, "get_state", session_key=client.key)
     assert s["state"]["phantom"]["name"] == "shapes.json" and s["state"]["view"]["property"] == "dB0"
 
@@ -291,7 +294,7 @@ async def test_phantom_preview_without_session_needs_a_phantom(client):
     )
     assert r["key"] is None
     assert r["state"]["phantom"] == {"collection": "demo-001", "name": "shapes.json"}
-    assert r["state"]["view"] == {"property": "T2", "plane": "sag"}
+    assert r["state"]["view"] == {"property": "T2", "plane": "sag", "tissues": None}
 
 
 async def test_phantom_preview_with_session_shows_the_session(client):
@@ -342,3 +345,47 @@ async def test_cas_phantom_in_patch_state_and_preview(client):
 
     r = await call(client, "open_phantom_preview", sha256=CAS_ZIP, plane="cor")
     assert r["state"]["phantom"]["sha256"] == CAS_ZIP and r["state"]["view"]["plane"] == "cor"
+
+
+async def test_tissues_of_a_phantom(client, gateway):
+    r = await call(client, "list_phantom_tissues", collection="demo-001", phantom="shapes.json")
+    assert r["tissues"] == ["CSF", "GM", "WM"]
+    r = await call(client, "list_phantom_tissues", sha256=CAS_ZIP)
+    assert r["phantom"]["sha256"] == CAS_ZIP
+    assert gateway.calls[-1] == ("bifti_list_tissues", {"phantom": {"sha256": CAS_ZIP}})
+
+
+async def test_maps_of_some_tissues(client, gateway):
+    maps = await call(
+        client, "get_phantom_maps", collection="demo-001", phantom="shapes.json", tissues=["WM", "GM"]
+    )
+    assert gateway.maps_calls()[-1]["tissues"] == ["GM", "WM"] and maps["tissues"] == ["GM", "WM"]
+    # None given (or an empty list): all tissues, the gateway gets no `tissues`
+    await call(client, "get_phantom_maps", collection="demo-001", phantom="shapes.json", tissues=[])
+    assert "tissues" not in gateway.maps_calls()[-1]
+
+
+async def test_tissues_in_the_view(client):
+    r = await call(client, "set_phantom_view", session_key=client.key, tissues=["WM", "GM", "GM"])
+    assert r["view"]["tissues"] == ["GM", "WM"]
+    r = await call(client, "set_phantom_view", session_key=client.key, plane="sag")
+    assert r["view"]["tissues"] == ["GM", "WM"]  # left out: stays
+    r = await call(client, "set_phantom_view", session_key=client.key, tissues=[])
+    assert r["view"]["tissues"] is None  # all
+
+    await call(client, "set_phantom_view", session_key=client.key, tissues=["GM"])
+    await call(client, "select_phantom", session_key=client.key, sha256=CAS_ZIP)
+    s = await call(client, "get_state", session_key=client.key)
+    assert s["state"]["view"]["tissues"] is None  # another phantom: all its tissues
+
+    # Chosen together with the phantom, they stay
+    r = await call(
+        client,
+        "patch_state",
+        session_key=client.key,
+        patch={
+            "phantom": {"collection": "demo-001", "name": "shapes.json", "sha256": None},
+            "view": {"tissues": ["CSF"]},
+        },
+    )
+    assert r["state"]["view"]["tissues"] == ["CSF"]

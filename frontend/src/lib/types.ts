@@ -36,6 +36,8 @@ export type Plane = "tra" | "cor" | "sag" | "3d";
 export interface View {
   property: string;
   plane: Plane;
+  /** Tissues the maps combine (names from `list_phantom_tissues`); null or missing: all. */
+  tissues?: string[] | null;
 }
 
 /** A session's state: the user's choices only, no data. `phantom: null` is the default phantom. */
@@ -87,6 +89,8 @@ export interface PhantomMaps {
   affine: [number[], number[], number[]];
   /** Integer factor the grid was coarsened by (1: not at all). */
   coarsening: number;
+  /** The tissues combined into these maps. */
+  tissues?: string[] | null;
   properties: PhantomProperty[];
 }
 

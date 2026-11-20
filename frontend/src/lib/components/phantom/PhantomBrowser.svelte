@@ -191,12 +191,13 @@
   function choose(name: string | undefined, collection: string) {
     if (!name) return;
     if (currentCatalog === phantom && phantom?.collection === collection && phantom.name === name) return;
-    sel.patch({ phantom: phantomPatch({ collection, name }) });
+    // Another phantom has other tissues: back to all of them
+    sel.patch({ phantom: phantomPatch({ collection, name }), view: { tissues: null } });
   }
 
   function chooseCas(entry: CasPhantomEntry) {
     if (currentCas?.sha256 === entry.sha256) return;
-    sel.patch({ phantom: phantomPatch({ sha256: entry.sha256, name: entry.name }) });
+    sel.patch({ phantom: phantomPatch({ sha256: entry.sha256, name: entry.name }), view: { tissues: null } });
   }
 
   const size = (n: number | null) =>

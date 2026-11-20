@@ -21,7 +21,8 @@ const PLANES = { tra: "transversal", cor: "coronal", sag: "sagittal", "3d": "3D 
 /** What the phantom preview hands back to the chat. */
 export function previewSummary(s: State): string {
   const name = describe(s.phantom);
-  return `Phantom preview of ${name}: property ${s.view.property}, ${PLANES[s.view.plane]} view.`;
+  const tissues = s.view.tissues?.length ? `tissues ${s.view.tissues.join(", ")}` : "all tissues";
+  return `Phantom preview of ${name}: property ${s.view.property}, ${PLANES[s.view.plane]} view, ${tissues}.`;
 }
 
 /** What the FOV planner hands back to the chat. */
