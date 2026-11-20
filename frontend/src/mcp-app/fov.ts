@@ -6,5 +6,5 @@ import { fovSummary } from "./summary";
 
 mount(McpApp, {
   target: document.getElementById("app")!,
-  props: { name: "anyfield-fov-planner", tool: FovPlannerCompact, summary: fovSummary },
+  props: { name: "anyfield-fov-planner", toolName: "fov_planner", tool: FovPlannerCompact, summary: fovSummary },
 });

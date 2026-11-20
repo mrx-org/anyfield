@@ -5,6 +5,7 @@
   import { LoginRedirect, McpHttpTransport } from "../lib/client/mcp-http";
   import FovPlanner from "../lib/components/fov/FovPlanner.svelte";
   import PhantomBrowser from "../lib/components/phantom/PhantomBrowser.svelte";
+  import ToolFrame from "../lib/components/ToolFrame.svelte";
   import { SessionStore } from "../lib/state/session.svelte";
   import type { SessionSummary } from "../lib/types";
 
@@ -106,10 +107,12 @@
   {#if sessionKey && store}
     <!-- Two independent tools on the same session, side by side -->
     <main class="flex min-h-0 flex-1 flex-col lg:flex-row">
-      <section class="max-h-[45vh] shrink-0 border-b border-border lg:max-h-none lg:w-80 lg:border-b-0 lg:border-r" aria-label="Phantom">
-        <PhantomBrowser sel={store} preview={false} />
+      <section class="max-h-[45vh] shrink-0 p-1 lg:max-h-none lg:w-80" aria-label="Phantom">
+        <ToolFrame name="phantom_browser" class="h-full"><PhantomBrowser sel={store} preview={false} /></ToolFrame>
       </section>
-      <section class="min-h-0 flex-1" aria-label="FOV-Planung"><FovPlanner sel={store} /></section>
+      <section class="min-h-0 flex-1 p-1" aria-label="FOV-Planung">
+        <ToolFrame name="fov_planner" class="h-full"><FovPlanner sel={store} /></ToolFrame>
+      </section>
       {#if showState}
         <section class="max-h-[40vh] shrink-0 overflow-auto border-t border-border bg-panel p-3 lg:max-h-none lg:w-80 lg:border-l lg:border-t-0" aria-label="Zustand">
           <p class="mb-2 text-xs text-muted">Session-Zustand, rev {store.server?.rev ?? "–"}{store.pending ? " (Änderung wird gespeichert …)" : ""}</p>

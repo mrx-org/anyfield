@@ -6,5 +6,5 @@ import { phantomSummary } from "./summary";
 
 mount(McpApp, {
   target: document.getElementById("app")!,
-  props: { name: "anyfield-phantom-browser", tool: PhantomBrowser, summary: phantomSummary },
+  props: { name: "anyfield-phantom-browser", toolName: "phantom_browser", tool: PhantomBrowser, summary: phantomSummary },
 });

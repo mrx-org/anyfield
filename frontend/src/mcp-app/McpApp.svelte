@@ -10,6 +10,7 @@
   import { onDestroy, type Component } from "svelte";
   import { AnyfieldClient } from "../lib/client/anyfield";
   import { McpAppTransport } from "../lib/client/mcp-app";
+  import ToolFrame from "../lib/components/ToolFrame.svelte";
   import { LocalSelection } from "../lib/state/local.svelte";
   import type { Selection } from "../lib/state/selection";
   import { SessionStore } from "../lib/state/session.svelte";
@@ -17,9 +18,16 @@
 
   let {
     name,
+    toolName,
     tool,
     summary,
-  }: { name: string; tool: Component<{ sel: Selection }>; summary: (state: State) => string } = $props();
+  }: {
+    name: string;
+    /** Shown on the frame: the MCP tool that opens this app, without `open_`. */
+    toolName: string;
+    tool: Component<{ sel: Selection }>;
+    summary: (state: State) => string;
+  } = $props();
 
   // svelte-ignore state_referenced_locally
   const app = new App({ name, version: "0.1.0" });
@@ -91,20 +99,22 @@
   const Tool = $derived(tool);
 </script>
 
-<div class="flex w-full flex-col" style={sizeStyle}>
-  {#if sel}
-    <div class="min-h-0 flex-1 overflow-y-auto"><Tool {sel} /></div>
-    {#if !sel.sessionKey}
-      <footer class="flex items-center gap-2 border-t border-border bg-panel px-3 py-2 text-xs">
-        <span class="min-w-0 flex-1 truncate text-muted" title={sel.state ? summary(sel.state) : ""}>
-          {sel.state ? summary(sel.state) : ""}
-        </span>
-        <button class="shrink-0 rounded bg-accent px-3 py-1 font-medium text-black" onclick={sendToChat}>
-          {sent ? "Gesendet" : "In den Chat"}
-        </button>
-      </footer>
+<div class="flex w-full flex-col p-1" style={sizeStyle}>
+  <ToolFrame name={toolName} class="flex-1">
+    {#if sel}
+      <div class="min-h-0 flex-1 overflow-y-auto"><Tool {sel} /></div>
+      {#if !sel.sessionKey}
+        <footer class="flex items-center gap-2 border-t border-border bg-panel px-3 py-2 text-xs">
+          <span class="min-w-0 flex-1 truncate text-muted" title={sel.state ? summary(sel.state) : ""}>
+            {sel.state ? summary(sel.state) : ""}
+          </span>
+          <button class="shrink-0 rounded bg-accent px-3 py-1 font-medium text-black" onclick={sendToChat}>
+            {sent ? "Gesendet" : "In den Chat"}
+          </button>
+        </footer>
+      {/if}
+    {:else}
+      <p class="p-4 text-sm text-muted">{error ?? "Warte auf Tool-Aufruf …"}</p>
     {/if}
-  {:else}
-    <p class="p-4 text-sm text-muted">{error ?? "Warte auf Tool-Aufruf …"}</p>
-  {/if}
+  </ToolFrame>
 </div>

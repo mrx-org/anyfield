@@ -146,7 +146,7 @@
   const fmt = (v: number) => (Math.abs(v) >= 100 ? v.toFixed(0) : Math.abs(v) >= 1 ? v.toFixed(2) : v.toPrecision(2));
 </script>
 
-<div class="flex h-full flex-col gap-3 overflow-y-auto bg-panel p-3 text-sm text-text">
+<div class="flex h-full flex-col gap-3 overflow-y-auto p-3 text-sm text-text">
   <section class="flex flex-col gap-2">
     <h2 class="text-xs font-semibold uppercase tracking-wide text-muted">Phantom</h2>
     {#if sel.state}
