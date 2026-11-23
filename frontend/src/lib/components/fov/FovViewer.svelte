@@ -36,7 +36,7 @@
       onfov={(change) => sel.patch({ fov: change })}
       layout="auto"
       class="min-h-0 w-full flex-1"
-      viewClass="min-h-0 w-full flex-1"
+      viewClass="min-h-72 w-full flex-1"
     />
     <div class="flex flex-wrap items-center gap-x-3 gap-y-1 font-mono text-xs text-muted">
       <span title="Mitte (mm)">Pos {v(fov.center_mm, 1)}</span>

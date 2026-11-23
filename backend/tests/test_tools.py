@@ -76,6 +76,15 @@ async def test_fov_validation_and_conflicts(client, as_user):
         await client.call_tool("move_fov", {"session_key": key, "delta_mm": [1, 0, 0], "expected_rev": 7})
 
 
+async def test_fov_viewer_is_an_app(client):
+    tools = {t.name: t for t in await client.list_tools()}
+    assert tools["open_fov_viewer"].meta["ui"]["resourceUri"] == "ui://anyfield/fov-viewer.html"
+    resources = {str(r.uri): r for r in await client.list_resources()}
+    assert resources["ui://anyfield/fov-viewer.html"].mime_type.startswith("text/html")
+    r = await call(client, "open_fov_viewer")
+    assert r["key"] is None and r["state"]["fov"]["size_mm"] == [200.0, 200.0, 100.0]
+
+
 async def test_fov_planner_is_an_app(client):
     tools = {t.name: t for t in await client.list_tools()}
     ui = tools["open_fov_planner"].meta["ui"]

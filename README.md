@@ -32,7 +32,7 @@ Web-App: `/` (eigene Sessions), `/s/{key}` (eine Session, mit Ansicht des Zustan
 | -- | -- |
 | Sessions (Login) | `list_sessions`, `create_session`, `rename_session`, `delete_session` |
 | Zustand | `get_state`, `patch_state` (JSON Merge Patch) |
-| FOV-Planer | `set_fov`, `move_fov`, `rotate_fov`, `open_fov_planner` |
+| FOV-Planer | `set_fov`, `move_fov`, `rotate_fov`, `open_fov_planner`, `open_fov_viewer` |
 | Phantom (BIfTI) | `list_phantom_collections`, `list_phantoms`, `list_cas_phantoms`, `list_phantom_tissues`, `select_phantom`, `set_phantom_view`, `get_phantom_maps`, `open_phantom_browser`, `open_phantom_preview` |
 
 Der Session-Zustand ist ein kleines JSON nur mit der Auswahl, keine Daten:
@@ -96,11 +96,17 @@ Scanner-Rahmen der Karten in den RAS+-Rahmen des Phantoms zurückgedreht. Der FO
 zeigt so die Vorschau im FOV.
 
 FOV-Planung sind zwei Tools: der **FOV-Planer** (`fov_planner`) mit Slidern für Position,
-Rotation, Größe und Matrix (eine Affine mit Raster) und darunter, zum Aufklappen, der
-Phantom-Vorschau auf diesem Raster; und der **visuelle FOV-Planer** (`fov_viewer`), das
-Phantom mit der FOV-Box, breit im 2×2-Raster, schmal eine Ebene mit Auswahl-Dropdown. Beide
-nutzen denselben Viewer-Baustein wie die Phantom-Vorschau (`PhantomViewer`). Der visuelle
-Planer läuft bisher nur auf der Website, noch ohne Maus-Gesten.
+Rotation, Größe und Matrix (eine Affine mit Raster) und oben, zum Aufklappen, der
+Phantom-Vorschau auf diesem Raster („Vorschau - Resampled“); und der **visuelle
+FOV-Planer** (`fov_viewer`, `open_fov_viewer`), das Phantom mit der FOV-Box, breit im
+2×2-Raster, schmal eine Ebene mit Auswahl-Dropdown. Beide nutzen denselben Viewer-Baustein
+wie die Phantom-Vorschau (`PhantomViewer`).
+
+Im visuellen Planer wird die Box in den 2D-Ansichten mit der Maus bearbeitet (Strg oder
+Cmd): ziehen verschiebt die Mitte in der Ebene der Ansicht, Rechtsklick ziehen dreht um die
+Normale der Ansicht (Shift: fein), Mausrad ändert die Größe der Box-Achse entlang der
+Vertikalen der Ansicht (10 mm, Shift: 1 mm). Ohne Strg bleibt die Maus bei NiiVue
+(Fadenkreuz, Schichten). Touch-Gesten fehlen noch.
 
 ## Aufbau
 

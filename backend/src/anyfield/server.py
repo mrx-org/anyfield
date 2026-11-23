@@ -33,6 +33,7 @@ from .phantoms import PROPERTY_KEYS, CasFiles, Catalog, PhantomMaps
 from .store import SessionStore
 
 FOV_APP_URI = "ui://anyfield/fov-planner.html"
+FOV_VIEWER_APP_URI = "ui://anyfield/fov-viewer.html"
 MAX_SESSIONS_PER_USER = 200
 MAX_MATRIX = 1024
 
@@ -277,12 +278,22 @@ def build(
         this returns the state and the web link."""
         return await opened(session_key)
 
+    @mcp.tool(app=AppConfig(resource_uri=FOV_VIEWER_APP_URI), annotations={"readOnlyHint": True})
+    async def open_fov_viewer(session_key: OptionalSessionKey = None) -> dict[str, Any]:
+        """Show the visual FOV planner: the phantom with the FOV box, which the user
+        moves, turns and resizes with the mouse (Ctrl + drag, Ctrl + right drag,
+        Ctrl + wheel). With a session it edits the session's FOV; without one the user
+        plans locally and sends the result back to the chat. The sliders are
+        open_fov_planner. In clients without MCP Apps this returns the state and the web link."""
+        return await opened(session_key)
+
     async def opened(session_key: str | None) -> dict[str, Any]:
         if session_key:
             return public(await load(session_key))
         return {"key": None, "state": State().model_dump()}
 
     app_html(mcp, FOV_APP_URI, "FOV planner", "fov-app.html", base_url, static_dir)
+    app_html(mcp, FOV_VIEWER_APP_URI, "FOV viewer", "fov-viewer-app.html", base_url, static_dir)
 
     # --- Phantoms (BIfTI): a separate tool ----------------------------------
 
