@@ -10,7 +10,9 @@
   // grabbed), Ctrl + right drag turns it about the tile's normal (Shift: finer),
   // Ctrl + wheel resizes the box axis along the tile's vertical (by how far the wheel
   // turns, ~2 mm per notch; Shift: finer). Without Ctrl, NiiVue handles the mouse.
+  import Info from "@lucide/svelte/icons/info";
   import { MULTIPLANAR_TYPE, NVMesh, Niivue, SHOW_RENDER, SLICE_TYPE } from "@niivue/niivue";
+  import { Popover, Portal } from "@skeletonlabs/skeleton-svelte";
   import { onMount } from "svelte";
   import { boxAxisAlong, fovMesh, rotateAboutWorldAxis } from "../../geometry/fov";
   import { niftiName } from "../../state/maps.svelte";
@@ -319,6 +321,29 @@
     >
       {#each maps?.properties ?? [] as p (p.key)}<option value={p.key}>{p.label}</option>{/each}
     </select>
+    {#if onfov}
+      <!-- How to edit the box: behind a button, the view stays free of text -->
+      <Popover>
+        <Popover.Trigger class="btn-icon btn-icon-sm hover:preset-tonal shrink-0" aria-label="Bedienung der FOV-Box">
+          <Info class="size-4" aria-hidden="true" />
+        </Popover.Trigger>
+        <Portal>
+          <Popover.Positioner>
+            <Popover.Content class="card max-w-72 space-y-2 bg-surface-100-900 p-3 text-xs shadow-xl">
+              <Popover.Title class="font-semibold">FOV-Box bearbeiten</Popover.Title>
+              <Popover.Description>
+                <ul class="space-y-1">
+                  <li><b>Strg + ziehen:</b> verschieben</li>
+                  <li><b>Strg + Rechtsklick ziehen:</b> drehen (Shift: fein)</li>
+                  <li><b>Strg + Mausrad:</b> Größe (Shift: fein)</li>
+                </ul>
+                <p class="mt-2 text-muted">Ohne Strg: Klick setzt das Fadenkreuz, Mausrad blättert die Schichten, Rechtsklick ziehen ändert die Fensterung.</p>
+              </Popover.Description>
+            </Popover.Content>
+          </Popover.Positioner>
+        </Portal>
+      </Popover>
+    {/if}
   </div>
   <div bind:this={view} class="relative {viewClass}">
     <canvas bind:this={canvas} class="absolute inset-0 h-full w-full"></canvas>
