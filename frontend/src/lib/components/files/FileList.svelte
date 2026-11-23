@@ -4,10 +4,10 @@
   // to it shows all files or only the bifti phantoms. Narrow, the table scrolls sideways.
   // Options (MCP tool open_file_list, or set by a parent): `mode` fixes the dropdown
   // (bifti: no type column), `download` the download buttons.
-  // Clicking a name: without a session, `"name": <sha256>` to the chat (website: copied);
-  // with a session it depends on the mode: bifti makes the file the session's phantom
-  // (its button filled), all does nothing. `select` (the phantom browser) picks the phantom
-  // also into a local selection.
+  // Clicking a name: `"name": <sha256>` to the chat (website: copied, with a notice);
+  // with a session in bifti mode instead the file becomes the session's phantom (its
+  // button filled). `select` (the phantom browser) picks the phantom also into a local
+  // selection.
   // Bump `reload` to load the list again (e.g. after an upload). Opened again, the list
   // this client loaded last shows at once while the server's (cached a few minutes)
   // comes in.
@@ -53,9 +53,7 @@
   let chosenMode = $state<FileMode>("all");
   const mode = $derived(fixedMode ?? chosenMode);
   /** What a click on a name does. */
-  const click = $derived(
-    mode === "bifti" && (select ?? !!sel.sessionKey) ? "phantom" : sel.sessionKey ? "none" : "chat",
-  );
+  const click = $derived(mode === "bifti" && (select ?? !!sel.sessionKey) ? "phantom" : "chat");
   const phantomSha = $derived(sel.state?.phantom && isCas(sel.state.phantom) ? sel.state.phantom.sha256 : null);
 
   function pick(f: UserFile) {
@@ -186,10 +184,8 @@
                     aria-pressed={f.sha256 === phantomSha}
                     onclick={() => pick(f)}><span class="truncate">{f.name}</span></button
                   >
-                {:else if click === "chat"}
-                  <FileName client={sel.client} name={f.name} sha256={f.sha256} />
                 {:else}
-                  <span class="block truncate" title={f.sha256}>{f.name}</span>
+                  <FileName client={sel.client} name={f.name} sha256={f.sha256} />
                 {/if}
               </td>
               {#if fixedMode !== "bifti"}<td class="px-2 py-1 whitespace-nowrap text-muted">{f.type ?? "–"}</td>{/if}

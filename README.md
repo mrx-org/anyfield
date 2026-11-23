@@ -141,10 +141,10 @@ anyfield hält keine Dateien, die Bytes gehen direkt zwischen Browser und Gatewa
   `openLink`, das iframe darf nicht selbst herunterladen). Ein Dropdown neben der Suche
   zeigt alle Dateien oder nur BIfTIs (`.zip`). Optionen des Tools: `mode` (`all` oder
   `bifti`) legt das Dropdown fest und graut es aus, bei `bifti` ohne Spalte „Typ“;
-  `download=false` blendet die Downloads aus. Ein Klick auf den Namen: ohne Session
-  `"name": <hash>` in den Chat (auf der Website kopiert), mit Session je nach Modus, bei
-  `bifti` wird die Datei Phantom der Session (hervorgehoben), bei `all` nichts. Weitere
-  Modi (z. B. Sequenzen) setzen später ihr Feld. Das Gateway löscht eine Datei einen Tag
+  `download=false` blendet die Downloads aus. Ein Klick auf den Namen schickt
+  `"name": <hash>` in den Chat (auf der Website kopiert er, mit Benachrichtigung unten
+  rechts); nur mit Session im Modus `bifti` wird die Datei stattdessen Phantom der Session
+  (Knopf gefüllt). Weitere Modi (z. B. Sequenzen) setzen später ihr Feld. Das Gateway löscht eine Datei einen Tag
   nach ihrer letzten Nutzung.
 - `file_manager` (`open_file_manager`): beides untereinander; ein Upload lädt die Liste
   neu. Auf der Website hinter „Dateien“ in der Kopfzeile.

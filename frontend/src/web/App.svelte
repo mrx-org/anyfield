@@ -12,6 +12,8 @@
   import FileManager from "../lib/components/files/FileManager.svelte";
   import { LocalSelection } from "../lib/state/local.svelte";
   import ToolFrame from "../lib/components/ToolFrame.svelte";
+  import Toaster from "../lib/components/Toaster.svelte";
+  import { toaster } from "../lib/toast";
   import { SessionStore } from "../lib/state/session.svelte";
   import type { SessionSummary } from "../lib/types";
 
@@ -23,7 +25,6 @@
   let error = $state<string | null>(null);
   let keyInput = $state("");
   let loggedIn = $state(transport.loggedIn);
-  let copied = $state(false);
   let showState = $state(false);
   let showFiles = $state(false);
 
@@ -81,9 +82,12 @@
   }
 
   async function copyLink() {
-    await navigator.clipboard.writeText(location.href);
-    copied = true;
-    setTimeout(() => (copied = false), 1500);
+    try {
+      await navigator.clipboard.writeText(location.href);
+      toaster.success({ title: "Link kopiert", description: location.href });
+    } catch (e) {
+      toaster.error({ title: "Nicht kopiert", description: e instanceof Error ? e.message : String(e) });
+    }
   }
 
   onMount(() => {
@@ -114,7 +118,7 @@
     </button>
     {#if store && sessionKey}
       <button class="btn btn-sm preset-outlined-surface-300-700" onclick={copyLink}>
-        {copied ? "Kopiert" : "Link kopieren"}
+        Link kopieren
       </button>
     {/if}
   </header>
@@ -215,3 +219,4 @@
     </main>
   {/if}
 </div>
+<Toaster />
