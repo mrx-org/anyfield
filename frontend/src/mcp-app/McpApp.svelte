@@ -125,7 +125,7 @@
           <span class="min-w-0 flex-1 truncate text-muted" title={sel.state ? summary(sel.state) : ""}>
             {sel.state ? summary(sel.state) : ""}
           </span>
-          <button class="shrink-0 rounded bg-accent px-3 py-1 font-medium text-black" onclick={sendToChat}>
+          <button class="btn btn-sm preset-filled-primary-500 shrink-0" onclick={sendToChat}>
             {sent ? "Gesendet" : "In den Chat"}
           </button>
         </footer>

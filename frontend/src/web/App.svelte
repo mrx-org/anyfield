@@ -101,19 +101,19 @@
 
 <div class="flex h-full flex-col">
   <header class="flex items-center gap-3 border-b border-border bg-panel px-4 py-2 text-sm">
-    <button class="font-semibold" onclick={() => go("/")}>anyfield</button>
+    <button class="btn btn-sm px-1 font-semibold hover:preset-tonal" onclick={() => go("/")}>anyfield</button>
     {#if store && sessionKey}
       <span class="text-muted">/</span>
       <span>{store.server?.name ?? "…"}</span>
-      <button class="ml-auto text-muted hover:text-text" onclick={() => (showState = true)} aria-haspopup="dialog">
+      <button class="btn btn-sm hover:preset-tonal ml-auto" onclick={() => (showState = true)} aria-haspopup="dialog">
         Zustand (JSON)
       </button>
     {/if}
-    <button class="text-muted hover:text-text {store && sessionKey ? '' : 'ml-auto'}" onclick={() => (showFiles = true)} aria-haspopup="dialog">
+    <button class="btn btn-sm hover:preset-tonal {store && sessionKey ? '' : 'ml-auto'}" onclick={() => (showFiles = true)} aria-haspopup="dialog">
       Dateien
     </button>
     {#if store && sessionKey}
-      <button class="rounded border border-border px-2 py-0.5 hover:bg-bg" onclick={copyLink}>
+      <button class="btn btn-sm preset-outlined-surface-300-700" onclick={copyLink}>
         {copied ? "Kopiert" : "Link kopieren"}
       </button>
     {/if}
@@ -180,18 +180,18 @@
       <section class="flex flex-col gap-2">
         <h2 class="text-sm font-semibold uppercase tracking-wide text-muted">Session öffnen</h2>
         <form class="flex gap-2" onsubmit={(e) => { e.preventDefault(); if (keyInput.trim()) go(`/s/${keyInput.trim()}`); }}>
-          <input bind:value={keyInput} placeholder="Session-Key" class="flex-1 rounded border border-border bg-bg px-2 py-1" />
-          <button class="rounded bg-accent px-3 py-1 font-medium text-black">Öffnen</button>
+          <input bind:value={keyInput} placeholder="Session-Key" class="input flex-1" />
+          <button class="btn preset-filled-primary-500">Öffnen</button>
         </form>
       </section>
 
       <section class="flex flex-col gap-2">
         <div class="flex items-center">
           <h2 class="text-sm font-semibold uppercase tracking-wide text-muted">Meine Sessions</h2>
-          {#if loggedIn}<button class="ml-auto text-xs text-muted hover:text-text" onclick={logout}>Abmelden</button>{/if}
+          {#if loggedIn}<button class="btn btn-sm hover:preset-tonal ml-auto text-xs" onclick={logout}>Abmelden</button>{/if}
         </div>
         {#if sessions === null}
-          <button class="self-start rounded border border-border px-3 py-1 hover:bg-panel" onclick={loadSessions}>
+          <button class="btn preset-outlined-surface-300-700 self-start" onclick={loadSessions}>
             Anmelden
           </button>
         {:else}
@@ -200,14 +200,14 @@
               <li class="flex items-center gap-2 px-3 py-2">
                 <a class="flex-1 hover:text-accent" href="/s/{s.key}" onclick={(e) => { e.preventDefault(); go(`/s/${s.key}`); }}>{s.name}</a>
                 <span class="text-xs text-muted">{new Date(s.updated_at * 1000).toLocaleString("de-DE")}</span>
-                <button class="text-xs text-muted hover:text-text" onclick={() => rename(s)}>Umbenennen</button>
-                <button class="text-xs text-muted hover:text-red-400" onclick={() => remove(s)}>Löschen</button>
+                <button class="btn btn-sm hover:preset-tonal text-xs" onclick={() => rename(s)}>Umbenennen</button>
+                <button class="btn btn-sm hover:preset-tonal-error text-xs" onclick={() => remove(s)}>Löschen</button>
               </li>
             {:else}
               <li class="px-3 py-2 text-muted">Noch keine Sessions.</li>
             {/each}
           </ul>
-          <button class="self-start rounded bg-accent px-3 py-1 font-medium text-black" onclick={create}>Neue Session</button>
+          <button class="btn preset-filled-primary-500 self-start" onclick={create}>Neue Session</button>
         {/if}
       </section>
 
