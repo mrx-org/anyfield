@@ -35,7 +35,9 @@
 
   // svelte-ignore state_referenced_locally
   const app = new App({ name, version: "0.1.0" });
-  const client = new AnyfieldClient(new McpAppTransport(app));
+  // Everything towards the chat goes through the transport, as in the components
+  const transport = new McpAppTransport(app);
+  const client = new AnyfieldClient(transport);
   let sel = $state<Selection | null>(null);
   /** The tool call's arguments but the session key: options of the tool (e.g. mode). */
   let options = $state<Record<string, unknown>>({});
@@ -67,14 +69,18 @@
     sel = new LocalSelection(client, initial, (state) => {
       sent = false;
       if (!summary) return;
-      app.updateModelContext({ content: [{ type: "text", text: summary(state) }] }).catch(() => {});
+      transport.setChatContext(summary(state)).catch(() => {});
     });
   }
 
   async function sendToChat() {
     if (!sel?.state || !summary) return;
-    const r = await app.sendMessage({ role: "user", content: [{ type: "text", text: summary(sel.state) }] });
-    sent = !r.isError;
+    try {
+      await transport.sendToChat(summary(sel.state));
+      sent = true;
+    } catch {
+      sent = false;
+    }
   }
 
   // Register before connect(): the host may send these right after the handshake.
