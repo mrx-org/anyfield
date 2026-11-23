@@ -15,7 +15,7 @@
   import ArrowUp from "@lucide/svelte/icons/arrow-up";
   import Download from "@lucide/svelte/icons/download";
   import RefreshCw from "@lucide/svelte/icons/refresh-cw";
-  import { FILE_MODES, filterFiles, formatSize, formatTime, isBifti, sortFiles, type FileMode, type SortKey } from "../../files";
+  import { FILE_MODES, filterFiles, formatSize, formatTime, sortFiles, type FileMode, type SortKey } from "../../files";
   import { isCas, phantomPatch } from "../../phantom";
   import type { Selection } from "../../state/selection";
   import type { UserFile } from "../../types";
@@ -46,8 +46,7 @@
   ];
   const columns = $derived(fixedMode === "bifti" ? ALL_COLUMNS.filter((c) => c.key !== "type") : ALL_COLUMNS);
 
-  // svelte-ignore state_referenced_locally
-  let files = $state<UserFile[] | null>(sel.client.lastFiles);
+  let files = $state<UserFile[] | null>(null);
   let loading = $state(false);
   let error = $state<string | null>(null);
   let query = $state("");
@@ -67,15 +66,17 @@
   let sortKey = $state<SortKey>("uploaded_at");
   let ascending = $state(false);
 
-  const inMode = $derived(files ? (mode === "bifti" ? files.filter(isBifti) : files) : []);
-  const shown = $derived(sortFiles(filterFiles(inMode, query), sortKey, ascending));
+  const shown = $derived(sortFiles(filterFiles(files ?? [], query), sortKey, ascending));
   const chat = $derived(!!sel.client.transport.openLink);
 
+  // The list of the mode (filtered by the server, list_user_files)
   async function load(refresh = false) {
+    const m = mode;
     loading = true;
     error = null;
     try {
-      files = await sel.client.listUserFiles(refresh);
+      const listed = await sel.client.listUserFiles(m, refresh);
+      if (m === mode) files = listed;
     } catch (e) {
       error = e instanceof Error ? e.message : String(e);
     } finally {
@@ -83,8 +84,10 @@
     }
   }
 
-  // First the server's list (cached there), after an upload the gateway's
+  // On a new mode: the list loaded last for it at once, then the server's (cached
+  // there); after an upload the gateway's
   $effect(() => {
+    files = sel.client.lastFiles.get(mode) ?? null;
     void load(reload > 0);
   });
 

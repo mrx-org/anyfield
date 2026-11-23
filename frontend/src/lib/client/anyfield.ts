@@ -1,4 +1,5 @@
 import { phantomArgs, phantomKey } from "../phantom";
+import type { FileMode } from "../files";
 import type { FovChange, PhantomChoice, PhantomCollection, PhantomMaps, PhantomTree, ScanGrid, Session, SessionSummary, StatePatch, UserFile, Vec3 } from "../types";
 import type { Transport } from "./transport";
 
@@ -30,11 +31,15 @@ export class AnyfieldClient {
   moveFov = (key: string, delta_mm: Vec3) => this.call<FovChange>("move_fov", { session_key: key, delta_mm });
 
   // The user's files in the gateway's storage
-  /** The last list this client loaded: shown at once while a new one loads. */
-  lastFiles: UserFile[] | null = null;
-  /** `refresh`: past the server's cache of a few minutes (after an upload, reload). */
-  listUserFiles = async (refresh = false) =>
-    (this.lastFiles = await this.call<UserFile[]>("list_user_files", refresh ? { refresh } : {}));
+  /** The last list this client loaded per mode: shown at once while a new one loads. */
+  lastFiles = new Map<FileMode, UserFile[]>();
+  /** `mode` bifti: only the phantoms. `refresh`: past the server's cache of a few
+   * minutes (after an upload, reload). */
+  async listUserFiles(mode: FileMode = "all", refresh = false): Promise<UserFile[]> {
+    const files = await this.call<UserFile[]>("list_user_files", { mode, ...(refresh ? { refresh } : {}) });
+    this.lastFiles.set(mode, files);
+    return files;
+  }
   createFileUploadUrl = (fileName: string) =>
     this.call<{ url: string; expires_in: number | null }>("create_file_upload_url", { file_name: fileName });
 

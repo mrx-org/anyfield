@@ -1,6 +1,6 @@
 """BIfTI phantoms, all from the MRX gateway: the catalog (`bifti_list_collections`,
-`bifti_list_phantoms`), the caller's phantoms in the CAS (`list_files`) and the
-display maps of a phantom (`bifti_get_property_maps`). anyfield keeps no phantom
+`bifti_list_phantoms`) and the display maps of a phantom (`bifti_get_property_maps`).
+The caller's phantoms in the CAS are their .zip files (file_tools.UserFiles). anyfield keeps no phantom
 data of its own; it only shows what the gateway returns.
 """
 
@@ -110,37 +110,6 @@ class Catalog(_Cached):
     async def check(self, collection: str, name: str) -> None:
         if name not in flatten(await self.phantoms(collection)):
             raise PhantomError(f"No phantom {name!r} in {collection!r}")
-
-
-# --- Phantoms in the CAS ----------------------------------------------------------
-
-
-class CasFiles:
-    """The caller's bifti phantoms in the gateway's CAS: the `.zip` files of
-    `list_files`. Not cached: the answer depends on who asks. Whether a zip really
-    is a phantom shows only when its maps are loaded."""
-
-    def __init__(self, call: Call | None) -> None:
-        self._call = call
-
-    async def phantoms(self) -> list[dict[str, Any]]:
-        """`{sha256, name, size, uploaded_at}` per phantom, newest first."""
-        if self._call is None:
-            raise PhantomError("The MRX gateway is not available on this server.")
-        files = await self._call("list_files", {})
-        if isinstance(files, dict):
-            files = files.get("result", files.get("files", []))
-        seen: dict[str, dict[str, Any]] = {}
-        for f in files or []:
-            name, sha = str(f.get("name", "")), str(f.get("hash", ""))
-            if sha and sha not in seen and (name.lower().endswith(".zip") or "zip" in str(f.get("type", ""))):
-                seen[sha] = {
-                    "sha256": sha,
-                    "name": name,
-                    "size": f.get("size"),
-                    "uploaded_at": f.get("uploaded_at"),
-                }
-        return sorted(seen.values(), key=lambda p: str(p["uploaded_at"] or ""), reverse=True)
 
 
 # --- Display maps ---------------------------------------------------------------

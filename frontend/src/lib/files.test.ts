@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { fileLine, filterFiles, formatSize, isBifti, sortFiles } from "./files";
+import { fileLine, filterFiles, formatSize, sortFiles } from "./files";
 import type { UserFile } from "./types";
 
 const f = (name: string, size: number | null, uploaded_at: string | null, type: string | null = null): UserFile => ({
@@ -29,12 +29,6 @@ describe("files", () => {
     expect(sortFiles(files, "size", true).map((x) => x.name)).toEqual(["c", "b", "a"]);
     expect(sortFiles(files, "size", false).map((x) => x.name)).toEqual(["b", "c", "a"]);
     expect(sortFiles(files, "uploaded_at", false).map((x) => x.name)).toEqual(["a", "c", "b"]);
-  });
-
-  it("tells bifti phantoms (zips) apart", () => {
-    expect(isBifti(f("brain.ZIP", 1, null))).toBe(true);
-    expect(isBifti(f("x", 1, null, "application/zip"))).toBe(true);
-    expect(isBifti(f("gre.seq", 1, null, "text/plain"))).toBe(false);
   });
 
   it("filters by name and type", () => {

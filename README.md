@@ -74,7 +74,7 @@ zeigt unter `/s/{key}` Phantom-Browser, visuellen FOV-Planer und FOV-Planer nebe
 Der Phantom-Browser hat zwei Reiter: **Katalog** (bifti-Registry) und **CAS**, die
 Dateiliste (`file_list`, siehe Datei-Tools) fest im Modus BIfTI, ohne Download; ein Klick
 wählt das Phantom. Ein geteiltes CAS-Phantom, das nicht in den eigenen Dateien liegt,
-steht dort nicht (MRX-90). Die KI findet BIfTIs mit `list_user_files`. Ob ein Zip ein
+steht dort nicht (MRX-90). Die KI findet BIfTIs mit `list_user_files(mode="bifti")`. Ob ein Zip ein
 Phantom ist, zeigt sich erst beim Laden der Karten. Wer was listen darf (z. B. kein
 `list_files` für `visitor`), regelt das Gateway.
 

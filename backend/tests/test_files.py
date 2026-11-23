@@ -49,6 +49,8 @@ async def test_file_tools():
         files = (await call(c, "list_user_files"))["result"]
         assert [f["sha256"] for f in files] == ["bb", "aa"]  # newest first, one row per hash
         assert files[0]["url"] == f"{GATEWAY}/files/bb"
+        biftis = (await call(c, "list_user_files", mode="bifti"))["result"]
+        assert [f["sha256"] for f in biftis] == ["aa"]
         lists = sum(1 for c in gw.calls if c[0] == "list_files")
         await call(c, "list_user_files")  # cached
         assert sum(1 for c in gw.calls if c[0] == "list_files") == lists

@@ -6,10 +6,10 @@ import pytest
 from fastmcp import Client
 from fastmcp.exceptions import ToolError
 
+from anyfield.file_tools import UserFiles
 from anyfield.models import Fov
 from anyfield.phantoms import (
     DEFAULT_PHANTOM,
-    CasFiles,
     Catalog,
     PhantomError,
     PhantomMaps,
@@ -134,7 +134,7 @@ async def client(gateway, as_user):
         "https://anyfield.test",
         catalog=Catalog(gateway),
         maps=PhantomMaps(gateway),
-        cas=CasFiles(gateway),
+        files=UserFiles(gateway, "https://gw.test"),
     )
     async with Client(mcp) as c:
         c.key = (await c.call_tool("create_session", {})).structured_content["key"]
@@ -302,7 +302,7 @@ async def test_phantom_preview_with_session_shows_the_session(client):
 
 
 async def test_cas_phantoms_are_the_zips_of_the_callers_files(gateway):
-    phantoms = await CasFiles(gateway).phantoms()
+    phantoms = await UserFiles(gateway, "https://gw.test").list(mode="bifti")
     # Only zips, each hash once, newest first
     assert [(p["sha256"], p["name"]) for p in phantoms] == [(CAS_ZIP, "mine.zip"), (OLD_ZIP, "old.zip")]
 

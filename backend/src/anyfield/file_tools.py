@@ -24,6 +24,13 @@ from .args import OptionalSessionKey
 from .auth import current_user
 
 Call = Callable[[str, dict[str, Any]], Awaitable[Any]]
+FileMode = Literal["all", "bifti"]
+ModeArg = Annotated[
+    FileMode | None,
+    Field(
+        description="'all' files or only 'bifti' phantoms (.zip; whether one really is a phantom shows when its maps load)"
+    ),
+]
 
 UPLOAD_APP_URI = "ui://anyfield/file-upload.html"
 LIST_APP_URI = "ui://anyfield/file-list.html"
@@ -59,9 +66,14 @@ class UserFiles:
             raise ToolError("The MRX gateway is not available on this server.")
         return self._call
 
-    async def list(self, refresh: bool = False) -> list[dict[str, Any]]:
+    async def list(self, refresh: bool = False, mode: FileMode = "all") -> list[dict[str, Any]]:
         """`{sha256, name, type, size, uploaded_at, url}` per file, newest first;
-        from the cache unless `refresh` or older than `LIST_TTL`."""
+        `mode` 'bifti': only the bifti phantoms. From the cache unless `refresh` or
+        older than `LIST_TTL`."""
+        listed = await self._all(refresh)
+        return [f for f in listed if is_bifti(f)] if mode == "bifti" else listed
+
+    async def _all(self, refresh: bool) -> list[dict[str, Any]]:
         who, now = self._who(), time.monotonic()
         cached = self._lists.get(who)
         if not refresh and cached is not None and now - cached[0] < LIST_TTL:
@@ -98,9 +110,6 @@ class UserFiles:
         return f"{self.gateway_url}/files/{sha256}"
 
 
-FileMode = Literal["all", "bifti"]
-
-
 def register(
     mcp: FastMCP,
     files: UserFiles,
@@ -113,6 +122,7 @@ def register(
 
     @mcp.tool(annotations={"readOnlyHint": True})
     async def list_user_files(
+        mode: ModeArg = None,
         refresh: Annotated[
             bool, Field(description="Ask the gateway again instead of a list from the last minutes")
         ] = False,
@@ -121,8 +131,9 @@ def register(
         newest first: `sha256` (pass it to tools), `name`, `type`, `size` (bytes),
         `uploaded_at` and `url` to download it. The gateway removes a file a day
         after its last use. The list may be a few minutes old; `refresh` for the
-        current one (e.g. right after an upload)."""
-        return await files.list(refresh)
+        current one (e.g. right after an upload). `mode='bifti'` for the phantoms
+        (pass one to select_phantom as `sha256`)."""
+        return await files.list(refresh, mode or "all")
 
     @mcp.tool
     async def create_file_upload_url(
@@ -146,8 +157,8 @@ def register(
         mode: Annotated[
             FileMode | None,
             Field(
-                description="Fix what the list shows: 'all' files or only 'bifti' phantoms (.zip; "
-                "the type column is left out). Omit to let the user switch."
+                description="Fix what the list shows: 'all' files or only 'bifti' phantoms (the type "
+                "column is left out). Omit to let the user switch."
             ),
         ] = None,
         download: Annotated[bool, Field(description="Show the download buttons")] = True,
@@ -158,9 +169,7 @@ def register(
         'bifti' mode it makes the file the session's phantom, in 'all' mode nothing.
         E.g. mode='bifti' to let the user pick one of their phantoms. Returns the files
         (and with a session the session) too."""
-        listed = await files.list()
-        if mode == "bifti":
-            listed = [f for f in listed if is_bifti(f)]
+        listed = await files.list(mode=mode or "all")
         return {**(await opened(session_key) if session_key else {}), "files": listed}
 
     @mcp.tool(app=AppConfig(resource_uri=MANAGER_APP_URI), annotations={"readOnlyHint": True})

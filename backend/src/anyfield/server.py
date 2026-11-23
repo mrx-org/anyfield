@@ -31,7 +31,7 @@ from .auth import AuthProvider, make_login_on_demand, require_user
 from .file_tools import UserFiles
 from .gateway import GATEWAY_URL, GatewayClient
 from .models import PhantomChoice, Session, State, Vec3, merge_patch, new_key
-from .phantoms import PROPERTY_KEYS, CasFiles, Catalog, PhantomMaps
+from .phantoms import PROPERTY_KEYS, Catalog, PhantomMaps
 from .store import SessionStore
 
 FOV_APP_URI = "ui://anyfield/fov-planner.html"
@@ -49,17 +49,15 @@ def build(
     static_dir: Path | None = None,
     catalog: Catalog | None = None,
     maps: PhantomMaps | None = None,
-    cas: CasFiles | None = None,
     gateway: GatewayClient | None = None,
     files: UserFiles | None = None,
 ) -> FastMCP:
     """`gateway` serves the phantom catalog, CAS phantoms, maps and the user's
-    files; tests pass `catalog`, `cas`, `maps` and `files` instead."""
+    files; tests pass `catalog`, `maps` and `files` instead."""
     base_url = base_url.rstrip("/")
     call = gateway.call_tool if gateway else None
     catalog = catalog or Catalog(call)
     maps = maps or PhantomMaps(call)
-    cas = cas or CasFiles(call)
     files = files or UserFiles(call, gateway.url if gateway else GATEWAY_URL)
     mcp = FastMCP(
         "anyfield",
@@ -307,7 +305,7 @@ def build(
         phantom_tools.Ctx(base_url=base_url, change=change, public=public, opened=opened),
         catalog=catalog,
         maps=maps,
-        cas=cas,
+        files=files,
         static_dir=static_dir,
     )
 

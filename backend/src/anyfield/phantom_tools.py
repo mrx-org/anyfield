@@ -16,11 +16,11 @@ from pydantic import Field, ValidationError
 
 from . import fov as fov_ops
 from .args import OptionalSessionKey, SessionKey
+from .file_tools import UserFiles
 from .models import CasPhantom, Fov, Phantom, PhantomChoice, Session, State, View
 from .phantoms import (
     DEFAULT_PHANTOM,
     PROPERTY_KEYS,
-    CasFiles,
     Catalog,
     PhantomError,
     PhantomMaps,
@@ -77,7 +77,7 @@ async def resolve(
     collection: str | None,
     phantom: str | None,
     sha256: str | None,
-    cas: CasFiles | None = None,
+    files: UserFiles | None = None,
 ) -> Phantom | None:
     """The phantom the arguments name: a CAS phantom (`sha256`, `phantom` its
     optional display name), a registry phantom (`collection` and `phantom`, checked
@@ -90,7 +90,7 @@ async def resolve(
             CasPhantom(sha256=h, name="check")
         except ValidationError as e:
             raise ToolError("sha256 must be the 64 hex digits of a file in the CAS.") from e
-        return CasPhantom(sha256=h, name=phantom or await cas_name(cas, h))
+        return CasPhantom(sha256=h, name=phantom or await cas_name(files, h))
     if collection is None and phantom is None:
         return None
     if collection is None or phantom is None:
@@ -99,11 +99,11 @@ async def resolve(
     return PhantomChoice(collection=collection, name=phantom)
 
 
-async def cas_name(cas: CasFiles | None, sha256: str) -> str:
+async def cas_name(files: UserFiles | None, sha256: str) -> str:
     """The file name of a CAS phantom, from the caller's files; the shortened hash if
     it is not among them (e.g. someone else's, or the gateway does not list files)."""
     try:
-        for entry in await cas.phantoms() if cas else []:
+        for entry in await files.list(mode="bifti") if files else []:
             if entry["sha256"] == sha256 and entry["name"]:
                 return entry["name"]
     except (PhantomError, ToolError):
@@ -117,7 +117,7 @@ def register(
     *,
     catalog: Catalog,
     maps: PhantomMaps,
-    cas: CasFiles,
+    files: UserFiles,
     static_dir: Path | None,
 ) -> None:
     from .server import app_html
@@ -167,7 +167,7 @@ def register(
         `tissues` changes the tissues of the session's phantom. Returns the choice.
         Its maps and value ranges: get_phantom_maps. The default phantom:
         patch_state {"phantom": null}."""
-        choice = await resolve(catalog, collection, phantom, sha256, cas)
+        choice = await resolve(catalog, collection, phantom, sha256, files)
         if choice is None and (session_key is None or tissues is None):
             raise ToolError("Give collection and phantom, or sha256 for a phantom in the CAS.")
         if session_key is None:
@@ -195,7 +195,7 @@ def register(
         ones the maps combine (get_phantom_maps, select_phantom `tissues`). The
         phantom as in get_phantom_maps; without one the default phantom. The first
         call for a large phantom can take a while."""
-        choice = await resolve(catalog, collection, phantom, sha256, cas) or DEFAULT_PHANTOM
+        choice = await resolve(catalog, collection, phantom, sha256, files) or DEFAULT_PHANTOM
         return {"phantom": choice.model_dump(), "tissues": await guard(maps.tissues(choice))}
 
     @mcp.tool
@@ -240,7 +240,7 @@ def register(
         either, the default one (endres-brainweb-001 / subj04-3T-1mm.json). With `fov` the
         maps are on the scan grid (FOV and matrix), as the planned scan would see
         the phantom. The first call for a phantom or grid can take up to a minute."""
-        chosen = await resolve(catalog, collection, phantom, sha256, cas)
+        chosen = await resolve(catalog, collection, phantom, sha256, files)
         choice = chosen or DEFAULT_PHANTOM
         try:
             if fov is None:
@@ -300,7 +300,7 @@ def register(
             return await ctx.opened(session_key)
         if property is not None and property not in PROPERTY_KEYS:
             raise ToolError(f"Unknown property {property!r}. Known: {', '.join(PROPERTY_KEYS)}")
-        choice = await resolve(catalog, collection, phantom, sha256, cas)
+        choice = await resolve(catalog, collection, phantom, sha256, files)
         if choice is None:
             raise ToolError(
                 "Without a session give collection and phantom (from list_phantoms), or sha256 "
