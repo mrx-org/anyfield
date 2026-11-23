@@ -24,9 +24,10 @@ from starlette.routing import Mount
 from starlette.staticfiles import StaticFiles
 from starlette.types import ASGIApp, Receive, Scope, Send
 
+from . import file_tools, phantom_tools
 from . import fov as fov_ops
-from . import phantom_tools
 from .auth import AuthProvider, make_login_on_demand, require_user
+from .file_tools import UserFiles
 from .gateway import GATEWAY_URL, GatewayClient
 from .models import PhantomChoice, Session, State, Vec3, merge_patch, new_key
 from .phantoms import PROPERTY_KEYS, CasFiles, Catalog, PhantomMaps
@@ -61,14 +62,16 @@ def build(
     maps: PhantomMaps | None = None,
     cas: CasFiles | None = None,
     gateway: GatewayClient | None = None,
+    files: UserFiles | None = None,
 ) -> FastMCP:
-    """`gateway` serves the phantom catalog, CAS phantoms and maps; tests pass
-    `catalog`, `cas` and `maps` instead."""
+    """`gateway` serves the phantom catalog, CAS phantoms, maps and the user's
+    files; tests pass `catalog`, `cas`, `maps` and `files` instead."""
     base_url = base_url.rstrip("/")
     call = gateway.call_tool if gateway else None
     catalog = catalog or Catalog(call)
     maps = maps or PhantomMaps(call)
     cas = cas or CasFiles(call)
+    files = files or UserFiles(call, gateway.url if gateway else GATEWAY_URL)
     mcp = FastMCP(
         "anyfield",
         instructions=(
@@ -307,6 +310,8 @@ def build(
     app_html(mcp, FOV_VIEWER_APP_URI, "FOV viewer", "fov-viewer-app.html", base_url, static_dir)
 
     # --- Phantoms (BIfTI): a separate tool ----------------------------------
+
+    file_tools.register(mcp, files, base_url=base_url, static_dir=static_dir)
 
     phantom_tools.register(
         mcp,
