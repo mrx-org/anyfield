@@ -167,7 +167,7 @@ async def test_select_phantom_in_session(client):
         client, "select_phantom", session_key=client.key, collection="demo-001", phantom="shapes.json"
     )
     assert r == {"rev": 2, "phantom": {"collection": "demo-001", "name": "shapes.json"}, "tissues": None}
-    r = await call(client, "set_phantom_view", session_key=client.key, property="dB0")
+    r = await call(client, "set_phantom_property", session_key=client.key, property="dB0")
     assert r["view"] == {"property": "dB0"}
     s = await call(client, "get_state", session_key=client.key)
     assert s["state"]["phantom"]["name"] == "shapes.json" and s["state"]["view"]["property"] == "dB0"
@@ -365,7 +365,7 @@ async def test_tissues_of_the_chosen_phantom(client):
     # Only tissues: those of the session's phantom
     r = await call(client, "select_phantom", session_key=client.key, tissues=["WM", "GM", "GM"])
     assert r["phantom"] is None and r["tissues"] == ["GM", "WM"]
-    await call(client, "set_phantom_view", session_key=client.key, property="T2")
+    await call(client, "set_phantom_property", session_key=client.key, property="T2")
     s = await call(client, "get_state", session_key=client.key)
     assert s["state"]["tissues"] == ["GM", "WM"]  # the view leaves them alone
     r = await call(client, "select_phantom", session_key=client.key, tissues=[])

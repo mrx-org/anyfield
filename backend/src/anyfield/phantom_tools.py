@@ -147,6 +147,7 @@ def register(
 
     @mcp.tool
     async def select_phantom(
+        session_key: OptionalSessionKey = None,
         collection: CollectionArg = None,
         phantom: PhantomArg = None,
         sha256: Sha256Arg = None,
@@ -157,7 +158,6 @@ def register(
                 "list_phantom_tissues (e.g. ['GM', 'WM']); [] or omitted: all"
             ),
         ] = None,
-        session_key: OptionalSessionKey = None,
     ) -> dict[str, Any]:
         """Choose a phantom and its tissues: one of the catalog (`collection` and
         `phantom`) or one in the CAS (`sha256`, optionally `phantom` as its display
@@ -199,18 +199,16 @@ def register(
         return {"phantom": choice.model_dump(), "tissues": await guard(maps.tissues(choice))}
 
     @mcp.tool
-    async def set_phantom_view(
-        session_key: SessionKey,
-        property: PropertyArg | None = None,
-    ) -> dict[str, Any]:
-        """How all viewers of the session show its phantom: the property (PD, T1,
-        T2, T2', ADC, dB0, B1+ ...; which ones a phantom has: get_phantom_maps). Left
-        out, it stays. The plane (tra, cor, sag, 3D) each viewer picks itself; the
-        tissues belong to the phantom (select_phantom)."""
-        changes = {k: v for k, v in {"property": property}.items() if v is not None}
+    async def set_phantom_property(session_key: SessionKey, property: PropertyArg) -> dict[str, Any]:
+        """The property all viewers of the session show (state field `view.property`):
+        PD, T1, T2, T2', ADC, dB0, B1+ ... (which ones a phantom has: get_phantom_maps).
+        The plane (tra, cor, sag, 3D) each viewer picks itself; the tissues belong to
+        the phantom (select_phantom)."""
 
         def update(st: State) -> State:
-            return st.model_copy(update={"view": View.model_validate({**st.view.model_dump(), **changes})})
+            return st.model_copy(
+                update={"view": View.model_validate({**st.view.model_dump(), "property": property})}
+            )
 
         session = await ctx.change(session_key, update)
         return {"rev": session.rev, "view": session.state.view.model_dump()}
@@ -295,7 +293,7 @@ def register(
                 raise ToolError(
                     "With a session the preview shows the session's phantom and view: leave out "
                     "collection, phantom, sha256, property and tissues (change them with select_phantom "
-                    "and set_phantom_view)."
+                    "and set_phantom_property)."
                 )
             return await ctx.opened(session_key)
         if property is not None and property not in PROPERTY_KEYS:

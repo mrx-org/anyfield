@@ -34,7 +34,7 @@ Web-App: `/` (eigene Sessions), `/s/{key}` (eine Session, mit Ansicht des Zustan
 | Zustand | `get_state`, `patch_state` (JSON Merge Patch), `open_session` (JSON-Editor) |
 | Dateien | `list_user_files`, `create_file_upload_url`, `open_file_upload`, `open_file_list`, `open_file_manager` |
 | FOV-Planer | `set_fov`, `move_fov`, `rotate_fov`, `open_fov_planner`, `open_fov_viewer` |
-| Phantom (BIfTI) | `list_phantom_collections`, `list_phantoms`, `list_phantom_tissues`, `select_phantom`, `set_phantom_view`, `get_phantom_maps`, `open_phantom_browser`, `open_phantom_preview` |
+| Phantom (BIfTI) | `list_phantom_collections`, `list_phantoms`, `list_phantom_tissues`, `select_phantom`, `set_phantom_property`, `get_phantom_maps`, `open_phantom_browser`, `open_phantom_preview` |
 
 Der Session-Zustand ist ein kleines JSON nur mit der Auswahl, keine Daten:
 
@@ -60,7 +60,7 @@ betrachtet (und später simuliert) werden, Namen aus `list_phantom_tissues`, `nu
 alle. Gewählt wird es im Phantom-Browser oder mit `select_phantom` (`tissues`, mit Session
 auch ohne Phantom für das aktuelle). Ein anderes Phantom setzt die Gewebe auf alle zurück,
 außer sie werden mit ihm zusammen gesetzt. `view` gilt für alle Viewer der Session
-(Eigenschaft, `set_phantom_view`). Die Ebene (`tra`, `cor`, `sag`, `3d`) wählt jeder
+(Eigenschaft, `set_phantom_property`). Die Ebene (`tra`, `cor`, `sag`, `3d`) wählt jeder
 Viewer selbst; sie steht nicht im Zustand. Ebenso die Fensterung: Unter jedem Viewer
 zeigt ein Histogramm die Werte der Eigenschaft, seine zwei Linien (Min, Max) stellen das
 Fenster ein (auch Rechtsklick ziehen im Bild); ein neues Volumen beginnt beim Wertebereich.
