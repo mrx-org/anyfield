@@ -109,7 +109,10 @@ Normale der Ansicht (Shift: fein), Mausrad ändert die Größe der Box-Achse ent
 Vertikalen der Ansicht (etwa 2 mm je Raste, Shift: fein). Ohne Strg bleibt die Maus bei NiiVue
 (Fadenkreuz, Schichten, Rechtsklick ziehen: Fensterung). Auf Touch-Geräten schaltet ein
 Knopf über der Ansicht die Finger auf die Box um: ein Finger verschiebt, zwei Finger drehen
-(ab 5°, damit Spreizen nicht mitdreht) und spreizen die Größe in der Ebene der Ansicht.
+(ab 5°, damit Spreizen nicht mitdreht). Spreizen ändert die Box-Achse, in deren Richtung
+gespreizt wird, um so viel, wie die Finger entlang dieser Achse auseinandergehen (diagonal:
+beide; je Achse ab 3 mm). Die Achsen drehen dabei mit der Box mit, Drehen und Spreizen
+gehen also gleichzeitig.
 
 ## Aufbau
 

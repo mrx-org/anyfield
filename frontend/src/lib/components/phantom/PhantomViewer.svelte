@@ -11,13 +11,14 @@
   // Ctrl + wheel resizes the box axis along the tile's vertical (by how far the wheel
   // turns, ~2 mm per notch; Shift: finer). Without Ctrl, NiiVue handles the mouse.
   // On touch screens a toggle above the view hands the fingers to the box: one finger
-  // moves it, two fingers turn it (after a few degrees) and pinch its size in the plane.
+  // moves it, two fingers turn it (after a few degrees) and, spread along a box axis,
+  // resize that axis (the axes turn with the box while turning).
   import Info from "@lucide/svelte/icons/info";
   import Move from "@lucide/svelte/icons/move";
   import { MULTIPLANAR_TYPE, NVMesh, Niivue, SHOW_RENDER, SLICE_TYPE } from "@niivue/niivue";
   import { Popover, Portal } from "@skeletonlabs/skeleton-svelte";
   import { onMount } from "svelte";
-  import { boxAxisAlong, fovMesh, rotateAboutWorldAxis } from "../../geometry/fov";
+  import { boxAxisAlong, fovMesh, rotateAboutWorldAxis, rotationMatrix } from "../../geometry/fov";
   import { niftiName } from "../../state/maps.svelte";
   import type { Fov, PhantomMaps, Plane, Vec3 } from "../../types";
 
@@ -317,14 +318,26 @@
   /** Degrees two fingers must turn before the box turns: a pinch alone always turns a little. */
   const TURN_DEAD_ZONE_DEG = 5;
 
+  /** mm the fingers must spread along a box axis before that axis changes: spreading
+   * along one axis always wobbles the other a little. */
+  const SIZE_DEAD_ZONE_MM = 3;
+
+  type Vec2 = [number, number];
+  /** One box axis lying in the tile's plane, as the pinch sees it. */
+  type PinchAxis = {
+    index: 0 | 1 | 2; // box axis (FOV x, y, z)
+    dir: Vec2; // its direction in the tile's plane (h, v), unit, at the start
+    spread: number; // the fingers' distance along it at the start, mm
+    offset: number; // the dead zone already used up (0 until the axis moves)
+  };
   type Pinch = {
     tile: number;
     axCorSag: 0 | 1 | 2;
     rotation: Vec3;
     size: Vec3;
     angle: number; // of the line between the fingers, in the tile's plane
-    dist: number; // between the fingers, mm
     turning: boolean;
+    axes: PinchAxis[];
   };
   let pinch: Pinch | null = null;
 
@@ -335,23 +348,44 @@
     return a && b ? [a, b] : null;
   }
 
-  const planeDist = (axCorSag: 0 | 1 | 2, a: Vec3, b: Vec3) => {
+  /** From finger `a` to finger `b` in the tile's plane (h, v), mm. */
+  function between(axCorSag: 0 | 1 | 2, a: Vec3, b: Vec3): Vec2 {
     const [h, v] = TILE[axCorSag].axes;
-    return Math.hypot(b[h] - a[h], b[v] - a[v]);
-  };
+    return [b[h] - a[h], b[v] - a[v]];
+  }
+
+  const along = (f: Vec2, dir: Vec2) => Math.abs(f[0] * dir[0] + f[1] * dir[1]);
+  const turn2 = ([x, y]: Vec2, rad: number): Vec2 => [x * Math.cos(rad) - y * Math.sin(rad), x * Math.sin(rad) + y * Math.cos(rad)];
+
+  /** The two box axes that lie (most) in the tile's plane, with their directions in it. */
+  function planeAxes(axCorSag: 0 | 1 | 2, rotation: Vec3): { index: 0 | 1 | 2; dir: Vec2 }[] {
+    const [h, v] = TILE[axCorSag].axes;
+    const m = rotationMatrix(rotation); // column i: box axis i in world
+    const first = boxAxisAlong(rotation, h);
+    const rest = ([0, 1, 2] as const).filter((i) => i !== first);
+    const second = Math.abs(m[v][rest[0]]) >= Math.abs(m[v][rest[1]]) ? rest[0] : rest[1];
+    return [first, second].map((index) => {
+      const x = m[h][index];
+      const y = m[v][index];
+      const n = Math.hypot(x, y) || 1;
+      return { index, dir: [x / n, y / n] as Vec2 };
+    });
+  }
 
   function startPinch(e: TouchEvent) {
     const f = fingers(e);
     if (!f || !fov) return;
     const [a, b] = f;
+    const rotation = [...fov.rotation_deg] as Vec3;
+    const fb = between(a.axCorSag, a.mm, b.mm);
     pinch = {
       tile: a.tile,
       axCorSag: a.axCorSag,
-      rotation: [...fov.rotation_deg] as Vec3,
+      rotation,
       size: [...fov.size_mm] as Vec3,
       angle: angleIn(a.axCorSag, a.mm, b.mm),
-      dist: planeDist(a.axCorSag, a.mm, b.mm),
       turning: false,
+      axes: planeAxes(a.axCorSag, rotation).map((x) => ({ ...x, spread: along(fb, x.dir), offset: 0 })),
     };
   }
 
@@ -369,15 +403,20 @@
       pinch.angle += (Math.sign(d) * TURN_DEAD_ZONE_DEG * Math.PI) / 180;
       d -= Math.sign(d) * TURN_DEAD_ZONE_DEG;
     }
+    const turned = pinch.turning ? d : 0;
     const change: Partial<Fov> = {};
     if (pinch.turning) {
-      change.rotation_deg = rotateAboutWorldAxis(pinch.rotation, t.normal, t.turn * d).map((v) => round(v, 0.1)) as Vec3;
+      change.rotation_deg = rotateAboutWorldAxis(pinch.rotation, t.normal, t.turn * turned).map((v) => round(v, 0.1)) as Vec3;
     }
-    // Spreading scales the box axes that lie in the tile's plane
-    const ratio = pinch.dist > 0 ? planeDist(pinch.axCorSag, a.mm, b.mm) / pinch.dist : 1;
+    // Spreading along a box axis resizes that axis by as much as the fingers spread
+    // along it. The axes turn with the box, so turning the fingers alone resizes nothing.
+    const fb = between(pinch.axCorSag, a.mm, b.mm);
     const size = [...pinch.size] as Vec3;
-    for (const i of new Set(t.axes.map((w) => boxAxisAlong(pinch!.rotation, w)))) {
-      size[i] = Math.min(MAX_SIZE_MM, Math.max(1, round(pinch.size[i] * ratio, 0.1)));
+    for (const x of pinch.axes) {
+      const grow = along(fb, turn2(x.dir, (turned * Math.PI) / 180)) - x.spread;
+      if (!x.offset && Math.abs(grow) > SIZE_DEAD_ZONE_MM) x.offset = Math.sign(grow) * SIZE_DEAD_ZONE_MM;
+      if (!x.offset) continue;
+      size[x.index] = Math.min(MAX_SIZE_MM, Math.max(1, round(pinch.size[x.index] + grow - x.offset, 0.1)));
     }
     change.size_mm = size;
     send(change);
@@ -467,7 +506,7 @@
                   <ul class="space-y-1">
                     <li><b>Ein Finger:</b> verschieben</li>
                     <li><b>Zwei Finger drehen:</b> drehen</li>
-                    <li><b>Zwei Finger spreizen:</b> Größe</li>
+                    <li><b>Zwei Finger spreizen:</b> Größe entlang der Box-Achse, in deren Richtung gespreizt wird (diagonal: beide)</li>
                   </ul>
                 {/if}
               </Popover.Description>
