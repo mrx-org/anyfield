@@ -6,7 +6,7 @@
   // (bifti: no type column), `download` the download buttons.
   // Clicking a name: without a session, `"name": <sha256>` to the chat (website: copied);
   // with a session it depends on the mode: bifti makes the file the session's phantom
-  // (highlighted), all does nothing. `select` (the phantom browser) picks the phantom
+  // (its button filled), all does nothing. `select` (the phantom browser) picks the phantom
   // also into a local selection.
   // Bump `reload` to load the list again (e.g. after an upload). Opened again, the list
   // this client loaded last shows at once while the server's (cached a few minutes)
@@ -163,7 +163,7 @@
         </thead>
         <tbody>
           {#each shown as f (f.sha256)}
-            <tr class="hover:preset-tonal {click === 'phantom' && f.sha256 === phantomSha ? 'preset-tonal-primary' : ''}">
+            <tr>
               {#if showDownload}
                             <td class="px-2 py-1">
                   {#if chat}
@@ -181,10 +181,10 @@
                 {#if click === "phantom"}
                   <button
                     type="button"
-                    class="max-w-full truncate text-left hover:text-accent hover:underline"
+                    class="btn btn-sm max-w-full justify-start {f.sha256 === phantomSha ? 'preset-filled-primary-500' : 'preset-tonal'}"
                     title="Als Phantom wählen"
                     aria-pressed={f.sha256 === phantomSha}
-                    onclick={() => pick(f)}>{f.name}</button
+                    onclick={() => pick(f)}><span class="truncate">{f.name}</span></button
                   >
                 {:else if click === "chat"}
                   <FileName client={sel.client} name={f.name} sha256={f.sha256} />

@@ -27,7 +27,7 @@
 
 <button
   type="button"
-  class="inline-flex max-w-full items-center gap-1 text-left hover:text-accent hover:underline"
+  class="btn btn-sm preset-tonal max-w-full justify-start"
   title={chat ? "Name und Hash in den Chat senden" : "Name und Hash kopieren"}
   onclick={hand}
 >
