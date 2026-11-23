@@ -32,7 +32,7 @@ const bridge = new AppBridge(
 bridge.oncalltool = async (params) =>
   (await client.callTool(params)) as Awaited<ReturnType<NonNullable<typeof bridge.oncalltool>>>;
 // Every other query parameter is a tool argument, e.g. for the preview without a session:
-// ?tool=open_phantom_preview&collection=endres-brainweb-001&phantom=subj04-3T-1mm.json&property=T1
+// ?tool=open_phantom_preview&collection=endres-brainweb-001&name=subj04-3T-1mm.json&property=T1
 const reserved = new Set(["key", "tool", "maxHeight"]);
 const args: Record<string, string> = Object.fromEntries([...query].filter(([k]) => !reserved.has(k)));
 if (key) args.session_key = key;

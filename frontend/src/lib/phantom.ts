@@ -9,7 +9,7 @@ export const phantomKey = (p: PhantomChoice) => (isCas(p) ? `cas:${p.sha256}` : 
 
 /** The tool arguments that name a phantom (select_phantom, get_phantom_maps, ...). */
 export const phantomArgs = (p: PhantomChoice): Record<string, string> =>
-  isCas(p) ? { sha256: p.sha256 } : { collection: p.collection, phantom: p.name };
+  isCas(p) ? { sha256: p.sha256 } : { collection: p.collection, name: p.name };
 
 /**
  * The state patch that makes `p` the phantom. A merge patch merges objects, so

@@ -164,7 +164,7 @@ async def test_select_phantom_in_session(client):
     assert s["state"]["phantom"] is None
 
     r = await call(
-        client, "select_phantom", session_key=client.key, collection="demo-001", phantom="shapes.json"
+        client, "select_phantom", session_key=client.key, collection="demo-001", name="shapes.json"
     )
     assert r == {"rev": 2, "phantom": {"collection": "demo-001", "name": "shapes.json"}, "tissues": None}
     r = await call(client, "set_phantom_property", session_key=client.key, property="dB0")
@@ -177,14 +177,14 @@ async def test_select_phantom_in_session(client):
 
 
 async def test_select_phantom_without_session(client):
-    r = await call(client, "select_phantom", collection="demo-001", phantom="shapes.json")
+    r = await call(client, "select_phantom", collection="demo-001", name="shapes.json")
     assert r == {"phantom": {"collection": "demo-001", "name": "shapes.json"}, "tissues": None}
 
 
 async def test_unknown_phantom_is_rejected(client):
     for args in [
-        {"collection": "demo-001", "phantom": "../../etc.json"},
-        {"session_key": client.key, "collection": "demo-001", "phantom": "x.json"},
+        {"collection": "demo-001", "name": "../../etc.json"},
+        {"session_key": client.key, "collection": "demo-001", "name": "x.json"},
     ]:
         with pytest.raises(ToolError, match="No phantom"):
             await client.call_tool("select_phantom", args)
@@ -194,11 +194,11 @@ async def test_unknown_phantom_is_rejected(client):
             {"session_key": client.key, "patch": {"phantom": {"collection": "demo-001", "name": "x.json"}}},
         )
     with pytest.raises(ToolError, match="No phantom"):
-        await client.call_tool("get_phantom_maps", {"collection": "demo-001", "phantom": "x.json"})
+        await client.call_tool("get_phantom_maps", {"collection": "demo-001", "name": "x.json"})
 
 
 async def test_phantom_maps_from_gateway(client, gateway):
-    r = await call(client, "get_phantom_maps", collection="demo-001", phantom="shapes.json")
+    r = await call(client, "get_phantom_maps", collection="demo-001", name="shapes.json")
     assert r["phantom"] == {"collection": "demo-001", "name": "shapes.json"} and r["default"] is False
     assert [p["key"] for p in r["properties"]] == ["density", "T1", "dB0"]
     # Passed through: the URL is the gateway's, only what a viewer needs is kept
@@ -212,7 +212,7 @@ async def test_phantom_maps_from_gateway(client, gateway):
     assert r["shape"] == [100, 100, 50] and r["spacing_mm"] == [2.0, 2.0, 2.0]
     assert gateway.maps_calls() == [{"collection": "demo-001", "phantom": {"file_name": "shapes.json"}}]
 
-    await call(client, "get_phantom_maps", collection="demo-001", phantom="shapes.json")
+    await call(client, "get_phantom_maps", collection="demo-001", name="shapes.json")
     assert len(gateway.maps_calls()) == 1  # cached
 
 
@@ -227,7 +227,7 @@ async def test_default_phantom_maps(client, gateway):
 
 async def test_failed_phantom_is_reported(client):
     with pytest.raises(ToolError, match="download failed"):
-        await client.call_tool("get_phantom_maps", {"collection": "demo-001", "phantom": "broken.json"})
+        await client.call_tool("get_phantom_maps", {"collection": "demo-001", "name": "broken.json"})
 
 
 async def test_maps_on_the_fov(client, gateway):
@@ -278,15 +278,15 @@ async def test_phantom_preview_without_session_needs_a_phantom(client):
     with pytest.raises(ToolError, match="give collection and phantom"):
         await call(client, "open_phantom_preview")
     with pytest.raises(ToolError, match="No phantom"):
-        await call(client, "open_phantom_preview", collection="demo-001", phantom="nope.json")
+        await call(client, "open_phantom_preview", collection="demo-001", name="nope.json")
     with pytest.raises(ToolError, match="Unknown property"):
-        await call(client, "open_phantom_preview", collection="demo-001", phantom="shapes.json", property="x")
+        await call(client, "open_phantom_preview", collection="demo-001", name="shapes.json", property="x")
 
     r = await call(
         client,
         "open_phantom_preview",
         collection="demo-001",
-        phantom="shapes.json",
+        name="shapes.json",
         property="T2",
     )
     assert r["key"] is None
@@ -298,7 +298,7 @@ async def test_phantom_preview_with_session_shows_the_session(client):
     r = await call(client, "open_phantom_preview", session_key=client.key)
     assert r["key"] == client.key
     with pytest.raises(ToolError, match="leave out"):
-        await call(client, "open_phantom_preview", session_key=client.key, phantom="shapes.json")
+        await call(client, "open_phantom_preview", session_key=client.key, name="shapes.json")
 
 
 async def test_cas_phantoms_are_the_zips_of_the_callers_files(gateway):
@@ -308,7 +308,7 @@ async def test_cas_phantoms_are_the_zips_of_the_callers_files(gateway):
 
 
 async def test_select_a_cas_phantom_in_a_session(client, gateway):
-    r = await call(client, "select_phantom", session_key=client.key, sha256=CAS_ZIP, phantom="mine.zip")
+    r = await call(client, "select_phantom", session_key=client.key, sha256=CAS_ZIP, name="mine.zip")
     assert r["phantom"] == {"sha256": CAS_ZIP, "name": "mine.zip"}
     s = await call(client, "get_state", session_key=client.key)
     assert s["state"]["phantom"] == {"sha256": CAS_ZIP, "name": "mine.zip"}
@@ -328,7 +328,7 @@ async def test_cas_phantom_arguments_are_checked(client):
     with pytest.raises(ToolError, match="64 hex digits"):
         await call(client, "select_phantom", sha256="nope")
     with pytest.raises(ToolError, match="not both"):
-        await call(client, "select_phantom", sha256=CAS_ZIP, collection="demo-001", phantom="shapes.json")
+        await call(client, "select_phantom", sha256=CAS_ZIP, collection="demo-001", name="shapes.json")
     r = await call(client, "select_phantom", sha256=CAS_ZIP.upper())
     assert r["phantom"]["sha256"] == CAS_ZIP and r["phantom"]["name"] == "mine.zip"
 
@@ -344,7 +344,7 @@ async def test_cas_phantom_in_patch_state_and_preview(client):
 
 
 async def test_tissues_of_a_phantom(client, gateway):
-    r = await call(client, "list_phantom_tissues", collection="demo-001", phantom="shapes.json")
+    r = await call(client, "list_phantom_tissues", collection="demo-001", name="shapes.json")
     assert r["tissues"] == ["CSF", "GM", "WM"]
     r = await call(client, "list_phantom_tissues", sha256=CAS_ZIP)
     assert r["phantom"]["sha256"] == CAS_ZIP
@@ -353,11 +353,11 @@ async def test_tissues_of_a_phantom(client, gateway):
 
 async def test_maps_of_some_tissues(client, gateway):
     maps = await call(
-        client, "get_phantom_maps", collection="demo-001", phantom="shapes.json", tissues=["WM", "GM"]
+        client, "get_phantom_maps", collection="demo-001", name="shapes.json", tissues=["WM", "GM"]
     )
     assert gateway.maps_calls()[-1]["tissues"] == ["GM", "WM"] and maps["tissues"] == ["GM", "WM"]
     # None given (or an empty list): all tissues, the gateway gets no `tissues`
-    await call(client, "get_phantom_maps", collection="demo-001", phantom="shapes.json", tissues=[])
+    await call(client, "get_phantom_maps", collection="demo-001", name="shapes.json", tissues=[])
     assert "tissues" not in gateway.maps_calls()[-1]
 
 
@@ -378,7 +378,7 @@ async def test_tissues_of_the_chosen_phantom(client):
 
     r = await call(client, "select_phantom", session_key=client.key, sha256=CAS_ZIP, tissues=["CSF"])
     assert r["tissues"] == ["CSF"]  # chosen with it
-    r = await call(client, "select_phantom", collection="demo-001", phantom="shapes.json", tissues=["WM"])
+    r = await call(client, "select_phantom", collection="demo-001", name="shapes.json", tissues=["WM"])
     assert r == {"phantom": {"collection": "demo-001", "name": "shapes.json"}, "tissues": ["WM"]}
     with pytest.raises(ToolError, match="Give collection"):
         await call(client, "select_phantom", tissues=["WM"])  # without a session: a phantom too

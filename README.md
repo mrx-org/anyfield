@@ -87,7 +87,7 @@ aus wechseln, ohne es dort zu laden.
 Die KI gibt `collection` und `phantom` an (Pflicht), optional `property` und `tissues` zum
 Start. Mit Session zeigt es Phantom und Ansicht der Session, die anderen Argumente
 entfallen. Im Test-Host werden weitere Query-Parameter zu Tool-Argumenten, z. B.
-`/dev/app-host.html?tool=open_phantom_preview&collection=endres-brainweb-001&phantom=subj04-3T-1mm.json&property=T1`.
+`/dev/app-host.html?tool=open_phantom_preview&collection=endres-brainweb-001&name=subj04-3T-1mm.json&property=T1`.
 
 anyfield hält keine Phantomdaten. Katalog und Karten liefern die bifti-Tools des
 MRX-Gateways (`bifti_list_collections`, `bifti_list_phantoms`,

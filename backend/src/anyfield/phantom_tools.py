@@ -35,7 +35,8 @@ PropertyArg = Annotated[
 CollectionArg = Annotated[
     str | None, Field(description="Registry phantom: collection name from list_phantom_collections")
 ]
-PhantomArg = Annotated[
+# `collection` + `name` or `sha256` + `name`: the fields of the state's `phantom`
+NameArg = Annotated[
     str | None,
     Field(
         description="Registry phantom: file name from list_phantoms, e.g. 'subj04-3T-1mm.json'. "
@@ -75,28 +76,28 @@ async def check(catalog: Catalog, collection: str, name: str) -> None:
 async def resolve(
     catalog: Catalog,
     collection: str | None,
-    phantom: str | None,
+    name: str | None,
     sha256: str | None,
     files: UserFiles | None = None,
 ) -> Phantom | None:
-    """The phantom the arguments name: a CAS phantom (`sha256`, `phantom` its
-    optional display name), a registry phantom (`collection` and `phantom`, checked
+    """The phantom the arguments name: a CAS phantom (`sha256`, `name` its
+    optional display name), a registry phantom (`collection` and `name`, checked
     against the catalog) or `None` for none at all. ToolError for anything else."""
     if sha256 is not None:
         if collection is not None:
-            raise ToolError("Give either sha256 (CAS phantom) or collection and phantom, not both.")
+            raise ToolError("Give either sha256 (CAS phantom) or collection and name, not both.")
         h = sha256.lower()
         try:
             CasPhantom(sha256=h, name="check")
         except ValidationError as e:
             raise ToolError("sha256 must be the 64 hex digits of a file in the CAS.") from e
-        return CasPhantom(sha256=h, name=phantom or await cas_name(files, h))
-    if collection is None and phantom is None:
+        return CasPhantom(sha256=h, name=name or await cas_name(files, h))
+    if collection is None and name is None:
         return None
-    if collection is None or phantom is None:
-        raise ToolError("Give both collection and phantom (or sha256 for a phantom in the CAS).")
-    await check(catalog, collection, phantom)
-    return PhantomChoice(collection=collection, name=phantom)
+    if collection is None or name is None:
+        raise ToolError("Give both collection and name (or sha256 for a phantom in the CAS).")
+    await check(catalog, collection, name)
+    return PhantomChoice(collection=collection, name=name)
 
 
 async def cas_name(files: UserFiles | None, sha256: str) -> str:
@@ -149,7 +150,7 @@ def register(
     async def select_phantom(
         session_key: OptionalSessionKey = None,
         collection: CollectionArg = None,
-        phantom: PhantomArg = None,
+        name: NameArg = None,
         sha256: Sha256Arg = None,
         tissues: Annotated[
             list[str] | None,
@@ -160,14 +161,14 @@ def register(
         ] = None,
     ) -> dict[str, Any]:
         """Choose a phantom and its tissues: one of the catalog (`collection` and
-        `phantom`) or one in the CAS (`sha256`, optionally `phantom` as its display
-        name). With a session it becomes the session's phantom (state fields `phantom`
+        `name`) or one in the CAS (`sha256`, optionally `name` as its display name),
+        as in the state's `phantom`. With a session it becomes the session's phantom (state fields `phantom`
         and `tissues`), and everyone with the session key sees it; the view stays.
         Another phantom without `tissues` gets all its tissues. With a session, only
         `tissues` changes the tissues of the session's phantom. Returns the choice.
         Its maps and value ranges: get_phantom_maps. The default phantom:
         patch_state {"phantom": null}."""
-        choice = await resolve(catalog, collection, phantom, sha256, files)
+        choice = await resolve(catalog, collection, name, sha256, files)
         if choice is None and (session_key is None or tissues is None):
             raise ToolError("Give collection and phantom, or sha256 for a phantom in the CAS.")
         if session_key is None:
@@ -189,13 +190,13 @@ def register(
 
     @mcp.tool(annotations={"readOnlyHint": True})
     async def list_phantom_tissues(
-        collection: CollectionArg = None, phantom: PhantomArg = None, sha256: Sha256Arg = None
+        collection: CollectionArg = None, name: NameArg = None, sha256: Sha256Arg = None
     ) -> dict[str, Any]:
         """The tissues of a phantom (sorted names, e.g. GM, WM, CSF), to choose which
         ones the maps combine (get_phantom_maps, select_phantom `tissues`). The
         phantom as in get_phantom_maps; without one the default phantom. The first
         call for a large phantom can take a while."""
-        choice = await resolve(catalog, collection, phantom, sha256, files) or DEFAULT_PHANTOM
+        choice = await resolve(catalog, collection, name, sha256, files) or DEFAULT_PHANTOM
         return {"phantom": choice.model_dump(), "tissues": await guard(maps.tissues(choice))}
 
     @mcp.tool
@@ -216,7 +217,7 @@ def register(
     @mcp.tool(annotations={"readOnlyHint": True})
     async def get_phantom_maps(
         collection: CollectionArg = None,
-        phantom: PhantomArg = None,
+        name: NameArg = None,
         sha256: Sha256Arg = None,
         fov: Annotated[
             dict[str, Any] | None,
@@ -234,11 +235,11 @@ def register(
         """Display maps of a phantom from the MRX gateway: one NIfTI per property (PD,
         T1, T2, ...; its tissues combined, all or those in `tissues`) with label, unit, value range (2nd/98th
         percentile) and a URL that loads without login. The phantom: one of the
-        catalog (`collection`, `phantom`), one in the CAS (`sha256`) or, without
+        catalog (`collection`, `name`), one in the CAS (`sha256`) or, without
         either, the default one (endres-brainweb-001 / subj04-3T-1mm.json). With `fov` the
         maps are on the scan grid (FOV and matrix), as the planned scan would see
         the phantom. The first call for a phantom or grid can take up to a minute."""
-        chosen = await resolve(catalog, collection, phantom, sha256, files)
+        chosen = await resolve(catalog, collection, name, sha256, files)
         choice = chosen or DEFAULT_PHANTOM
         try:
             if fov is None:
@@ -266,7 +267,7 @@ def register(
     async def open_phantom_preview(
         session_key: OptionalSessionKey = None,
         collection: CollectionArg = None,
-        phantom: PhantomArg = None,
+        name: NameArg = None,
         sha256: Sha256Arg = None,
         property: Annotated[
             str | None,
@@ -284,21 +285,21 @@ def register(
         With a session: the session's phantom, tissues and view (state field `view`),
         the property edited there; leave out the other arguments.
         Without a session: a quick look at any phantom - give `collection` and
-        `phantom` (from list_phantoms) or `sha256` (a phantom in the CAS), optionally
+        `name` (from list_phantoms) or `sha256` (a phantom in the CAS), optionally
         the property to start with and the tissues to show; the view the user ends up
         with comes back to the chat.
         In clients without MCP Apps this returns the state."""
         if session_key is not None:
-            if any(v is not None for v in (collection, phantom, sha256, property, tissues)):
+            if any(v is not None for v in (collection, name, sha256, property, tissues)):
                 raise ToolError(
                     "With a session the preview shows the session's phantom and view: leave out "
-                    "collection, phantom, sha256, property and tissues (change them with select_phantom "
+                    "collection, name, sha256, property and tissues (change them with select_phantom "
                     "and set_phantom_property)."
                 )
             return await ctx.opened(session_key)
         if property is not None and property not in PROPERTY_KEYS:
             raise ToolError(f"Unknown property {property!r}. Known: {', '.join(PROPERTY_KEYS)}")
-        choice = await resolve(catalog, collection, phantom, sha256, files)
+        choice = await resolve(catalog, collection, name, sha256, files)
         if choice is None:
             raise ToolError(
                 "Without a session give collection and phantom (from list_phantoms), or sha256 "
