@@ -3,7 +3,7 @@
   // CAS and pick one. The CAS tab lists the caller's .zip files plus the chosen CAS
   // phantom, so whoever opens a shared session sees it even if it is not theirs.
   // Bound to a Selection: a session or local (MCP App without session, result back
-  // to the chat). The phantom preview folds out below the choice; folded (the
+  // to the chat). The phantom preview folds out at the top; folded (the
   // default) it is not rendered, so changing the phantom loads no maps here.
   import {
     Collapsible,
@@ -208,6 +208,18 @@
 </script>
 
 <div class="flex h-full flex-col gap-3 overflow-y-auto p-3 text-sm text-text">
+  {#if sel.state}
+    <Collapsible open={previewOpen} onOpenChange={(d) => (previewOpen = d.open)}>
+      <Collapsible.Trigger class="btn btn-sm preset-outlined-surface-300-700 w-full justify-start text-xs">
+        <ChevronRight class="size-4 transition-transform {previewOpen ? 'rotate-90' : ''}" aria-hidden="true" />
+        Vorschau
+      </Collapsible.Trigger>
+      <Collapsible.Content class="mt-2">
+        <!-- Only rendered while open: folded, the preview loads nothing -->
+        {#if previewOpen}<ToolFrame name="phantom_preview"><PhantomPreview {sel} /></ToolFrame>{/if}
+      </Collapsible.Content>
+    </Collapsible>
+  {/if}
   <section class="flex flex-col gap-2">
     <h2 class="text-xs font-semibold uppercase tracking-wide text-muted">Phantom</h2>
     {#if sel.state}
@@ -219,16 +231,6 @@
       </div>
       {#if current}<span class="-mt-1 truncate text-xs text-muted" title={currentCas?.sha256}>{phantomSource(current)}</span>{/if}
       <TissueMenu {sel} />
-      <Collapsible open={previewOpen} onOpenChange={(d) => (previewOpen = d.open)}>
-        <Collapsible.Trigger class="btn btn-sm preset-outlined-surface-300-700 w-full justify-start text-xs">
-          <ChevronRight class="size-4 transition-transform {previewOpen ? 'rotate-90' : ''}" aria-hidden="true" />
-          Vorschau
-        </Collapsible.Trigger>
-        <Collapsible.Content class="mt-2">
-          <!-- Only rendered while open: folded, the preview loads nothing -->
-          {#if previewOpen}<ToolFrame name="phantom_preview"><PhantomPreview {sel} /></ToolFrame>{/if}
-        </Collapsible.Content>
-      </Collapsible>
     {/if}
     {#if sel.error}<p class="text-xs text-error-500">{sel.error}</p>{/if}
   </section>
