@@ -10,7 +10,7 @@
   import { DEFAULT_PHANTOM } from "../../state/patch";
   import type { Selection } from "../../state/selection";
   import type { PhantomChoice, Plane } from "../../types";
-  import VolumePreview from "./VolumePreview.svelte";
+  import PhantomViewer from "./PhantomViewer.svelte";
 
   let { sel }: { sel: Selection } = $props();
 
@@ -99,7 +99,7 @@
     {#if maps.loading}<span class="shrink-0 text-xs text-accent">wird vorbereitet …</span>{/if}
   </div>
 
-  <VolumePreview url={maps.loading ? null : (shown?.url ?? null)} range={shown?.range ?? null} {plane} class="" />
+  <PhantomViewer url={maps.loading ? null : (shown?.url ?? null)} range={shown?.range ?? null} {plane} />
 
   <div class="grid grid-cols-3 gap-2">
     <select

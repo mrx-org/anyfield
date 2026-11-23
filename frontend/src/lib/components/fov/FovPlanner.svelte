@@ -5,9 +5,8 @@
   import { MapsLoader } from "../../state/maps.svelte";
   import type { Selection } from "../../state/selection";
   import type { ScanGrid } from "../../types";
-  import VolumePreview from "../phantom/VolumePreview.svelte";
+  import PhantomViewer from "../phantom/PhantomViewer.svelte";
   import FovPanel from "./FovPanel.svelte";
-  import FovViewer from "./FovViewer.svelte";
 
   let { sel, compact = false }: { sel: Selection; compact?: boolean } = $props();
   // svelte-ignore state_referenced_locally
@@ -43,7 +42,13 @@
   <!-- Compact (MCP App): a fixed-height viewer and the controls below it, as tall as they are -->
   <div class={compact ? "h-72 shrink-0" : "min-h-0 flex-1 min-h-96"}>
     {#if sel.state}
-      <FovViewer fov={sel.state.fov} phantomUrl={maps.loading ? null : (shown?.url ?? null)} range={shown?.range ?? null} />
+      <PhantomViewer
+        url={maps.loading ? null : (shown?.url ?? null)}
+        range={shown?.range ?? null}
+        fov={sel.state.fov}
+        layout="grid"
+        class="h-full w-full min-h-64"
+      />
     {:else if sel.error}
       <p class="p-4 text-error-500">{sel.error}</p>
     {:else}
@@ -63,7 +68,7 @@
           Im Scan-Raster
           {#if resliced.loading}<span class="font-normal normal-case tracking-normal text-accent">berechne …</span>{/if}
         </h3>
-        <VolumePreview url={reslicedShown?.url ?? null} range={reslicedShown?.range ?? null} />
+        <PhantomViewer url={reslicedShown?.url ?? null} range={reslicedShown?.range ?? null} class="aspect-square w-full max-w-72 self-center" />
         {#if resliced.maps && resliced.maps.coarsening > 1}
           <span class="text-xs text-muted">Vorschau {resliced.maps.coarsening}× vergröbert</span>
         {/if}
