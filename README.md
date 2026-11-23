@@ -60,7 +60,9 @@ alle. Gewählt wird es im Phantom-Browser oder mit `select_phantom` (`tissues`, 
 auch ohne Phantom für das aktuelle). Ein anderes Phantom setzt die Gewebe auf alle zurück,
 außer sie werden mit ihm zusammen gesetzt. `view` gilt für alle Viewer der Session
 (Eigenschaft, `set_phantom_view`). Die Ebene (`tra`, `cor`, `sag`, `3d`) wählt jeder
-Viewer selbst; sie steht nicht im Zustand.
+Viewer selbst; sie steht nicht im Zustand. Ebenso die Fensterung: Unter jedem Viewer
+zeigt ein Histogramm die Werte der Eigenschaft, seine zwei Linien (Min, Max) stellen das
+Fenster ein (auch Rechtsklick ziehen im Bild); ein neues Volumen beginnt beim Wertebereich.
 
 `open_*` zeigen in Clients mit MCP Apps das jeweilige Tool im Chat. Mit `session_key`
 arbeitet es auf der Session; ohne wählt der Nutzer lokal, jede Änderung geht als

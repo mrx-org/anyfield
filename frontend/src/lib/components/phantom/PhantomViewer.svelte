@@ -4,7 +4,10 @@
   // 3D, or chosen by the width) and the FOV box on top (none when `fov` is null).
   // Above the view: the property shown (PD, T1, ...; state field `view.property`, the
   // same in all viewers, so it comes in and goes out through `onproperty`) and, while
-  // one plane is shown, the plane (per viewer, not in the state).
+  // one plane is shown, the plane (per viewer, not in the state). Below it: the
+  // histogram of the shown property with the window (per viewer, not in the state;
+  // a new volume starts at the property's value range). Dragging its lines or NiiVue's
+  // right-drag windowing changes it, the other follows.
   // With `onfov`, the box is edited with the mouse in the 2D tiles: Ctrl (or Cmd) +
   // left drag moves the box with the mouse in the tile's plane (held where it was
   // grabbed), Ctrl + right drag turns it about the tile's normal (Shift: finer),
@@ -18,7 +21,9 @@
   import { MULTIPLANAR_TYPE, NVMesh, Niivue, SHOW_RENDER, SLICE_TYPE } from "@niivue/niivue";
   import { Popover, Portal } from "@skeletonlabs/skeleton-svelte";
   import { onMount } from "svelte";
+  import Histogram from "./Histogram.svelte";
   import { boxAxisAlong, fovMesh, rotateAboutWorldAxis, rotationMatrix } from "../../geometry/fov";
+  import { logHistogram } from "../../histogram";
   import { niftiName } from "../../state/maps.svelte";
   import type { Fov, PhantomMaps, Plane, Vec3 } from "../../types";
 
@@ -74,8 +79,6 @@
   };
   const FOV_RGBA = new Uint8Array([245, 165, 36, 255]);
 
-  const fmt = (v: number) => (Math.abs(v) >= 100 ? v.toFixed(0) : Math.abs(v) >= 1 ? v.toFixed(2) : v.toPrecision(2));
-
   /** The body's background colour as RGBA in 0..1, for NiiVue. A 2D canvas turns
    * any CSS colour (rgb, oklch, ...) into RGB. */
   function pageBackground(): [number, number, number, number] {
@@ -96,6 +99,9 @@
   let loaded: string | null = null;
   let loadError = $state<string | null>(null);
   let width = $state(0);
+  /** Histogram of the loaded volume: bar heights over `axis`, and the window. */
+  let hist = $state<{ bins: Float32Array; axis: [number, number]; label: string; unit: string } | null>(null);
+  let win = $state<[number, number]>([0, 1]);
   const shown = $derived(maps?.properties.find((p) => p.key === property) ?? maps?.properties[0] ?? null);
   const url = $derived(loading ? null : (shown?.url ?? null));
   const range = $derived(shown?.range ?? null);
@@ -123,6 +129,8 @@
       crosshairColor: [1, 0.2, 0.2, 0.6],
       loadingText: "",
     });
+    // NiiVue's own windowing (right drag) moves the histogram's lines
+    nv.onIntensityChange = (v) => (win = [v.cal_min ?? win[0], v.cal_max ?? win[1]]);
     nv.attachToCanvas(canvas).then(
       () => (ready = true),
       (e) => (loadError = e instanceof Error ? e.message : String(e)),
@@ -136,6 +144,7 @@
         view.removeEventListener(t, onTouch, { capture: true });
       endDrag();
       cancelAnimationFrame(frame);
+      cancelAnimationFrame(windowFrame);
       mesh = null;
       nv = null;
     };
@@ -155,9 +164,17 @@
     loaded = url;
     const r = $state.snapshot(range);
     const opts = r ? { cal_min: r[0], cal_max: r[1] } : {};
+    const { label, unit } = shown ?? { label: "", unit: "" };
     nv.loadVolumes([{ url, name: niftiName(url), ...opts }])
       .then(() => {
         loadError = null;
+        const vol = nv?.volumes[0];
+        if (vol?.img) {
+          const axis: [number, number] = r ?? [vol.global_min ?? 0, vol.global_max ?? 1];
+          const bins = logHistogram(vol.img, axis[0], axis[1], 256, 2_000_000, (v) => vol.intensityRaw2Scaled(v));
+          hist = { bins, axis, label, unit };
+          win = [vol.cal_min ?? axis[0], vol.cal_max ?? axis[1]];
+        }
         nv?.drawScene();
       })
       .catch((e) => (loadError = e instanceof Error ? e.message : String(e)));
@@ -182,6 +199,21 @@
     }
     nv.drawScene();
   });
+
+  // The histogram's lines set NiiVue's window, at most once per frame
+  let windowFrame = 0;
+  function setWindow(w: [number, number]) {
+    win = w;
+    if (windowFrame) return;
+    windowFrame = requestAnimationFrame(() => {
+      windowFrame = 0;
+      const vol = nv?.volumes[0];
+      if (!nv || !vol) return;
+      vol.cal_min = win[0];
+      vol.cal_max = win[1];
+      nv.updateGLVolume();
+    });
+  }
 
   // --- Editing the FOV box with the mouse -------------------------------------------
 
@@ -522,7 +554,7 @@
       <p class="absolute inset-x-0 top-2 text-center text-xs text-error-500">Viewer: {loadError}</p>
     {/if}
   </div>
-  {#if shown?.range}
-    <span class="text-xs text-muted">{shown.label}: {fmt(shown.range[0])} … {fmt(shown.range[1])} {shown.unit}</span>
+  {#if hist}
+    <Histogram bins={hist.bins} axis={hist.axis} window={win} onwindow={setWindow} label={hist.label} unit={hist.unit} />
   {/if}
 </div>
