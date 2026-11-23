@@ -34,6 +34,7 @@ from .store import SessionStore
 
 FOV_APP_URI = "ui://anyfield/fov-planner.html"
 FOV_VIEWER_APP_URI = "ui://anyfield/fov-viewer.html"
+SESSION_APP_URI = "ui://anyfield/session.html"
 MAX_SESSIONS_PER_USER = 200
 MAX_MATRIX = 1024
 
@@ -222,6 +223,16 @@ def build(
             expected_rev,
         )
         return public(session)
+
+    @mcp.tool(app=AppConfig(resource_uri=SESSION_APP_URI), annotations={"readOnlyHint": True})
+    async def open_session(session_key: SessionKey) -> dict[str, Any]:
+        """Show the session's state as JSON for the user to edit: "Update" sends the
+        changes (patch_state, rejected with the reason if they do not validate or the
+        session changed meanwhile), "Reload" drops them and loads the current state.
+        In clients without MCP Apps this returns the session and the web link."""
+        return public(await load(session_key))
+
+    app_html(mcp, SESSION_APP_URI, "Session", "session-app.html", base_url, static_dir)
 
     # --- FOV planner ---------------------------------------------------------
 

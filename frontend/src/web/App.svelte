@@ -1,11 +1,14 @@
 <script lang="ts">
   // Standalone web app: `/` lists your sessions (login), `/s/{key}` opens one.
+  import X from "@lucide/svelte/icons/x";
+  import { Dialog, Portal } from "@skeletonlabs/skeleton-svelte";
   import { onMount } from "svelte";
   import { AnyfieldClient } from "../lib/client/anyfield";
   import { LoginRedirect, McpHttpTransport } from "../lib/client/mcp-http";
   import FovPlanner from "../lib/components/fov/FovPlanner.svelte";
   import FovViewer from "../lib/components/fov/FovViewer.svelte";
   import PhantomBrowser from "../lib/components/phantom/PhantomBrowser.svelte";
+  import SessionEditor from "../lib/components/session/SessionEditor.svelte";
   import ToolFrame from "../lib/components/ToolFrame.svelte";
   import { SessionStore } from "../lib/state/session.svelte";
   import type { SessionSummary } from "../lib/types";
@@ -96,7 +99,7 @@
     {#if store && sessionKey}
       <span class="text-muted">/</span>
       <span>{store.server?.name ?? "…"}</span>
-      <button class="ml-auto text-muted hover:text-text" onclick={() => (showState = !showState)} aria-expanded={showState}>
+      <button class="ml-auto text-muted hover:text-text" onclick={() => (showState = true)} aria-haspopup="dialog">
         Zustand (JSON)
       </button>
       <button class="rounded border border-border px-2 py-0.5 hover:bg-bg" onclick={copyLink}>
@@ -106,6 +109,25 @@
   </header>
 
   {#if sessionKey && store}
+    <!-- The session editor (MCP tool open_session) as a modal; opened fresh each time -->
+    <Dialog open={showState} onOpenChange={(e) => (showState = e.open)}>
+      <Portal>
+        <Dialog.Backdrop class="fixed inset-0 z-50 bg-bg/80 backdrop-blur-sm" />
+        <Dialog.Positioner class="fixed inset-0 z-50 flex items-center justify-center p-4">
+          <Dialog.Content class="card flex h-[80vh] w-full max-w-2xl flex-col gap-2 border border-border bg-bg p-3 shadow-xl">
+            <header class="flex items-center">
+              <Dialog.Title class="text-sm font-semibold">Session-Zustand</Dialog.Title>
+              <Dialog.CloseTrigger class="btn-icon btn-icon-sm hover:preset-tonal ml-auto" aria-label="Schließen">
+                <X class="size-4" aria-hidden="true" />
+              </Dialog.CloseTrigger>
+            </header>
+            {#if showState}
+              <ToolFrame name="session" class="min-h-0 flex-1"><SessionEditor sel={store} /></ToolFrame>
+            {/if}
+          </Dialog.Content>
+        </Dialog.Positioner>
+      </Portal>
+    </Dialog>
     <!-- Independent tools on the same session, side by side -->
     <main class="flex min-h-0 flex-1 flex-col lg:flex-row">
       <section class="max-h-[45vh] shrink-0 p-1 lg:max-h-none lg:w-80" aria-label="Phantom">
@@ -117,12 +139,6 @@
       <section class="shrink-0 p-1 lg:w-80" aria-label="FOV-Planung">
         <ToolFrame name="fov_planner" class="h-full"><FovPlanner sel={store} /></ToolFrame>
       </section>
-      {#if showState}
-        <section class="max-h-[40vh] shrink-0 overflow-auto border-t border-border bg-panel p-3 lg:max-h-none lg:w-80 lg:border-l lg:border-t-0" aria-label="Zustand">
-          <p class="mb-2 text-xs text-muted">Session-Zustand, rev {store.server?.rev ?? "–"}{store.pending ? " (Änderung wird gespeichert …)" : ""}</p>
-          <pre class="whitespace-pre-wrap break-all font-mono text-xs">{JSON.stringify(store.state, null, 2)}</pre>
-        </section>
-      {/if}
     </main>
   {:else}
     <main class="mx-auto flex w-full max-w-xl flex-col gap-6 p-6">

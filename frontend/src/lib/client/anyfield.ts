@@ -24,7 +24,9 @@ export class AnyfieldClient {
   // Session state (session key only)
   getState = (key: string, knownRev?: number) =>
     this.call<SessionPoll>("get_state", { session_key: key, ...(knownRev !== undefined ? { known_rev: knownRev } : {}) });
-  patchState = (key: string, patch: StatePatch) => this.call<Session>("patch_state", { session_key: key, patch });
+  /** With `expectedRev`: only if the session is still at that revision (else an error). */
+  patchState = (key: string, patch: StatePatch, expectedRev?: number) =>
+    this.call<Session>("patch_state", { session_key: key, patch, ...(expectedRev !== undefined ? { expected_rev: expectedRev } : {}) });
   moveFov = (key: string, delta_mm: Vec3) => this.call<FovChange>("move_fov", { session_key: key, delta_mm });
 
   // Phantoms (BIfTI catalog from the gateway)

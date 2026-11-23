@@ -38,6 +38,8 @@ export class MockTransport implements Transport {
       case "get_state":
         return args.known_rev === s.rev ? { rev: s.rev, unchanged: true } : structuredClone(s);
       case "patch_state":
+        if (args.expected_rev != null && args.expected_rev !== s.rev)
+          throw new ToolCallError(name, `Conflict: session is at rev ${s.rev}, not ${args.expected_rev}. Re-read it.`);
         s.state = applyPatch(s.state, args.patch as StatePatch);
         s.rev += 1;
         return structuredClone(s);

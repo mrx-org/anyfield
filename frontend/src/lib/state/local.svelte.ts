@@ -8,6 +8,7 @@ export class LocalSelection implements Selection {
   state = $state<State>(structuredClone(DEFAULT_STATE));
   error = $state<string | null>(null);
   readonly sessionKey = null;
+  readonly rev = null;
 
   constructor(
     readonly client: AnyfieldClient,
@@ -21,5 +22,10 @@ export class LocalSelection implements Selection {
   patch(patch: StatePatch): void {
     this.state = applyPatch($state.snapshot(this.state) as State, patch);
     this.onchange?.($state.snapshot(this.state) as State);
+  }
+
+  /** Nothing to validate against locally: applied as it is. */
+  async commit(patch: StatePatch): Promise<void> {
+    this.patch(patch);
   }
 }

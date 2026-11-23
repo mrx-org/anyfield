@@ -85,6 +85,20 @@ async def test_fov_viewer_is_an_app(client):
     assert r["key"] is None and r["state"]["fov"]["size_mm"] == [200.0, 200.0, 100.0]
 
 
+async def test_session_editor_is_an_app(client, as_user):
+    tools = {t.name: t for t in await client.list_tools()}
+    assert tools["open_session"].meta["ui"]["resourceUri"] == "ui://anyfield/session.html"
+    resources = {str(r.uri): r for r in await client.list_resources()}
+    assert resources["ui://anyfield/session.html"].mime_type.startswith("text/html")
+    as_user("alice")
+    key = (await call(client, "create_session"))["key"]
+    r = await call(client, "open_session", session_key=key)
+    assert r["key"] == key and r["rev"] == 1 and "state" in r
+    # What its "Update" sends: a patch with the loaded revision; unknown fields fail
+    with pytest.raises(ToolError, match="extra|Extra"):
+        await client.call_tool("patch_state", {"session_key": key, "patch": {"bogus": 1}, "expected_rev": 1})
+
+
 async def test_fov_planner_is_an_app(client):
     tools = {t.name: t for t in await client.list_tools()}
     ui = tools["open_fov_planner"].meta["ui"]

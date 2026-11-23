@@ -48,3 +48,26 @@ export const DEFAULT_STATE: State = {
 
 /** What `phantom: null` stands for (the backend's `DEFAULT_PHANTOM`). */
 export const DEFAULT_PHANTOM: CatalogPhantom = { collection: "endres-brainweb-001", name: "subj04-3T-1mm.json" };
+
+const isObject = (v: unknown): v is Record<string, unknown> => v !== null && typeof v === "object" && !Array.isArray(v);
+
+/**
+ * The merge patch that turns `from` into `to`: changed values (arrays whole), `null`
+ * for fields `to` lacks (removed: back to their default), nothing for equal ones.
+ * Both must be objects.
+ */
+export function diffPatch(from: Record<string, unknown>, to: Record<string, unknown>): Record<string, unknown> {
+  const out: Record<string, unknown> = {};
+  for (const k of Object.keys(from)) if (!(k in to) && from[k] !== null) out[k] = null;
+  for (const [k, v] of Object.entries(to)) {
+    const before = from[k];
+    if (isObject(before) && isObject(v)) {
+      const d = diffPatch(before, v);
+      if (Object.keys(d).length) out[k] = d;
+    } else if (JSON.stringify(before) !== JSON.stringify(v)) {
+      // An object over something else goes whole; null over a value removes it
+      out[k] = v;
+    }
+  }
+  return out;
+}

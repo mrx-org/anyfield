@@ -31,3 +31,8 @@ export function fovSummary(s: State): string {
     `matrix ${s.matrix.join("×")}.`
   );
 }
+
+/** What the session editor hands back to the chat (only without a session). */
+export function stateSummary(s: State): string {
+  return `Edited state: ${JSON.stringify(s)}`;
+}

@@ -31,7 +31,7 @@ Web-App: `/` (eigene Sessions), `/s/{key}` (eine Session, mit Ansicht des Zustan
 | Tool | Tools |
 | -- | -- |
 | Sessions (Login) | `list_sessions`, `create_session`, `rename_session`, `delete_session` |
-| Zustand | `get_state`, `patch_state` (JSON Merge Patch) |
+| Zustand | `get_state`, `patch_state` (JSON Merge Patch), `open_session` (JSON-Editor) |
 | FOV-Planer | `set_fov`, `move_fov`, `rotate_fov`, `open_fov_planner`, `open_fov_viewer` |
 | Phantom (BIfTI) | `list_phantom_collections`, `list_phantoms`, `list_cas_phantoms`, `list_phantom_tissues`, `select_phantom`, `set_phantom_view`, `get_phantom_maps`, `open_phantom_browser`, `open_phantom_preview` |
 
@@ -116,6 +116,15 @@ gespreizt wird, um so viel, wie die Finger entlang dieser Achse auseinandergehen
 beide; je Achse ab 3 mm). Die Achsen drehen dabei mit der Box mit, Drehen und Spreizen
 gehen also gleichzeitig.
 
+Der **Session-Editor** (`session`, `open_session`, nur mit Session-Key) zeigt den Zustand
+als JSON zum Bearbeiten (CodeMirror, Syntaxfehler im Text markiert). „Update“ schickt,
+was sich gegenüber dem geladenen Stand geändert hat, als Merge Patch an `patch_state`, mit
+`expected_rev` (gelöschte Felder: zurück auf ihren Standard). Prüft der Server die
+Änderung nicht durch oder hat sich die Session inzwischen geändert, steht seine Meldung im
+Editor und der Text bleibt. „Reload“ verwirft die Änderungen und lädt den aktuellen
+Zustand; hat sich die Session seit dem Laden geändert, zeigt er ein Warn-Icon. Auf der
+Website öffnet „Zustand (JSON)“ denselben Editor als Modal.
+
 ## Aufbau
 
 ```
@@ -133,6 +142,7 @@ frontend/  Svelte 5, TypeScript, Vite, NiiVue, Skeleton (UI), Lucide (Icons)
   src/lib/state/             Selection: SessionStore (Polling, optimistisch) oder LocalSelection
   src/lib/components/fov/    FOV-Planer (Slider) und visueller FOV-Planer
   src/lib/components/phantom/  Phantom-Browser, Phantom-Vorschau, Viewer-Baustein PhantomViewer
+  src/lib/components/session/  Session-Editor (JSON)
   src/web/                   Web-App
   src/mcp-app/               MCP Apps (je eine HTML-Datei, gemeinsame Hülle McpApp.svelte)
   dev/app-host.html          Test-Host für die MCP App

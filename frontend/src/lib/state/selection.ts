@@ -15,6 +15,11 @@ export interface Selection {
   readonly error: string | null;
   /** Session key, or null for a local selection. */
   readonly sessionKey: string | null;
+  /** Revision of the session's state; null for a local selection. */
+  readonly rev: number | null;
   /** Change the state at once (merge patch); a session commits it in the background. */
   patch(patch: StatePatch): void;
+  /** Change the state and wait for the result: rejects with the server's message if it
+   * does not validate, or (with `expectedRev`) if the session has changed since. */
+  commit(patch: StatePatch, expectedRev?: number): Promise<void>;
 }

@@ -46,6 +46,10 @@ export class SessionStore implements Selection {
     return this.key;
   }
 
+  get rev(): number | null {
+    return this.server?.rev ?? null;
+  }
+
   /** Accept a newer server state (from a poll, a tool result or a commit). */
   accept(session: Session): void {
     if (this.server && session.rev < this.server.rev) return;
@@ -96,11 +100,11 @@ export class SessionStore implements Selection {
     const wait = Math.max(0, this.lastCommit + this.opts.commitMs - Date.now());
     this.commitTimer = setTimeout(() => {
       this.commitTimer = null;
-      void this.commit();
+      void this.flush();
     }, wait);
   }
 
-  private async commit(): Promise<void> {
+  private async flush(): Promise<void> {
     const sent = this.pending;
     if (!sent) return;
     this.inFlight = true;
@@ -118,6 +122,14 @@ export class SessionStore implements Selection {
       this.inFlight = false;
       if (this.pending) this.scheduleCommit();
     }
+  }
+
+  /** Send a patch now and wait for the server: its error is thrown, not kept. Local
+   * edits still pending go first, so they are not lost or overtaken. */
+  async commit(patch: StatePatch, expectedRev?: number): Promise<void> {
+    await this.settled();
+    const r = await this.client.patchState(this.key, patch, expectedRev);
+    this.accept(r);
   }
 
   /** Resolves once no local edit is pending or in flight (for tests). */

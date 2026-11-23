@@ -4,7 +4,7 @@ import { MockTransport } from "../client/mock";
 import type { ScanGrid, StatePatch } from "../types";
 import { LocalSelection } from "./local.svelte";
 import { niftiName } from "./maps.svelte";
-import { composePatch, mergePatch } from "./patch";
+import { composePatch, diffPatch, mergePatch } from "./patch";
 import { phantomPatch } from "../phantom";
 import { SessionStore } from "./session.svelte";
 
@@ -169,5 +169,45 @@ describe("tissues", () => {
     await client.getPhantomMaps(null);
     expect(t.calls.filter((c) => c.name === "get_phantom_maps")).toHaveLength(2);
     expect(t.calls.at(-1)?.args).toEqual({});
+  });
+});
+
+describe("diffPatch", () => {
+  const from = { a: 1, o: { x: 1, y: [1, 2] }, n: null, gone: { z: 1 } };
+
+  it("is empty for the same object", () => {
+    expect(diffPatch(from, structuredClone(from))).toEqual({});
+  });
+
+  it("holds changed values, whole arrays and nulls for removed fields", () => {
+    const to = { a: 2, o: { x: 1, y: [1, 3] }, n: null };
+    expect(diffPatch(from, to)).toEqual({ a: 2, o: { y: [1, 3] }, gone: null });
+  });
+
+  it("sends an object over null whole and null over an object", () => {
+    expect(diffPatch(from, { ...from, n: { q: 1 }, o: null })).toEqual({ n: { q: 1 }, o: null });
+  });
+
+  it("turns `from` into `to` with mergePatch", () => {
+    const to = { a: 1, o: { x: 5 }, n: { k: [1] } };
+    expect(mergePatch(from, diffPatch(from, to))).toEqual(to);
+  });
+});
+
+describe("SessionStore.commit", () => {
+  it("sends the patch and takes the server's answer", async () => {
+    const { store } = setup();
+    await store.refresh();
+    await store.commit({ matrix: [64, 64, 1] }, 1);
+    expect(store.server?.rev).toBe(2);
+    expect(store.state?.matrix).toEqual([64, 64, 1]);
+  });
+
+  it("rejects when the session has changed since", async () => {
+    const { t, store } = setup();
+    await store.refresh();
+    await t.callTool("move_fov", { session_key: "mock-key", delta_mm: [0, 0, 10] });
+    await expect(store.commit({ matrix: [64, 64, 1] }, 1)).rejects.toThrow(/Conflict/);
+    expect(store.error).toBeNull();
   });
 });
