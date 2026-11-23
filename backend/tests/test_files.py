@@ -73,7 +73,7 @@ async def test_file_tools():
         assert len((await call(c, "open_file_manager"))["files"]) == 2
 
         r = await call(c, "open_file_list", mode="bifti", download=False)
-        assert [f["name"] for f in r["files"]] == ["a.zip"] and "key" not in r
+        assert [f["name"] for f in r["files"]] == ["a.zip"] and r["key"] is None
 
 
 async def test_file_list_with_a_session(as_user):

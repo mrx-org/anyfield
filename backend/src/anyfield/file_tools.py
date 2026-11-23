@@ -149,7 +149,7 @@ def register(
         """Show the file upload: the user drops files (or picks them) to store them in
         their files; each upload's name and sha256 come back to the chat. In clients
         without MCP Apps: use create_file_upload_url."""
-        return {"message": "Drop files into the box to upload them."}
+        return await opened(None)
 
     @mcp.tool(app=AppConfig(resource_uri=LIST_APP_URI), annotations={"readOnlyHint": True})
     async def open_file_list(
@@ -170,13 +170,13 @@ def register(
         E.g. mode='bifti' to let the user pick one of their phantoms. Returns the files
         (and with a session the session) too."""
         listed = await files.list(mode=mode or "all")
-        return {**(await opened(session_key) if session_key else {}), "files": listed}
+        return {**await opened(session_key), "files": listed}
 
     @mcp.tool(app=AppConfig(resource_uri=MANAGER_APP_URI), annotations={"readOnlyHint": True})
     async def open_file_manager() -> dict[str, Any]:
         """Show the file manager: the file upload above the file list (see
         open_file_upload and open_file_list). Returns the files too."""
-        return {"files": await files.list()}
+        return {**await opened(None), "files": await files.list()}
 
     app_html(mcp, UPLOAD_APP_URI, "File upload", "file-upload-app.html", base_url, static_dir)
     app_html(mcp, LIST_APP_URI, "File list", "file-list-app.html", base_url, static_dir)

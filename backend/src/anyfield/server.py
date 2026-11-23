@@ -220,7 +220,7 @@ def build(
         changes (patch_state, rejected with the reason if they do not validate or the
         session changed meanwhile), "Reload" drops them and loads the current state.
         In clients without MCP Apps this returns the session and the web link."""
-        return public(await load(session_key))
+        return await opened(session_key)
 
     app_html(mcp, SESSION_APP_URI, "Session", "session-app.html", base_url, static_dir)
 
@@ -289,6 +289,10 @@ def build(
         return await opened(session_key)
 
     async def opened(session_key: str | None) -> dict[str, Any]:
+        """What every open_* tool returns (the app opens on it): with a session the
+        session (`key`, `name`, `rev`, `state`, `web_url`, ...), without one `key: None`
+        and the `state` to start from. A tool adds its own data under its own key
+        (e.g. `files`)."""
         if session_key:
             return public(await load(session_key))
         return {"key": None, "state": State().model_dump()}
