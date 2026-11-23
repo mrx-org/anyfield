@@ -132,9 +132,9 @@
             </Dialog.CloseTrigger>
           </header>
           {#if showFiles}
-            <!-- Scrolls outside the tool's frame: a fieldset passes no height on to its
-                 content, so nothing inside it can scroll -->
-            <div class="min-h-0 flex-1 overflow-auto">
+            <!-- As tall as its content (the list scrolls itself); scrolls only if the
+                 window is lower than that. Not flex-1: from a height of 0 it stays 0 -->
+            <div class="min-h-0 overflow-auto">
               <ToolFrame name="file_manager"><FileManager sel={filesSel} /></ToolFrame>
             </div>
           {/if}
