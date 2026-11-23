@@ -103,10 +103,11 @@ FOV-Planer** (`fov_viewer`, `open_fov_viewer`), das Phantom mit der FOV-Box, bre
 wie die Phantom-Vorschau (`PhantomViewer`).
 
 Im visuellen Planer wird die Box in den 2D-Ansichten mit der Maus bearbeitet (Strg oder
-Cmd): ziehen verschiebt die Mitte in der Ebene der Ansicht, Rechtsklick ziehen dreht um die
+Cmd): ziehen verschiebt die Box mit der Maus in der Ebene der Ansicht (sie bleibt dort
+gepackt, wo man klickt), Rechtsklick ziehen dreht um die
 Normale der Ansicht (Shift: fein), Mausrad ändert die Größe der Box-Achse entlang der
-Vertikalen der Ansicht (10 mm, Shift: 1 mm). Ohne Strg bleibt die Maus bei NiiVue
-(Fadenkreuz, Schichten). Touch-Gesten fehlen noch.
+Vertikalen der Ansicht (etwa 2 mm je Raste, Shift: fein). Ohne Strg bleibt die Maus bei NiiVue
+(Fadenkreuz, Schichten, Rechtsklick ziehen: Fensterung). Touch-Gesten fehlen noch.
 
 ## Aufbau
 

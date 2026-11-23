@@ -41,7 +41,7 @@
     <div class="flex flex-wrap items-center gap-x-3 gap-y-1 font-mono text-xs text-muted">
       <span title="Mitte (mm)">Pos {v(fov.center_mm, 1)}</span>
       <span title="Rotation um x, y, z (°)">Rot {v(fov.rotation_deg, 1)}</span>
-      <span title="Größe (mm)">Größe {v(fov.size_mm)}</span>
+      <span title="Größe (mm)">Größe {v(fov.size_mm, 1)}</span>
       <button
         type="button"
         class="btn btn-sm preset-outlined-surface-300-700 ml-auto px-2 py-0.5 font-sans text-xs"
@@ -51,7 +51,7 @@
         Zurücksetzen
       </button>
     </div>
-    <p class="text-xs text-muted">Strg + ziehen: verschieben · Strg + Rechtsklick ziehen: drehen (Shift: fein) · Strg + Mausrad: Größe (Shift: 1 mm)</p>
+    <p class="text-xs text-muted">Strg + ziehen: verschieben · Strg + Rechtsklick ziehen: drehen (Shift: fein) · Strg + Mausrad: Größe (Shift: fein)</p>
   {:else if sel.error}
     <p class="p-4 text-error-500">{sel.error}</p>
   {:else}

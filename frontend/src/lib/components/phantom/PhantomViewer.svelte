@@ -6,9 +6,10 @@
   // same in all viewers, so it comes in and goes out through `onproperty`) and, while
   // one plane is shown, the plane (per viewer, not in the state).
   // With `onfov`, the box is edited with the mouse in the 2D tiles: Ctrl (or Cmd) +
-  // left drag moves its center in the tile's plane, Ctrl + right drag turns it about
-  // the tile's normal (Shift: finer), Ctrl + wheel resizes the box axis along the
-  // tile's vertical (10 mm, Shift: 1 mm). Without Ctrl, NiiVue handles the mouse.
+  // left drag moves the box with the mouse in the tile's plane (held where it was
+  // grabbed), Ctrl + right drag turns it about the tile's normal (Shift: finer),
+  // Ctrl + wheel resizes the box axis along the tile's vertical (by how far the wheel
+  // turns, ~2 mm per notch; Shift: finer). Without Ctrl, NiiVue handles the mouse.
   import { MULTIPLANAR_TYPE, NVMesh, Niivue, SHOW_RENDER, SLICE_TYPE } from "@niivue/niivue";
   import { onMount } from "svelte";
   import { boxAxisAlong, fovMesh, rotateAboutWorldAxis } from "../../geometry/fov";
@@ -181,10 +182,11 @@
     { axes: [1, 2], normal: 0, turn: 1 },
   ] as const;
   const MAX_SIZE_MM = 600;
+  const MM_PER_WHEEL_PX = 0.02;
 
   type Hit = { mm: Vec3; tile: number; axCorSag: 0 | 1 | 2 };
   type Drag =
-    | { kind: "move"; tile: number; axCorSag: 0 | 1 | 2; center: Vec3 }
+    | { kind: "move"; tile: number; axCorSag: 0 | 1 | 2; center: Vec3; grab: Vec3 }
     | { kind: "rotate"; tile: number; axCorSag: 0 | 1 | 2; center: Vec3; rotation: Vec3; angle: number };
   let drag: Drag | null = null;
 
@@ -232,7 +234,7 @@
     e.stopPropagation();
     const center = [...fov.center_mm] as Vec3;
     if (e.button === 0) {
-      drag = { kind: "move", tile: p.tile, axCorSag: p.axCorSag, center };
+      drag = { kind: "move", tile: p.tile, axCorSag: p.axCorSag, center, grab: p.mm };
     } else {
       const rotation = [...fov.rotation_deg] as Vec3;
       drag = { kind: "rotate", tile: p.tile, axCorSag: p.axCorSag, center, rotation, angle: angleIn(p.axCorSag, center, p.mm) };
@@ -253,9 +255,9 @@
   function apply(e: MouseEvent, p: Hit) {
     if (!drag) return;
     if (drag.kind === "move") {
-      // The center follows the mouse in the tile's plane; its depth stays
+      // The box moves as far as the mouse, in the tile's plane; its depth stays
       const c = [...drag.center] as Vec3;
-      for (const a of TILE[drag.axCorSag].axes) c[a] = round(p.mm[a], 0.1);
+      for (const a of TILE[drag.axCorSag].axes) c[a] = round(drag.center[a] + p.mm[a] - drag.grab[a], 0.1);
       send({ center_mm: c });
     } else {
       let d = angleIn(drag.axCorSag, drag.center, p.mm) - drag.angle;
@@ -280,11 +282,14 @@
     if (!p) return;
     e.preventDefault(); // also the browser's Ctrl + wheel zoom
     e.stopPropagation();
-    const delta = e.deltaY || e.deltaX; // Shift turns the wheel sideways in some browsers
-    if (!delta) return;
+    // Shift turns the wheel sideways in some browsers; deltaMode 1 counts lines, not pixels
+    const px = (e.deltaY || e.deltaX) * (e.deltaMode === 1 ? 33 : e.deltaMode === 2 ? 800 : 1);
+    if (!px) return;
+    // A mouse wheel notch is ~100 px: ~2 mm, Shift ~0.2 mm; a touchpad scrolls finer
+    const mm = -px * MM_PER_WHEEL_PX * (e.shiftKey ? 0.1 : 1);
     const i = boxAxisAlong(fov.rotation_deg, TILE[p.axCorSag].axes[1]);
     const size = [...fov.size_mm] as Vec3;
-    size[i] = Math.min(MAX_SIZE_MM, Math.max(1, round(size[i] - Math.sign(delta) * (e.shiftKey ? 1 : 10), 1)));
+    size[i] = Math.min(MAX_SIZE_MM, Math.max(1, round(size[i] + mm, 0.1)));
     send({ size_mm: size });
   }
 
