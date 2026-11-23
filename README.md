@@ -172,7 +172,9 @@ frontend/  Svelte 5, TypeScript, Vite, NiiVue, Skeleton (UI), Lucide (Icons)
   src/lib/components/session/  Session-Editor (JSON)
   src/lib/components/files/    Datei-Upload, Dateiliste, Dateimanager
   src/web/                   Web-App
-  src/mcp-app/               MCP Apps (je eine HTML-Datei, gemeinsame Hülle McpApp.svelte)
+  src/mcp-app/               MCP Apps: je ein Einstieg <name>.ts, gemeinsame Hülle McpApp.svelte;
+                             gebaut aus der Vorlage mcp-app.html zu dist/<name>-app.html
+                             (scripts/build-apps.mjs, alle Einstiege)
   dev/app-host.html          Test-Host für die MCP App
 ```
 
