@@ -22,6 +22,41 @@ export function apply(m: Mat3, v: Vec3): Vec3 {
   ];
 }
 
+/** Matrix product a·b. */
+export function multiply(a: Mat3, b: Mat3): Mat3 {
+  const r = (i: number, j: number) => a[i][0] * b[0][j] + a[i][1] * b[1][j] + a[i][2] * b[2][j];
+  return [
+    [r(0, 0), r(0, 1), r(0, 2)],
+    [r(1, 0), r(1, 1), r(1, 2)],
+    [r(2, 0), r(2, 1), r(2, 2)],
+  ];
+}
+
+const deg = (r: number) => (r * 180) / Math.PI;
+
+/** `rotation_deg` (about x, then y, then z) of a rotation matrix; the inverse of `rotationMatrix`.
+ * In gimbal lock (y = ±90°) the x angle is 0. */
+export function eulerFromMatrix(m: Mat3): Vec3 {
+  const sy = Math.max(-1, Math.min(1, -m[2][0]));
+  const ay = Math.asin(sy);
+  if (Math.abs(sy) > 1 - 1e-9) return [0, deg(ay), deg(Math.atan2(-m[0][1], m[1][1]))];
+  return [deg(Math.atan2(m[2][1], m[2][2])), deg(ay), deg(Math.atan2(m[1][0], m[0][0]))];
+}
+
+/** The rotation `rotation_deg` followed by a turn of `angle` degrees about world axis
+ * `axis` (0: x, 1: y, 2: z), as `rotation_deg` again. */
+export function rotateAboutWorldAxis(rotation: Vec3, axis: 0 | 1 | 2, angle: number): Vec3 {
+  const turn: Vec3 = [0, 0, 0];
+  turn[axis] = angle;
+  return eulerFromMatrix(multiply(rotationMatrix(turn), rotationMatrix(rotation)));
+}
+
+/** Index of the box axis (0: x, 1: y, 2: z of the FOV) that points most along world axis `world`. */
+export function boxAxisAlong(rotation: Vec3, world: 0 | 1 | 2): 0 | 1 | 2 {
+  const row = rotationMatrix(rotation)[world].map(Math.abs);
+  return row.indexOf(Math.max(...row)) as 0 | 1 | 2;
+}
+
 /** Box point in FOV coordinates (mm, relative to the center) → world mm. */
 export function fovToWorld(fov: Fov, local: Vec3): Vec3 {
   const r = apply(rotationMatrix(fov.rotation_deg), local);
