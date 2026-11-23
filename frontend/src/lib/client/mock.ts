@@ -26,7 +26,7 @@ export class MockTransport implements Transport {
       const phantom = args.sha256
         ? { sha256: args.sha256 as string, name: "cas.zip" }
         : args.collection
-          ? { collection: args.collection as string, name: args.phantom as string }
+          ? { collection: args.collection as string, name: args.name as string }
           : { collection: "endres-brainweb-001", name: "subj04-3T-1mm.json" };
       const props = ["density", "T1", "T2"].map((k) => ({ key: k, label: k, unit: "", range: null, url: `https://gateway.test/files/${phantom.name}-${k}` }));
       const shape = args.matrix ?? [181, 217, 181];
