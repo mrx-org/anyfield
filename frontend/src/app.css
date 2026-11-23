@@ -10,8 +10,9 @@
 @custom-variant dark (&:where(.dark, .dark *));
 
 /* anyfield's own tokens, mapped onto the Skeleton theme (light/dark pairings),
-   so a theme change restyles everything. */
-@theme inline {
+   so a theme change restyles everything. Not inline: utilities use the variables,
+   so an MCP App can point them at the chat's colours (below). */
+@theme {
   --color-bg: var(--color-surface-50-950);
   --color-panel: var(--color-surface-100-900);
   --color-border: var(--color-surface-200-800);
@@ -35,4 +36,18 @@ html.mcp-app,
 html.mcp-app body,
 html.mcp-app #app {
   height: auto;
+}
+/* MCP Apps blend into the chat: no background of their own (the iframe shows the
+   chat through it), and the chat's colours where the host sends them (McpApp.svelte
+   sets its style variables and light/dark on <html>); else the Skeleton theme. */
+html.mcp-app,
+html.mcp-app body {
+  background: transparent;
+}
+html.mcp-app {
+  --color-bg: var(--color-background-primary, var(--color-surface-50-950));
+  --color-panel: var(--color-background-secondary, var(--color-surface-100-900));
+  --color-border: var(--color-border-primary, var(--color-surface-200-800));
+  --color-text: var(--color-text-primary, var(--color-surface-950-50));
+  --color-muted: var(--color-text-secondary, var(--color-surface-600-400));
 }

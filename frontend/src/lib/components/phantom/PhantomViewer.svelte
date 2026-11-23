@@ -25,6 +25,7 @@
   import { boxAxisAlong, fovMesh, rotateAboutWorldAxis, rotationMatrix } from "../../geometry/fov";
   import { logHistogram } from "../../histogram";
   import { niftiName } from "../../state/maps.svelte";
+  import { cssRgba, theme } from "../../theme.svelte";
   import type { Fov, PhantomMaps, Plane, Vec3 } from "../../types";
 
   export type Layout = "single" | "grid" | "auto";
@@ -79,15 +80,11 @@
   };
   const FOV_RGBA = new Uint8Array([245, 165, 36, 255]);
 
-  /** The body's background colour as RGBA in 0..1, for NiiVue. A 2D canvas turns
-   * any CSS colour (rgb, oklch, ...) into RGB. */
+  /** The page's background (in an MCP App: the chat's) as RGBA for NiiVue. WebGL
+   * cannot show the chat through it: transparent comes out black. */
   function pageBackground(): [number, number, number, number] {
-    const ctx = document.createElement("canvas").getContext("2d");
-    if (!ctx) return [0, 0, 0, 1];
-    ctx.fillStyle = getComputedStyle(document.body).backgroundColor;
-    ctx.fillRect(0, 0, 1, 1);
-    const [r, g, b] = ctx.getImageData(0, 0, 1, 1).data;
-    return [r / 255, g / 255, b / 255, 1];
+    const [r, g, b] = cssRgba("var(--color-bg)");
+    return [r, g, b, 1];
   }
 
   let box: HTMLDivElement;
@@ -148,6 +145,14 @@
       mesh = null;
       nv = null;
     };
+  });
+
+  // Light/dark or the chat's colours changed: the view follows
+  $effect(() => {
+    void theme.version;
+    if (!ready || !nv) return;
+    nv.opts.backColor = pageBackground();
+    nv.drawScene();
   });
 
   // In the grid the crosshair shows where the three planes cut; one plane needs none

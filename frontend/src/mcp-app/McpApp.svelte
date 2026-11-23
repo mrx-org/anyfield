@@ -6,7 +6,7 @@
   // The app is as tall as its content: the SDK reports that height to the host
   // (`ui/notifications/size-changed`, autoResize). Only a height or maxHeight the
   // host gives (`containerDimensions`) limits it; then the content scrolls inside.
-  import { App, type McpUiHostContext } from "@modelcontextprotocol/ext-apps";
+  import { App, applyHostFonts, applyHostStyleVariables, type McpUiHostContext } from "@modelcontextprotocol/ext-apps";
   import { onDestroy, type Component } from "svelte";
   import { AnyfieldClient } from "../lib/client/anyfield";
   import { McpAppTransport } from "../lib/client/mcp-app";
@@ -14,6 +14,7 @@
   import { LocalSelection } from "../lib/state/local.svelte";
   import type { Selection } from "../lib/state/selection";
   import { SessionStore } from "../lib/state/session.svelte";
+  import { setDark } from "../lib/theme.svelte";
   import type { Session, State } from "../lib/types";
 
   let {
@@ -88,11 +89,20 @@
       openLocal(r?.state);
     }
   };
-  app.onhostcontextchanged = (ctx) => {
+  // Blend into the chat: its light/dark and, where it sends them, its colours and fonts
+  // (app.css maps them onto our tokens; the background stays transparent). Until the
+  // host says, the system's light/dark.
+  setDark(matchMedia("(prefers-color-scheme: dark)").matches);
+  function applyHost(ctx: Partial<McpUiHostContext> | undefined) {
+    if (!ctx) return;
+    if (ctx.theme) setDark(ctx.theme === "dark");
+    if (ctx.styles?.variables) applyHostStyleVariables(ctx.styles.variables);
+    if (ctx.styles?.css?.fonts) applyHostFonts(ctx.styles.css.fonts);
     if (ctx.containerDimensions) container = ctx.containerDimensions;
-  };
+  }
+  app.onhostcontextchanged = applyHost;
   app.connect().then(
-    () => (container = app.getHostContext()?.containerDimensions),
+    () => applyHost(app.getHostContext()),
     (e) => (error = String(e)),
   );
 

@@ -4,11 +4,12 @@
   // reload); what the user types goes out through `onchange`.
   import { json, jsonParseLinter } from "@codemirror/lang-json";
   import { linter, lintGutter } from "@codemirror/lint";
-  import { EditorState } from "@codemirror/state";
+  import { Compartment, EditorState, Prec } from "@codemirror/state";
   import { oneDark } from "@codemirror/theme-one-dark";
   import { EditorView } from "@codemirror/view";
   import { basicSetup } from "codemirror";
   import { onMount } from "svelte";
+  import { theme } from "../../theme.svelte";
 
   let {
     value,
@@ -22,16 +23,19 @@
 
   let host: HTMLDivElement;
   let view: EditorView | null = null;
+  /** The dark theme, swapped when the page turns light or dark. */
+  const scheme = new Compartment();
 
-  // The page's look: transparent on the panel, small mono text, as tall as the box
-  const look = EditorView.theme({
-    "&": { height: "100%", fontSize: "12px", backgroundColor: "transparent" },
-    ".cm-gutters": { backgroundColor: "transparent" },
-    ".cm-scroller": { overflow: "auto" },
-  });
+  // The page's look, over the dark theme's: transparent, small text, as tall as the box
+  const look = Prec.highest(
+    EditorView.theme({
+      "&": { height: "100%", fontSize: "12px", backgroundColor: "transparent" },
+      ".cm-gutters": { backgroundColor: "transparent", borderRight: "1px solid var(--color-border)" },
+      ".cm-scroller": { overflow: "auto", fontFamily: "var(--font-mono, ui-monospace, monospace)" },
+    }),
+  );
 
   onMount(() => {
-    const dark = document.documentElement.classList.contains("dark");
     view = new EditorView({
       parent: host,
       state: EditorState.create({
@@ -41,7 +45,7 @@
           json(),
           linter(jsonParseLinter(), { delay: 300 }),
           lintGutter(),
-          ...(dark ? [oneDark] : []),
+          scheme.of(theme.dark ? oneDark : []),
           look,
           EditorView.updateListener.of((u) => {
             if (u.docChanged) onchange(u.state.doc.toString());
@@ -53,6 +57,11 @@
       view?.destroy();
       view = null;
     };
+  });
+
+  $effect(() => {
+    const dark = theme.dark;
+    view?.dispatch({ effects: scheme.reconfigure(dark ? oneDark : []) });
   });
 
   // A new value from outside replaces the text (not what the user just typed)
