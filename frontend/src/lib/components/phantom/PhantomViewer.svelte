@@ -6,7 +6,6 @@
   // same in all viewers, so it comes in and goes out through `onproperty`) and, while
   // one plane is shown, the plane (per viewer, not in the state).
   import { MULTIPLANAR_TYPE, NVMesh, Niivue, SHOW_RENDER, SLICE_TYPE } from "@niivue/niivue";
-  import { SegmentedControl } from "@skeletonlabs/skeleton-svelte";
   import { onMount } from "svelte";
   import { fovMesh } from "../../geometry/fov";
   import { niftiName } from "../../state/maps.svelte";
@@ -35,11 +34,11 @@
     onproperty: (key: string) => void;
     /** `auto`: the grid from `GRID_MIN_WIDTH_PX` on, below it one plane. */
     layout?: Layout;
-    /** The plane while one plane is shown; the switch above the view changes it. */
+    /** The plane while one plane is shown; the dropdown above the view changes it. */
     plane?: Plane;
     /** The FOV box to draw; null: none. */
     fov?: Fov | null;
-    /** The whole viewer, with the switch. */
+    /** The whole viewer, with the dropdowns. */
     class?: string;
     /** The view itself (e.g. square, or filling the height). */
     viewClass?: string;
@@ -48,9 +47,9 @@
   /** From this width on (CSS px), `auto` shows the grid: each tile is then ~240 px. */
   const GRID_MIN_WIDTH_PX = 480;
   const PLANES: { key: Plane; label: string }[] = [
-    { key: "tra", label: "Tra" },
-    { key: "cor", label: "Kor" },
-    { key: "sag", label: "Sag" },
+    { key: "tra", label: "Transversal" },
+    { key: "cor", label: "Koronal" },
+    { key: "sag", label: "Sagittal" },
     { key: "3d", label: "3D" },
   ];
   const SLICE: Record<Plane, SLICE_TYPE> = {
@@ -158,20 +157,17 @@
 <div bind:this={box} class="flex flex-col gap-1 {cls}">
   <div class="flex items-center gap-1">
     {#if single}
-      <SegmentedControl class="min-w-0 flex-1" value={plane} onValueChange={(d) => d.value && (plane = d.value as Plane)}>
-        <SegmentedControl.Control class="w-full">
-          <SegmentedControl.Indicator />
-          {#each PLANES as p (p.key)}
-            <SegmentedControl.Item value={p.key} class="flex-1 text-xs">
-              <SegmentedControl.ItemText>{p.label}</SegmentedControl.ItemText>
-              <SegmentedControl.ItemHiddenInput />
-            </SegmentedControl.Item>
-          {/each}
-        </SegmentedControl.Control>
-      </SegmentedControl>
+      <select
+        class="select min-w-0 flex-1 text-xs"
+        aria-label="Ebene"
+        value={plane}
+        onchange={(e) => (plane = e.currentTarget.value as Plane)}
+      >
+        {#each PLANES as p (p.key)}<option value={p.key}>{p.label}</option>{/each}
+      </select>
     {/if}
     <select
-      class="select w-auto text-xs {single ? '' : 'ml-auto'}"
+      class="select min-w-0 flex-1 text-xs"
       aria-label="Eigenschaft"
       value={shown?.key ?? ""}
       disabled={!maps}

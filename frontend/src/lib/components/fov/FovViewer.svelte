@@ -1,6 +1,6 @@
 <script lang="ts">
   // The visual FOV planner: the phantom with the FOV box on top. Wide, it shows the
-  // 2×2 grid (three planes and 3D); narrow, one plane with a switch above it (per
+  // 2×2 grid (three planes and 3D); narrow, one plane with a dropdown above it (per
   // viewer, not in the state). Tissues and property follow the state (`tissues`,
   // `view.property`, the property picked in any viewer), as in the phantom preview. The sliders are the FOV planner (FovPlanner).
   // Bound to a Selection, so it works on a session, locally in an MCP App, and on the website.

@@ -98,7 +98,7 @@ zeigt so die Vorschau im FOV.
 FOV-Planung sind zwei Tools: der **FOV-Planer** (`fov_planner`) mit Slidern für Position,
 Rotation, Größe und Matrix (eine Affine mit Raster) und darunter, zum Aufklappen, der
 Phantom-Vorschau auf diesem Raster; und der **visuelle FOV-Planer** (`fov_viewer`), das
-Phantom mit der FOV-Box, breit im 2×2-Raster, schmal eine Ebene mit Umschalter. Beide
+Phantom mit der FOV-Box, breit im 2×2-Raster, schmal eine Ebene mit Auswahl-Dropdown. Beide
 nutzen denselben Viewer-Baustein wie die Phantom-Vorschau (`PhantomViewer`). Der visuelle
 Planer läuft bisher nur auf der Website, noch ohne Maus-Gesten.
 
