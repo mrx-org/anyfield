@@ -45,3 +45,15 @@ export function filterFiles(files: UserFile[], query: string): UserFile[] {
   const q = query.trim().toLowerCase();
   return q ? files.filter((f) => f.name.toLowerCase().includes(q) || (f.type ?? "").toLowerCase().includes(q)) : files;
 }
+
+/** A bifti phantom, as far as the list can tell: a .zip (whether it really is one
+ * shows when its maps are loaded, as in the phantom browser's CAS tab). */
+export const isBifti = (f: Pick<UserFile, "name" | "type">) =>
+  f.name.toLowerCase().endsWith(".zip") || (f.type ?? "").includes("zip");
+
+/** What the list shows: all files, or only the bifti phantoms. */
+export type FileMode = "all" | "bifti";
+export const FILE_MODES: { key: FileMode; label: string }[] = [
+  { key: "all", label: "Alle Dateien" },
+  { key: "bifti", label: "BIfTIs" },
+];

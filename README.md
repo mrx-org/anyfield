@@ -138,9 +138,9 @@ anyfield hält keine Dateien, die Bytes gehen direkt zwischen Browser und Gatewa
   Spalte sortierbar, mit Suche, schmal horizontal scrollbar. Erste Spalte lädt herunter
   (`<gateway>/files/<hash>`, ohne Login: der Hash ist die Berechtigung; im Chat über
   `openLink`, das iframe darf nicht selbst herunterladen). Ein Klick auf den Namen
-  schickt `"name": <hash>` in den Chat, auf der Website kopiert er die Zeile. Mit
-  Session lässt sich eine `.zip` als Phantom wählen. Das Gateway löscht eine Datei
-  einen Tag nach ihrer letzten Nutzung.
+  schickt `"name": <hash>` in den Chat, auf der Website kopiert er die Zeile. Ein
+  Dropdown neben der Suche zeigt alle Dateien oder nur BIfTIs (`.zip`). Das Gateway
+  löscht eine Datei einen Tag nach ihrer letzten Nutzung.
 - `file_manager` (`open_file_manager`): beides untereinander; ein Upload lädt die Liste
   neu. Auf der Website hinter „Dateien“ in der Kopfzeile.
 
