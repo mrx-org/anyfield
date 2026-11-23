@@ -19,7 +19,7 @@ export function phantomSummary(s: State): string {
 /** What the phantom preview hands back to the chat. */
 export function previewSummary(s: State): string {
   const name = describe(s.phantom);
-  const tissues = s.view.tissues?.length ? `tissues ${s.view.tissues.join(", ")}` : "all tissues";
+  const tissues = s.tissues?.length ? `tissues ${s.tissues.join(", ")}` : "all tissues";
   return `Phantom preview of ${name}: property ${s.view.property}, ${tissues}.`;
 }
 

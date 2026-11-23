@@ -6,7 +6,7 @@ from anyfield.migrations import MARKER, SCHEMA_VERSION, migrate, migrate_json, m
 from anyfield.models import Session
 from anyfield.store import MemoryStore
 
-# A session as version 0 stored it (before 23.11.2026): no `version`, a plane in the view
+# A session as version 0 stored it (before 23.11.2026): no `version`, plane and tissues in the view
 V0 = {
     "key": "k",
     "name": "n",
@@ -23,9 +23,17 @@ V0 = {
 def test_v0_to_current():
     s = migrate(V0)
     assert s["version"] == SCHEMA_VERSION
-    assert s["state"]["view"] == {"property": "T1", "tissues": ["WM"]}
+    assert s["state"]["view"] == {"property": "T1"} and s["state"]["tissues"] == ["WM"]
     session = Session.model_validate(s)
-    assert session.state.view.tissues == ["WM"] and session.rev == 3
+    assert session.state.tissues == ["WM"] and session.rev == 3
+
+
+def test_v1_tissues_move_next_to_the_phantom():
+    v1 = {**V0, "version": 1, "state": {**V0["state"], "view": {"property": "PD", "tissues": ["GM"]}}}
+    s = migrate(v1)
+    assert s["state"]["view"] == {"property": "PD"} and s["state"]["tissues"] == ["GM"]
+    v1 = {**v1, "state": {**v1["state"], "view": {"property": "PD"}}}
+    assert "tissues" not in migrate(v1)["state"]  # none: the default (all)
 
 
 def test_current_stays_and_newer_is_refused():
@@ -43,7 +51,7 @@ async def test_the_store_reads_old_sessions():
     store = MemoryStore()
     store.sessions["k"] = json.dumps(V0)
     s = await store.get("k")
-    assert s is not None and s.state.view.tissues == ["WM"]
+    assert s is not None and s.state.tissues == ["WM"]
 
 
 class SyncDict:
@@ -80,7 +88,7 @@ def test_startup_migrates_dict_and_volume_once(tmp_path):
 
     assert migrate_modal_store(d, vol, tmp_path) == 2
     assert json.loads(d.data["s:k"])["version"] == SCHEMA_VERSION
-    assert "plane" not in json.loads((tmp_path / "s_k.json").read_text())["state"]["view"]
+    assert json.loads((tmp_path / "s_k.json").read_text())["state"]["view"] == {"property": "T1"}
     assert d.data["o:owner"] == json.dumps(["k"])  # owner lists are no sessions
     assert d.data[MARKER] == SCHEMA_VERSION and vol.commits == 1
 

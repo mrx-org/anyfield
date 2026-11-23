@@ -62,16 +62,6 @@ class View(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
     property: str = Field(default="density", description="Shown property: density, T1, T2, ...")
-    tissues: list[str] | None = Field(
-        default=None,
-        description="Tissues combined into the maps (names from list_phantom_tissues); null: all",
-    )
-
-    @field_validator("tissues")
-    @classmethod
-    def _tissues(cls, v: list[str] | None) -> list[str] | None:
-        # Sorted, each once; none at all means all (the gateway refuses an empty list)
-        return sorted(set(v)) or None if v is not None else None
 
 
 class State(BaseModel):
@@ -82,9 +72,20 @@ class State(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
     phantom: Phantom | None = None
+    tissues: list[str] | None = Field(
+        default=None,
+        description="The phantom's tissues that are viewed (and later simulated), names from "
+        "list_phantom_tissues; null: all",
+    )
     view: View = Field(default_factory=View)
     fov: Fov = Field(default_factory=Fov)
     matrix: Int3 = Field(default=(128, 128, 1), description="Resolution (x, y, z) of the planned scan")
+
+    @field_validator("tissues")
+    @classmethod
+    def _tissues(cls, v: list[str] | None) -> list[str] | None:
+        # Sorted, each once; none at all means all (the gateway refuses an empty list)
+        return sorted(set(v)) or None if v is not None else None
 
 
 class Session(BaseModel):

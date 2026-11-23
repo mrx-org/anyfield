@@ -35,12 +35,13 @@ export function composePatch<T>(first: T, second: unknown): T {
 /** A state with a patch applied; a removed phantom is the default (null). */
 export function applyPatch(state: State, patch: StatePatch): State {
   const next = mergePatch(state, patch);
-  return { ...next, phantom: next.phantom ?? null };
+  return { ...next, phantom: next.phantom ?? null, tissues: next.tissues ?? null };
 }
 
 export const DEFAULT_STATE: State = {
   phantom: null,
-  view: { property: "density", tissues: null },
+  tissues: null,
+  view: { property: "density" },
   fov: { center_mm: [0, 0, 0], rotation_deg: [0, 0, 0], size_mm: [200, 200, 100] },
   matrix: [128, 128, 1],
 };

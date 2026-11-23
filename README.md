@@ -40,7 +40,8 @@ Der Session-Zustand ist ein kleines JSON nur mit der Auswahl, keine Daten:
 ```json
 {
   "phantom": { "collection": "endres-brainweb-001", "name": "subj04-3T-1mm.json" },
-  "view": { "property": "T1", "tissues": ["GM", "WM"] },
+  "tissues": ["GM", "WM"],
+  "view": { "property": "T1" },
   "fov": { "center_mm": [0, 0, 10], "rotation_deg": [0, 0, 20], "size_mm": [220, 220, 60] },
   "matrix": [128, 128, 1]
 }
@@ -53,11 +54,13 @@ Der Session-Zustand ist ein kleines JSON nur mit der Auswahl, keine Daten:
 Wer eine Session mit einem CAS-Phantom geteilt bekommt, sieht es, auch als `visitor`. Per
 `patch_state` beim Wechsel der Art das andere Feld auf `null` setzen (Merge Patch), z. B.
 `{"phantom": {"sha256": "…", "name": "x.zip", "collection": null}}`. Karten und Wertebereiche liefert `get_phantom_maps`;
-sie werden nicht gespeichert. `view` gilt für alle Viewer der Session (Eigenschaft;
-Gewebe, die die Karten kombinieren, Namen aus `list_phantom_tissues`, `null` für alle).
-Ein anderes Phantom setzt die Gewebe auf alle zurück, außer sie werden mit ihm zusammen
-gesetzt. Die Ebene (`tra`, `cor`, `sag`, `3d`) wählt jeder Viewer selbst; sie steht nicht
-im Zustand.
+sie werden nicht gespeichert. `tissues` gehört zum Phantom: welche seiner Gewebe
+betrachtet (und später simuliert) werden, Namen aus `list_phantom_tissues`, `null` für
+alle. Gewählt wird es im Phantom-Browser oder mit `select_phantom` (`tissues`, mit Session
+auch ohne Phantom für das aktuelle). Ein anderes Phantom setzt die Gewebe auf alle zurück,
+außer sie werden mit ihm zusammen gesetzt. `view` gilt für alle Viewer der Session
+(Eigenschaft, `set_phantom_view`). Die Ebene (`tra`, `cor`, `sag`, `3d`) wählt jeder
+Viewer selbst; sie steht nicht im Zustand.
 
 `open_*` zeigen in Clients mit MCP Apps das jeweilige Tool im Chat. Mit `session_key`
 arbeitet es auf der Session; ohne wählt der Nutzer lokal, jede Änderung geht als

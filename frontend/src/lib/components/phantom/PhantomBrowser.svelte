@@ -19,6 +19,7 @@
   import type { CasPhantomEntry, CatalogPhantom, PhantomCollection, PhantomTree } from "../../types";
   import ToolFrame from "../ToolFrame.svelte";
   import PhantomPreview from "./PhantomPreview.svelte";
+  import TissueMenu from "./TissueMenu.svelte";
   import ChevronRight from "@lucide/svelte/icons/chevron-right";
   import LoaderCircle from "@lucide/svelte/icons/loader-circle";
   import RefreshCw from "@lucide/svelte/icons/refresh-cw";
@@ -192,12 +193,12 @@
     if (!name) return;
     if (currentCatalog === phantom && phantom?.collection === collection && phantom.name === name) return;
     // Another phantom has other tissues: back to all of them
-    sel.patch({ phantom: phantomPatch({ collection, name }), view: { tissues: null } });
+    sel.patch({ phantom: phantomPatch({ collection, name }), tissues: null });
   }
 
   function chooseCas(entry: CasPhantomEntry) {
     if (currentCas?.sha256 === entry.sha256) return;
-    sel.patch({ phantom: phantomPatch({ sha256: entry.sha256, name: entry.name }), view: { tissues: null } });
+    sel.patch({ phantom: phantomPatch({ sha256: entry.sha256, name: entry.name }), tissues: null });
   }
 
   const size = (n: number | null) =>
@@ -217,6 +218,7 @@
         </span>
       </div>
       {#if current}<span class="-mt-1 truncate text-xs text-muted" title={currentCas?.sha256}>{phantomSource(current)}</span>{/if}
+      <TissueMenu {sel} />
       <Collapsible open={previewOpen} onOpenChange={(d) => (previewOpen = d.open)}>
         <Collapsible.Trigger class="btn btn-sm preset-outlined-surface-300-700 w-full justify-start text-xs">
           <ChevronRight class="size-4 transition-transform {previewOpen ? 'rotate-90' : ''}" aria-hidden="true" />

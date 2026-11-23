@@ -25,7 +25,7 @@ from typing import Any
 
 log = logging.getLogger(__name__)
 
-SCHEMA_VERSION = 1
+SCHEMA_VERSION = 2
 MARKER = "meta:schema_version"
 
 Raw = dict[str, Any]
@@ -40,7 +40,18 @@ def _v0_to_v1(s: Raw) -> Raw:
     return {**s, "state": state}
 
 
-STEPS: dict[int, Callable[[Raw], Raw]] = {0: _v0_to_v1}
+def _v1_to_v2(s: Raw) -> Raw:
+    """`view.tissues` is now `state.tissues`, next to the phantom: the tissues belong
+    to the phantom that is viewed (and later simulated), not to a view."""
+    state = dict(s.get("state") or {})
+    view = dict(state.get("view") or {})
+    if "tissues" in view:
+        state.setdefault("tissues", view.pop("tissues"))
+    state["view"] = view
+    return {**s, "state": state}
+
+
+STEPS: dict[int, Callable[[Raw], Raw]] = {0: _v0_to_v1, 1: _v1_to_v2}
 
 
 def migrate(s: Raw) -> Raw:

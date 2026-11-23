@@ -164,27 +164,49 @@ def register(
         collection: CollectionArg = None,
         phantom: PhantomArg = None,
         sha256: Sha256Arg = None,
+        tissues: Annotated[
+            list[str] | None,
+            Field(
+                description="The phantom's tissues to view (and later simulate), names from "
+                "list_phantom_tissues (e.g. ['GM', 'WM']); [] or omitted: all"
+            ),
+        ] = None,
         session_key: OptionalSessionKey = None,
     ) -> dict[str, Any]:
-        """Choose a phantom: one of the catalog (`collection` and `phantom`) or one in
-        the CAS (`sha256`, optionally `phantom` as its display name). With a session it
-        becomes the session's phantom (state field `phantom`), and everyone with the
-        session key sees it; the view stays. Returns the choice. Its maps and value
-        ranges: get_phantom_maps. The default phantom: patch_state {"phantom": null}."""
+        """Choose a phantom and its tissues: one of the catalog (`collection` and
+        `phantom`) or one in the CAS (`sha256`, optionally `phantom` as its display
+        name). With a session it becomes the session's phantom (state fields `phantom`
+        and `tissues`), and everyone with the session key sees it; the view stays.
+        Another phantom without `tissues` gets all its tissues. With a session, only
+        `tissues` changes the tissues of the session's phantom. Returns the choice.
+        Its maps and value ranges: get_phantom_maps. The default phantom:
+        patch_state {"phantom": null}."""
         choice = await resolve(catalog, collection, phantom, sha256, cas)
-        if choice is None:
+        if choice is None and (session_key is None or tissues is None):
             raise ToolError("Give collection and phantom, or sha256 for a phantom in the CAS.")
         if session_key is None:
-            return {"phantom": choice.model_dump()}
-        session = await ctx.change(session_key, lambda st: st.model_copy(update={"phantom": choice}))
-        return {"rev": session.rev, "phantom": choice.model_dump()}
+            return {"phantom": choice.model_dump(), "tissues": State(tissues=tissues).tissues}
+
+        def update(st: State) -> State:
+            changes: dict[str, Any] = {} if choice is None else {"phantom": choice}
+            if tissues is not None:
+                changes["tissues"] = tissues
+            return State.model_validate({**st.model_dump(), **changes})
+
+        session = await ctx.change(session_key, update)
+        st = session.state
+        return {
+            "rev": session.rev,
+            "phantom": st.phantom.model_dump() if st.phantom else None,
+            "tissues": st.tissues,
+        }
 
     @mcp.tool(annotations={"readOnlyHint": True})
     async def list_phantom_tissues(
         collection: CollectionArg = None, phantom: PhantomArg = None, sha256: Sha256Arg = None
     ) -> dict[str, Any]:
         """The tissues of a phantom (sorted names, e.g. GM, WM, CSF), to choose which
-        ones the maps combine (get_phantom_maps, set_phantom_view `tissues`). The
+        ones the maps combine (get_phantom_maps, select_phantom `tissues`). The
         phantom as in get_phantom_maps; without one the default phantom. The first
         call for a large phantom can take a while."""
         choice = await resolve(catalog, collection, phantom, sha256, cas) or DEFAULT_PHANTOM
@@ -194,22 +216,12 @@ def register(
     async def set_phantom_view(
         session_key: SessionKey,
         property: PropertyArg | None = None,
-        tissues: Annotated[
-            list[str] | None,
-            Field(
-                description="Tissues the maps combine, names from list_phantom_tissues "
-                "(e.g. ['GM', 'WM']); [] for all of them"
-            ),
-        ] = None,
     ) -> dict[str, Any]:
         """How all viewers of the session show its phantom: the property (PD, T1,
-        T2, T2', ADC, dB0, B1+ ...; which ones a phantom has: get_phantom_maps) and the
-        tissues combined. Fields left out stay as they are. Choosing another phantom
-        resets the tissues to all. The plane (tra, cor, sag, 3D) each viewer picks
-        itself; it is not in the state."""
+        T2, T2', ADC, dB0, B1+ ...; which ones a phantom has: get_phantom_maps). Left
+        out, it stays. The plane (tra, cor, sag, 3D) each viewer picks itself; the
+        tissues belong to the phantom (select_phantom)."""
         changes = {k: v for k, v in {"property": property}.items() if v is not None}
-        if tissues is not None:
-            changes["tissues"] = tissues
 
         def update(st: State) -> State:
             return st.model_copy(update={"view": View.model_validate({**st.view.model_dump(), **changes})})
@@ -284,13 +296,13 @@ def register(
         ] = None,
     ) -> dict[str, Any]:
         """Show the phantom preview: a large view of a phantom, with the plane (tra,
-        cor, sag, 3D, chosen by the user), the property (PD, T1, T2, ...) and the tissues to pick.
-        With a session: the session's phantom and view (state field `view`), edited
-        there; leave out the other arguments.
+        cor, sag, 3D, chosen by the user) and the property (PD, T1, T2, ...) to pick.
+        With a session: the session's phantom, tissues and view (state field `view`),
+        the property edited there; leave out the other arguments.
         Without a session: a quick look at any phantom - give `collection` and
         `phantom` (from list_phantoms) or `sha256` (a phantom in the CAS), optionally
-        the property and tissues to start with; the view the user ends up with comes
-        back to the chat.
+        the property to start with and the tissues to show; the view the user ends up
+        with comes back to the chat.
         In clients without MCP Apps this returns the state."""
         if session_key is not None:
             if any(v is not None for v in (collection, phantom, sha256, property, tissues)):
@@ -308,8 +320,8 @@ def register(
                 "Without a session give collection and phantom (from list_phantoms), or sha256 "
                 "for a phantom in the CAS."
             )
-        view = View(**{k: v for k, v in {"property": property, "tissues": tissues}.items() if v is not None})
-        state = State(phantom=choice, view=view)
+        view = View(**({"property": property} if property is not None else {}))
+        state = State(phantom=choice, tissues=tissues, view=view)
         return {"key": None, "state": state.model_dump()}
 
     app_html(mcp, PHANTOM_APP_URI, "Phantom browser", "phantom-app.html", ctx.base_url, static_dir)

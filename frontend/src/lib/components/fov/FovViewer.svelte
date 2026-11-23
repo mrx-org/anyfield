@@ -1,8 +1,8 @@
 <script lang="ts">
   // The visual FOV planner: the phantom with the FOV box on top. Wide, it shows the
   // 2×2 grid (three planes and 3D); narrow, one plane with a switch above it (per
-  // viewer, not in the state). Property and tissues follow the state's
-  // `view`, as in the phantom preview. The sliders are the FOV planner (FovPlanner).
+  // viewer, not in the state). Tissues and property follow the state (`tissues`,
+  // `view`), as in the phantom preview. The sliders are the FOV planner (FovPlanner).
   // Bound to a Selection, so it works on a session, locally in an MCP App, and on the website.
   import { MapsLoader } from "../../state/maps.svelte";
   import type { Selection } from "../../state/selection";
@@ -15,7 +15,7 @@
   const shown = $derived(maps.property(sel.state?.view.property ?? "density"));
 
   $effect(() => {
-    if (sel.state) maps.load(sel.state.phantom, undefined, sel.state.view.tissues ?? null);
+    if (sel.state) maps.load(sel.state.phantom, undefined, sel.state.tissues ?? null);
   });
 </script>
 

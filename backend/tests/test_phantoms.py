@@ -166,9 +166,9 @@ async def test_select_phantom_in_session(client):
     r = await call(
         client, "select_phantom", session_key=client.key, collection="demo-001", phantom="shapes.json"
     )
-    assert r == {"rev": 2, "phantom": {"collection": "demo-001", "name": "shapes.json"}}
+    assert r == {"rev": 2, "phantom": {"collection": "demo-001", "name": "shapes.json"}, "tissues": None}
     r = await call(client, "set_phantom_view", session_key=client.key, property="dB0")
-    assert r["view"] == {"property": "dB0", "tissues": None}
+    assert r["view"] == {"property": "dB0"}
     s = await call(client, "get_state", session_key=client.key)
     assert s["state"]["phantom"]["name"] == "shapes.json" and s["state"]["view"]["property"] == "dB0"
 
@@ -178,7 +178,7 @@ async def test_select_phantom_in_session(client):
 
 async def test_select_phantom_without_session(client):
     r = await call(client, "select_phantom", collection="demo-001", phantom="shapes.json")
-    assert r == {"phantom": {"collection": "demo-001", "name": "shapes.json"}}
+    assert r == {"phantom": {"collection": "demo-001", "name": "shapes.json"}, "tissues": None}
 
 
 async def test_unknown_phantom_is_rejected(client):
@@ -291,7 +291,7 @@ async def test_phantom_preview_without_session_needs_a_phantom(client):
     )
     assert r["key"] is None
     assert r["state"]["phantom"] == {"collection": "demo-001", "name": "shapes.json"}
-    assert r["state"]["view"] == {"property": "T2", "tissues": None}
+    assert r["state"]["view"] == {"property": "T2"} and r["state"]["tissues"] is None
 
 
 async def test_phantom_preview_with_session_shows_the_session(client):
@@ -362,18 +362,27 @@ async def test_maps_of_some_tissues(client, gateway):
     assert "tissues" not in gateway.maps_calls()[-1]
 
 
-async def test_tissues_in_the_view(client):
-    r = await call(client, "set_phantom_view", session_key=client.key, tissues=["WM", "GM", "GM"])
-    assert r["view"]["tissues"] == ["GM", "WM"]
-    r = await call(client, "set_phantom_view", session_key=client.key, property="T2")
-    assert r["view"]["tissues"] == ["GM", "WM"]  # left out: stays
-    r = await call(client, "set_phantom_view", session_key=client.key, tissues=[])
-    assert r["view"]["tissues"] is None  # all
+async def test_tissues_of_the_chosen_phantom(client):
+    # Only tissues: those of the session's phantom
+    r = await call(client, "select_phantom", session_key=client.key, tissues=["WM", "GM", "GM"])
+    assert r["phantom"] is None and r["tissues"] == ["GM", "WM"]
+    await call(client, "set_phantom_view", session_key=client.key, property="T2")
+    s = await call(client, "get_state", session_key=client.key)
+    assert s["state"]["tissues"] == ["GM", "WM"]  # the view leaves them alone
+    r = await call(client, "select_phantom", session_key=client.key, tissues=[])
+    assert r["tissues"] is None  # all
 
-    await call(client, "set_phantom_view", session_key=client.key, tissues=["GM"])
+    await call(client, "select_phantom", session_key=client.key, tissues=["GM"])
     await call(client, "select_phantom", session_key=client.key, sha256=CAS_ZIP)
     s = await call(client, "get_state", session_key=client.key)
-    assert s["state"]["view"]["tissues"] is None  # another phantom: all its tissues
+    assert s["state"]["tissues"] is None  # another phantom: all its tissues
+
+    r = await call(client, "select_phantom", session_key=client.key, sha256=CAS_ZIP, tissues=["CSF"])
+    assert r["tissues"] == ["CSF"]  # chosen with it
+    r = await call(client, "select_phantom", collection="demo-001", phantom="shapes.json", tissues=["WM"])
+    assert r == {"phantom": {"collection": "demo-001", "name": "shapes.json"}, "tissues": ["WM"]}
+    with pytest.raises(ToolError, match="Give collection"):
+        await call(client, "select_phantom", tissues=["WM"])  # without a session: a phantom too
 
     # Chosen together with the phantom, they stay
     r = await call(
@@ -382,10 +391,10 @@ async def test_tissues_in_the_view(client):
         session_key=client.key,
         patch={
             "phantom": {"collection": "demo-001", "name": "shapes.json", "sha256": None},
-            "view": {"tissues": ["CSF"]},
+            "tissues": ["GM"],
         },
     )
-    assert r["state"]["view"]["tissues"] == ["CSF"]
+    assert r["state"]["tissues"] == ["GM"]
 
 
 async def test_a_cas_phantom_without_a_name_gets_its_file_name(client):

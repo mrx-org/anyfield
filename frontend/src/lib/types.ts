@@ -35,13 +35,13 @@ export type Plane = "tra" | "cor" | "sag" | "3d";
 /** How the viewers show the phantom (each viewer picks its plane itself). */
 export interface View {
   property: string;
-  /** Tissues the maps combine (names from `list_phantom_tissues`); null or missing: all. */
-  tissues?: string[] | null;
 }
 
 /** A session's state: the user's choices only, no data. `phantom: null` is the default phantom. */
 export interface State {
   phantom: PhantomChoice | null;
+  /** The phantom's tissues that are viewed (and later simulated); null or missing: all. */
+  tissues?: string[] | null;
   view: View;
   fov: Fov;
   /** Resolution (x, y, z) of the planned scan. */
@@ -52,6 +52,8 @@ export interface State {
 export type StatePatch = {
   /** Merge patch: give `null` for the field of the other kind of phantom. */
   phantom?: { collection?: string | null; name?: string; sha256?: string | null } | null;
+  /** null: all tissues. */
+  tissues?: string[] | null;
   view?: Partial<View>;
   fov?: Partial<Fov>;
   matrix?: Vec3;
