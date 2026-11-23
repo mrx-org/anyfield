@@ -40,7 +40,7 @@ Der Session-Zustand ist ein kleines JSON nur mit der Auswahl, keine Daten:
 ```json
 {
   "phantom": { "collection": "endres-brainweb-001", "name": "subj04-3T-1mm.json" },
-  "view": { "property": "T1", "plane": "tra", "tissues": ["GM", "WM"] },
+  "view": { "property": "T1", "tissues": ["GM", "WM"] },
   "fov": { "center_mm": [0, 0, 10], "rotation_deg": [0, 0, 20], "size_mm": [220, 220, 60] },
   "matrix": [128, 128, 1]
 }
@@ -53,11 +53,11 @@ Der Session-Zustand ist ein kleines JSON nur mit der Auswahl, keine Daten:
 Wer eine Session mit einem CAS-Phantom geteilt bekommt, sieht es, auch als `visitor`. Per
 `patch_state` beim Wechsel der Art das andere Feld auf `null` setzen (Merge Patch), z. B.
 `{"phantom": {"sha256": "…", "name": "x.zip", "collection": null}}`. Karten und Wertebereiche liefert `get_phantom_maps`;
-sie werden nicht gespeichert. `view` ist die Ansicht der Phantom-Vorschau (Eigenschaft;
-Ebene `tra`, `cor`, `sag` oder `3d`; Gewebe, die die Karten kombinieren, Namen aus
-`list_phantom_tissues`, `null` für alle). Ein anderes Phantom setzt die Gewebe auf alle
-zurück, außer sie werden mit ihm zusammen gesetzt. Eigenschaft und Gewebe gelten auch
-für die Ansichten des FOV-Planers; die Ebene im visuellen FOV-Planer ist pro Gerät.
+sie werden nicht gespeichert. `view` gilt für alle Viewer der Session (Eigenschaft;
+Gewebe, die die Karten kombinieren, Namen aus `list_phantom_tissues`, `null` für alle).
+Ein anderes Phantom setzt die Gewebe auf alle zurück, außer sie werden mit ihm zusammen
+gesetzt. Die Ebene (`tra`, `cor`, `sag`, `3d`) wählt jeder Viewer selbst; sie steht nicht
+im Zustand.
 
 `open_*` zeigen in Clients mit MCP Apps das jeweilige Tool im Chat. Mit `session_key`
 arbeitet es auf der Session; ohne wählt der Nutzer lokal, jede Änderung geht als
@@ -77,10 +77,10 @@ gerendert und lädt keine Karten; so lässt sich das Phantom einer Session z. B.
 aus wechseln, ohne es dort zu laden.
 
 `open_phantom_preview` ohne Session ist ein schneller Blick auf ein beliebiges Phantom:
-Die KI gibt `collection` und `phantom` an (Pflicht), optional `property` und `plane` zum
+Die KI gibt `collection` und `phantom` an (Pflicht), optional `property` und `tissues` zum
 Start. Mit Session zeigt es Phantom und Ansicht der Session, die anderen Argumente
 entfallen. Im Test-Host werden weitere Query-Parameter zu Tool-Argumenten, z. B.
-`/dev/app-host.html?tool=open_phantom_preview&collection=endres-brainweb-001&phantom=subj04-3T-1mm.json&plane=cor`.
+`/dev/app-host.html?tool=open_phantom_preview&collection=endres-brainweb-001&phantom=subj04-3T-1mm.json&property=T1`.
 
 anyfield hält keine Phantomdaten. Katalog und Karten liefern die bifti-Tools des
 MRX-Gateways (`bifti_list_collections`, `bifti_list_phantoms`,

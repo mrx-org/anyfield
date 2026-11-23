@@ -1,6 +1,5 @@
 """Phantom tools: browse the BIfTI catalog and the caller's phantoms in the CAS
-(MRX gateway) and choose a phantom (browser), and view it (preview: plane and
-property). With a session the choice is stored in its state; without one it goes
+(MRX gateway) and choose a phantom (browser), and view it (preview: property). With a session the choice is stored in its state; without one it goes
 back to the chat. Independent of the FOV planner."""
 
 from __future__ import annotations
@@ -16,7 +15,7 @@ from fastmcp.exceptions import ToolError
 from pydantic import Field, ValidationError
 
 from . import fov as fov_ops
-from .models import CasPhantom, Fov, Phantom, PhantomChoice, Plane, Session, State, View
+from .models import CasPhantom, Fov, Phantom, PhantomChoice, Session, State, View
 from .phantoms import (
     DEFAULT_PHANTOM,
     PROPERTY_KEYS,
@@ -195,10 +194,6 @@ def register(
     async def set_phantom_view(
         session_key: SessionKey,
         property: PropertyArg | None = None,
-        plane: Annotated[
-            Plane | None,
-            Field(description="tra (transversal), cor (coronal), sag (sagittal) or 3d (rendering)"),
-        ] = None,
         tissues: Annotated[
             list[str] | None,
             Field(
@@ -207,12 +202,12 @@ def register(
             ),
         ] = None,
     ) -> dict[str, Any]:
-        """How the phantom preview shows the session's phantom: the property (PD, T1,
-        T2, T2', ADC, dB0, B1+ ...; which ones a phantom has: get_phantom_maps), the
-        plane and the tissues combined. Fields left out stay as they are. Choosing
-        another phantom resets the tissues to all. Property and tissues also apply to
-        the FOV planner's views."""
-        changes = {k: v for k, v in {"property": property, "plane": plane}.items() if v is not None}
+        """How all viewers of the session show its phantom: the property (PD, T1,
+        T2, T2', ADC, dB0, B1+ ...; which ones a phantom has: get_phantom_maps) and the
+        tissues combined. Fields left out stay as they are. Choosing another phantom
+        resets the tissues to all. The plane (tra, cor, sag, 3D) each viewer picks
+        itself; it is not in the state."""
+        changes = {k: v for k, v in {"property": property}.items() if v is not None}
         if tissues is not None:
             changes["tissues"] = tissues
 
@@ -281,9 +276,6 @@ def register(
             str | None,
             Field(description=f"Without a session: property to start with ({', '.join(PROPERTY_KEYS)})"),
         ] = None,
-        plane: Annotated[
-            Plane | None, Field(description="Without a session: tra, cor, sag or 3d to start with")
-        ] = None,
         tissues: Annotated[
             list[str] | None,
             Field(
@@ -292,19 +284,19 @@ def register(
         ] = None,
     ) -> dict[str, Any]:
         """Show the phantom preview: a large view of a phantom, with the plane (tra,
-        cor, sag, 3D), the property (PD, T1, T2, ...) and the tissues to pick.
+        cor, sag, 3D, chosen by the user), the property (PD, T1, T2, ...) and the tissues to pick.
         With a session: the session's phantom and view (state field `view`), edited
         there; leave out the other arguments.
         Without a session: a quick look at any phantom - give `collection` and
         `phantom` (from list_phantoms) or `sha256` (a phantom in the CAS), optionally
-        the property, plane and tissues to start with; the view the user ends up with comes
+        the property and tissues to start with; the view the user ends up with comes
         back to the chat.
         In clients without MCP Apps this returns the state."""
         if session_key is not None:
-            if any(v is not None for v in (collection, phantom, sha256, property, plane, tissues)):
+            if any(v is not None for v in (collection, phantom, sha256, property, tissues)):
                 raise ToolError(
                     "With a session the preview shows the session's phantom and view: leave out "
-                    "collection, phantom, sha256, property, plane and tissues (change them with select_phantom "
+                    "collection, phantom, sha256, property and tissues (change them with select_phantom "
                     "and set_phantom_view)."
                 )
             return await ctx.opened(session_key)
@@ -316,13 +308,7 @@ def register(
                 "Without a session give collection and phantom (from list_phantoms), or sha256 "
                 "for a phantom in the CAS."
             )
-        view = View(
-            **{
-                k: v
-                for k, v in {"property": property, "plane": plane, "tissues": tissues}.items()
-                if v is not None
-            }
-        )
+        view = View(**{k: v for k, v in {"property": property, "tissues": tissues}.items() if v is not None})
         state = State(phantom=choice, view=view)
         return {"key": None, "state": state.model_dump()}
 

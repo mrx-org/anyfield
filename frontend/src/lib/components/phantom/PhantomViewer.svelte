@@ -2,7 +2,10 @@
   // NiiVue view of one volume (e.g. a phantom map), the one viewer of all tools.
   // Two independent options: the layout (one plane, the 2×2 grid of three planes and
   // 3D, or chosen by the width) and the FOV box on top (none when `fov` is null).
+  // While one plane is shown, the viewer picks it itself (a switch above it): the
+  // plane is per viewer, not in the state.
   import { MULTIPLANAR_TYPE, NVMesh, Niivue, SHOW_RENDER, SLICE_TYPE } from "@niivue/niivue";
+  import { SegmentedControl } from "@skeletonlabs/skeleton-svelte";
   import { onMount } from "svelte";
   import { fovMesh } from "../../geometry/fov";
   import { niftiName } from "../../state/maps.svelte";
@@ -14,26 +17,33 @@
     url,
     range = null,
     layout = "single",
-    plane = "tra",
+    plane = $bindable("tra"),
     fov = null,
-    single = $bindable(true),
-    class: cls = "aspect-square w-full self-center",
+    class: cls = "w-full self-center",
+    viewClass = "aspect-square w-full",
   }: {
     url: string | null;
     range?: [number, number] | null;
     /** `auto`: the grid from `GRID_MIN_WIDTH_PX` on, below it one plane. */
     layout?: Layout;
-    /** The plane while one plane is shown. */
+    /** The plane while one plane is shown; the switch above the view changes it. */
     plane?: Plane;
     /** The FOV box to draw; null: none. */
     fov?: Fov | null;
-    /** Out: whether one plane is shown right now (for `auto`, e.g. to show a plane switch). */
-    single?: boolean;
+    /** The whole viewer, with the switch. */
     class?: string;
+    /** The view itself (e.g. square, or filling the height). */
+    viewClass?: string;
   } = $props();
 
   /** From this width on (CSS px), `auto` shows the grid: each tile is then ~240 px. */
   const GRID_MIN_WIDTH_PX = 480;
+  const PLANES: { key: Plane; label: string }[] = [
+    { key: "tra", label: "Tra" },
+    { key: "cor", label: "Kor" },
+    { key: "sag", label: "Sag" },
+    { key: "3d", label: "3D" },
+  ];
   const SLICE: Record<Plane, SLICE_TYPE> = {
     tra: SLICE_TYPE.AXIAL,
     cor: SLICE_TYPE.CORONAL,
@@ -61,6 +71,7 @@
   let loaded: string | null = null;
   let loadError = $state<string | null>(null);
   let width = $state(0);
+  const single = $derived(layout === "single" || (layout === "auto" && width < GRID_MIN_WIDTH_PX));
 
   onMount(() => {
     const ro = new ResizeObserver(([e]) => (width = e.contentRect.width));
@@ -85,10 +96,6 @@
       mesh = null;
       nv = null;
     };
-  });
-
-  $effect(() => {
-    single = layout === "single" || (layout === "auto" && width < GRID_MIN_WIDTH_PX);
   });
 
   // In the grid the crosshair shows where the three planes cut; one plane needs none
@@ -133,9 +140,24 @@
   });
 </script>
 
-<div bind:this={box} class="relative {cls}">
-  <canvas bind:this={canvas} class="absolute inset-0 h-full w-full"></canvas>
-  {#if loadError}
-    <p class="absolute inset-x-0 top-2 text-center text-xs text-error-500">Viewer: {loadError}</p>
+<div bind:this={box} class="flex flex-col gap-1 {cls}">
+  {#if single}
+    <SegmentedControl value={plane} onValueChange={(d) => d.value && (plane = d.value as Plane)}>
+      <SegmentedControl.Control class="w-full">
+        <SegmentedControl.Indicator />
+        {#each PLANES as p (p.key)}
+          <SegmentedControl.Item value={p.key} class="flex-1 text-xs">
+            <SegmentedControl.ItemText>{p.label}</SegmentedControl.ItemText>
+            <SegmentedControl.ItemHiddenInput />
+          </SegmentedControl.Item>
+        {/each}
+      </SegmentedControl.Control>
+    </SegmentedControl>
   {/if}
+  <div class="relative {viewClass}">
+    <canvas bind:this={canvas} class="absolute inset-0 h-full w-full"></canvas>
+    {#if loadError}
+      <p class="absolute inset-x-0 top-2 text-center text-xs text-error-500">Viewer: {loadError}</p>
+    {/if}
+  </div>
 </div>

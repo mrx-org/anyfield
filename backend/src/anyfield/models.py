@@ -9,9 +9,9 @@ from __future__ import annotations
 
 import secrets
 import time
-from typing import Any, Literal
+from typing import Any
 
-from pydantic import BaseModel, ConfigDict, Field, field_validator
+from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 
 Vec3 = tuple[float, float, float]
 Int3 = tuple[int, int, int]
@@ -54,16 +54,12 @@ class CasPhantom(BaseModel):
 Phantom = PhantomChoice | CasPhantom
 
 
-Plane = Literal["tra", "cor", "sag", "3d"]
-
-
 class View(BaseModel):
-    """How the phantom preview shows the phantom (property and tissues also in the FOV views)."""
+    """How the viewers show the phantom (each viewer picks its plane itself)."""
 
     model_config = ConfigDict(extra="forbid")
 
     property: str = Field(default="density", description="Shown property: density, T1, T2, ...")
-    plane: Plane = Field(default="tra", description="Transversal, coronal, sagittal or 3D rendering")
     tissues: list[str] | None = Field(
         default=None,
         description="Tissues combined into the maps (names from list_phantom_tissues); null: all",
@@ -87,6 +83,14 @@ class State(BaseModel):
     view: View = Field(default_factory=View)
     fov: Fov = Field(default_factory=Fov)
     matrix: Int3 = Field(default=(128, 128, 1), description="Resolution (x, y, z) of the planned scan")
+
+    @model_validator(mode="before")
+    @classmethod
+    def _stored(cls, data: Any) -> Any:
+        """Read sessions stored before a field moved or went away."""
+        if isinstance(data, dict) and isinstance(data.get("view"), dict) and "plane" in data["view"]:
+            data = {**data, "view": {k: v for k, v in data["view"].items() if k != "plane"}}
+        return data
 
 
 class Session(BaseModel):

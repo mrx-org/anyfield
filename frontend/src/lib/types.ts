@@ -29,13 +29,12 @@ export interface CasPhantomEntry extends CasPhantom {
   uploaded_at: string | null;
 }
 
-/** Plane of the phantom preview: transversal, coronal, sagittal or a 3D rendering. */
+/** Plane of a viewer: transversal, coronal, sagittal or a 3D rendering. Per viewer, not in the state. */
 export type Plane = "tra" | "cor" | "sag" | "3d";
 
-/** How the phantom preview shows the phantom (property and tissues also in the FOV views). */
+/** How the viewers show the phantom (each viewer picks its plane itself). */
 export interface View {
   property: string;
-  plane: Plane;
   /** Tissues the maps combine (names from `list_phantom_tissues`); null or missing: all. */
   tissues?: string[] | null;
 }

@@ -50,3 +50,9 @@ async def test_dict_miss_falls_back_to_volume(tmp_path):
     await store.flush()
     d.data.clear()
     assert await store.get("k1") is None
+
+
+def test_reads_sessions_stored_with_a_plane():
+    raw = '{"key": "k", "name": "n", "state": {"view": {"property": "T1", "plane": "cor", "tissues": null}}}'
+    s = Session.model_validate_json(raw)
+    assert s.state.view.property == "T1" and "plane" not in s.state.view.model_dump()

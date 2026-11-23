@@ -168,9 +168,7 @@ async def test_select_phantom_in_session(client):
     )
     assert r == {"rev": 2, "phantom": {"collection": "demo-001", "name": "shapes.json"}}
     r = await call(client, "set_phantom_view", session_key=client.key, property="dB0")
-    assert r["view"] == {"property": "dB0", "plane": "tra", "tissues": None}
-    r = await call(client, "set_phantom_view", session_key=client.key, plane="cor")
-    assert r["view"] == {"property": "dB0", "plane": "cor", "tissues": None}
+    assert r["view"] == {"property": "dB0", "tissues": None}
     s = await call(client, "get_state", session_key=client.key)
     assert s["state"]["phantom"]["name"] == "shapes.json" and s["state"]["view"]["property"] == "dB0"
 
@@ -290,11 +288,10 @@ async def test_phantom_preview_without_session_needs_a_phantom(client):
         collection="demo-001",
         phantom="shapes.json",
         property="T2",
-        plane="sag",
     )
     assert r["key"] is None
     assert r["state"]["phantom"] == {"collection": "demo-001", "name": "shapes.json"}
-    assert r["state"]["view"] == {"property": "T2", "plane": "sag", "tissues": None}
+    assert r["state"]["view"] == {"property": "T2", "tissues": None}
 
 
 async def test_phantom_preview_with_session_shows_the_session(client):
@@ -343,8 +340,8 @@ async def test_cas_phantom_in_patch_state_and_preview(client):
     )
     assert r["state"]["phantom"] == {"sha256": CAS_ZIP, "name": "x.zip"}
 
-    r = await call(client, "open_phantom_preview", sha256=CAS_ZIP, plane="cor")
-    assert r["state"]["phantom"]["sha256"] == CAS_ZIP and r["state"]["view"]["plane"] == "cor"
+    r = await call(client, "open_phantom_preview", sha256=CAS_ZIP, property="T1")
+    assert r["state"]["phantom"]["sha256"] == CAS_ZIP and r["state"]["view"]["property"] == "T1"
 
 
 async def test_tissues_of_a_phantom(client, gateway):
@@ -368,7 +365,7 @@ async def test_maps_of_some_tissues(client, gateway):
 async def test_tissues_in_the_view(client):
     r = await call(client, "set_phantom_view", session_key=client.key, tissues=["WM", "GM", "GM"])
     assert r["view"]["tissues"] == ["GM", "WM"]
-    r = await call(client, "set_phantom_view", session_key=client.key, plane="sag")
+    r = await call(client, "set_phantom_view", session_key=client.key, property="T2")
     assert r["view"]["tissues"] == ["GM", "WM"]  # left out: stays
     r = await call(client, "set_phantom_view", session_key=client.key, tissues=[])
     assert r["view"]["tissues"] is None  # all

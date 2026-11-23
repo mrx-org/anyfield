@@ -131,9 +131,9 @@ describe("phantom kinds", () => {
       phantom: phantomPatch(cas),
     });
     expect(p).toEqual({ phantom: { sha256: cas.sha256, name: "mine.zip", collection: null } });
-    expect(composePatch<StatePatch>({ phantom: null }, { view: { plane: "cor" } })).toEqual({
+    expect(composePatch<StatePatch>({ phantom: null }, { view: { property: "T1" } })).toEqual({
       phantom: null,
-      view: { plane: "cor" },
+      view: { property: "T1" },
     });
   });
 

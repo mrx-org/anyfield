@@ -1,6 +1,6 @@
 <script lang="ts">
-  // The phantom preview: a large, square view of the chosen phantom, with the plane,
-  // the property and the tissues to pick (state field `view`). Loads the phantom's
+  // The phantom preview: a large, square view of the chosen phantom, with the property
+  // and the tissues to pick (state field `view`); the viewer picks its plane itself. Loads the phantom's
   // maps only while it is shown. Standalone (open_phantom_preview) or nested in the browser.
   // With a `grid` (FOV + matrix), the maps are resliced onto that grid (nested in the FOV planner).
   import ChevronDown from "@lucide/svelte/icons/chevron-down";
@@ -10,17 +10,11 @@
   import { MapsLoader } from "../../state/maps.svelte";
   import { DEFAULT_PHANTOM } from "../../state/patch";
   import type { Selection } from "../../state/selection";
-  import type { PhantomChoice, Plane, ScanGrid } from "../../types";
+  import type { PhantomChoice, ScanGrid } from "../../types";
   import PhantomViewer from "./PhantomViewer.svelte";
 
   let { sel, grid = null }: { sel: Selection; grid?: ScanGrid | null } = $props();
 
-  const PLANES: { key: Plane; label: string }[] = [
-    { key: "tra", label: "Transversal" },
-    { key: "cor", label: "Koronal" },
-    { key: "sag", label: "Sagittal" },
-    { key: "3d", label: "3D" },
-  ];
   // Several clicks on tissues in a row compute the maps once (each takes seconds)
   const LOAD_DELAY_MS = 400;
   // Every new grid is resliced by the gateway (seconds): only once the FOV rests
@@ -31,7 +25,6 @@
   const phantom = $derived(sel.state?.phantom ?? null);
   const name = $derived((phantom ?? DEFAULT_PHANTOM).name.replace(/\.(json|zip)$/, ""));
   const shown = $derived(maps.property(sel.state?.view.property ?? "density"));
-  const plane = $derived(sel.state?.view.plane ?? "tra");
   /** Tissues chosen; null: all. */
   const chosen = $derived(sel.state?.view.tissues?.length ? sel.state.view.tissues : null);
 
@@ -104,17 +97,9 @@
     {#if maps.loading}<span class="shrink-0 text-xs text-accent">wird vorbereitet …</span>{/if}
   </div>
 
-  <PhantomViewer url={maps.loading ? null : (shown?.url ?? null)} range={shown?.range ?? null} {plane} />
+  <PhantomViewer url={maps.loading ? null : (shown?.url ?? null)} range={shown?.range ?? null} />
 
-  <div class="grid grid-cols-3 gap-2">
-    <select
-      class="select text-xs"
-      aria-label="Ansicht"
-      value={plane}
-      onchange={(e) => sel.patch({ view: { plane: e.currentTarget.value as Plane } })}
-    >
-      {#each PLANES as p (p.key)}<option value={p.key}>{p.label}</option>{/each}
-    </select>
+  <div class="grid grid-cols-2 gap-2">
     <select
       class="select text-xs"
       aria-label="Eigenschaft"
