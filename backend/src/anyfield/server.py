@@ -270,10 +270,11 @@ def build(
 
     @mcp.tool(app=AppConfig(resource_uri=FOV_APP_URI), annotations={"readOnlyHint": True})
     async def open_fov_planner(session_key: OptionalSessionKey = None) -> dict[str, Any]:
-        """Show the interactive FOV planner (phantom with the FOV box and the scan
-        matrix). With a session it edits the session's FOV; without one the user
-        plans locally and sends the result back to the chat. In clients without
-        MCP Apps this returns the state and the web link."""
+        """Show the FOV planner: sliders for the FOV box (position, rotation, size)
+        and its matrix, with a preview of the phantom resliced onto that grid to fold
+        out. With a session it edits the session's FOV; without one the user plans
+        locally and sends the result back to the chat. In clients without MCP Apps
+        this returns the state and the web link."""
         return await opened(session_key)
 
     async def opened(session_key: str | None) -> dict[str, Any]:

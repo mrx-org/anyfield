@@ -32,7 +32,7 @@ export interface CasPhantomEntry extends CasPhantom {
 /** Plane of the phantom preview: transversal, coronal, sagittal or a 3D rendering. */
 export type Plane = "tra" | "cor" | "sag" | "3d";
 
-/** How the phantom preview shows the phantom (the FOV planner always shows PD). */
+/** How the phantom preview shows the phantom (property and tissues also in the FOV views). */
 export interface View {
   property: string;
   plane: Plane;

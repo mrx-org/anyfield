@@ -4,6 +4,7 @@
   import { AnyfieldClient } from "../lib/client/anyfield";
   import { LoginRedirect, McpHttpTransport } from "../lib/client/mcp-http";
   import FovPlanner from "../lib/components/fov/FovPlanner.svelte";
+  import FovViewer from "../lib/components/fov/FovViewer.svelte";
   import PhantomBrowser from "../lib/components/phantom/PhantomBrowser.svelte";
   import ToolFrame from "../lib/components/ToolFrame.svelte";
   import { SessionStore } from "../lib/state/session.svelte";
@@ -105,12 +106,15 @@
   </header>
 
   {#if sessionKey && store}
-    <!-- Two independent tools on the same session, side by side -->
+    <!-- Independent tools on the same session, side by side -->
     <main class="flex min-h-0 flex-1 flex-col lg:flex-row">
       <section class="max-h-[45vh] shrink-0 p-1 lg:max-h-none lg:w-80" aria-label="Phantom">
         <ToolFrame name="phantom_browser" class="h-full"><PhantomBrowser sel={store} /></ToolFrame>
       </section>
-      <section class="min-h-0 flex-1 p-1" aria-label="FOV-Planung">
+      <section class="min-h-96 flex-1 p-1" aria-label="FOV im Phantom">
+        <ToolFrame name="fov_viewer" class="h-full"><FovViewer sel={store} /></ToolFrame>
+      </section>
+      <section class="shrink-0 p-1 lg:w-80" aria-label="FOV-Planung">
         <ToolFrame name="fov_planner" class="h-full"><FovPlanner sel={store} /></ToolFrame>
       </section>
       {#if showState}

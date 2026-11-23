@@ -210,8 +210,8 @@ def register(
         """How the phantom preview shows the session's phantom: the property (PD, T1,
         T2, T2', ADC, dB0, B1+ ...; which ones a phantom has: get_phantom_maps), the
         plane and the tissues combined. Fields left out stay as they are. Choosing
-        another phantom resets the tissues to all. The FOV planner always shows PD of
-        all tissues."""
+        another phantom resets the tissues to all. Property and tissues also apply to
+        the FOV planner's views."""
         changes = {k: v for k, v in {"property": property, "plane": plane}.items() if v is not None}
         if tissues is not None:
             changes["tissues"] = tissues

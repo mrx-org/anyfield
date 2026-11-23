@@ -1,82 +1,48 @@
 <script lang="ts">
-  // The FOV planning tool: viewer + controls (FOV box and scan matrix), and a preview
-  // of the phantom resliced onto the planned scan grid. Bound to a Selection, so it
-  // works on a session, locally in an MCP App, and on the website.
-  import { MapsLoader } from "../../state/maps.svelte";
+  // The FOV planner: sliders for the FOV box (position, rotation, size) and its matrix,
+  // i.e. an affine with a grid. Below, the phantom preview resliced onto that grid folds
+  // out; folded (the default, per view) it is not rendered and the gateway reslices nothing.
+  // The box is drawn and dragged in the visual FOV planner (FovViewer).
+  // Bound to a Selection, so it works on a session, locally in an MCP App, and on the website.
+  import ChevronRight from "@lucide/svelte/icons/chevron-right";
+  import { Collapsible } from "@skeletonlabs/skeleton-svelte";
   import type { Selection } from "../../state/selection";
-  import type { ScanGrid } from "../../types";
-  import PhantomViewer from "../phantom/PhantomViewer.svelte";
+  import ToolFrame from "../ToolFrame.svelte";
+  import PhantomPreview from "../phantom/PhantomPreview.svelte";
   import FovPanel from "./FovPanel.svelte";
 
-  let { sel, compact = false }: { sel: Selection; compact?: boolean } = $props();
-  // svelte-ignore state_referenced_locally
-  const maps = new MapsLoader(sel.client);
-  // svelte-ignore state_referenced_locally
-  const resliced = new MapsLoader(sel.client);
-  // Always PD for now: the preview's view (state field `view`) is not the planner's
-  const property = "density";
-  const shown = $derived(maps.property(property));
-  const reslicedShown = $derived(resliced.property(property));
+  let { sel }: { sel: Selection } = $props();
 
-  // Every new grid is computed by the gateway (seconds): only once the FOV rests.
-  const RESLICE_DELAY_MS = 800;
-  let grid = $state<ScanGrid | null>(null);
-
-  $effect(() => {
-    if (sel.state) maps.load(sel.state.phantom);
-  });
-
-  $effect(() => {
-    if (!sel.state) return;
-    const next = $state.snapshot({ fov: sel.state.fov, matrix: sel.state.matrix });
-    const t = setTimeout(() => (grid = next), RESLICE_DELAY_MS);
-    return () => clearTimeout(t);
-  });
-
-  $effect(() => {
-    if (sel.state && grid) resliced.load(sel.state.phantom, grid);
-  });
+  /** Preview folded out: per view (device), not in the state. */
+  let previewOpen = $state(false);
 </script>
 
-<div class="flex h-full w-full {compact ? 'flex-col' : 'flex-col md:flex-row'} bg-bg text-text">
-  <!-- Compact (MCP App): a fixed-height viewer and the controls below it, as tall as they are -->
-  <div class={compact ? "h-72 shrink-0" : "min-h-0 flex-1 min-h-96"}>
-    {#if sel.state}
-      <PhantomViewer
-        url={maps.loading ? null : (shown?.url ?? null)}
-        range={shown?.range ?? null}
-        fov={sel.state.fov}
-        layout="grid"
-        class="h-full w-full min-h-64"
-      />
-    {:else if sel.error}
-      <p class="p-4 text-error-500">{sel.error}</p>
-    {:else}
-      <p class="p-4 text-muted">Lade Session …</p>
-    {/if}
-  </div>
+<div class="flex h-full flex-col gap-3 overflow-y-auto p-3 text-sm text-text">
   {#if sel.state}
-    <aside class="{compact ? 'border-t' : 'border-t overflow-y-auto md:w-72 md:border-l md:border-t-0'} flex flex-col gap-4 border-border bg-panel p-3">
-      <FovPanel
-        fov={sel.state.fov}
-        matrix={sel.state.matrix}
-        onfov={(c) => sel.patch({ fov: c })}
-        onmatrix={(m) => sel.patch({ matrix: m })}
-      />
-      <section class="flex flex-col gap-1.5">
-        <h3 class="flex items-baseline gap-2 text-xs font-semibold uppercase tracking-wide text-muted">
-          Im Scan-Raster
-          {#if resliced.loading}<span class="font-normal normal-case tracking-normal text-accent">berechne …</span>{/if}
-        </h3>
-        <PhantomViewer url={reslicedShown?.url ?? null} range={reslicedShown?.range ?? null} class="aspect-square w-full max-w-72 self-center" />
-        {#if resliced.maps && resliced.maps.coarsening > 1}
-          <span class="text-xs text-muted">Vorschau {resliced.maps.coarsening}× vergröbert</span>
+    <FovPanel
+      fov={sel.state.fov}
+      matrix={sel.state.matrix}
+      onfov={(c) => sel.patch({ fov: c })}
+      onmatrix={(m) => sel.patch({ matrix: m })}
+    />
+    <Collapsible open={previewOpen} onOpenChange={(d) => (previewOpen = d.open)}>
+      <Collapsible.Trigger class="btn btn-sm preset-outlined-surface-300-700 w-full justify-start text-xs">
+        <ChevronRight class="size-4 transition-transform {previewOpen ? 'rotate-90' : ''}" aria-hidden="true" />
+        Vorschau im FOV
+      </Collapsible.Trigger>
+      <Collapsible.Content class="mt-2">
+        <!-- Only rendered while open: folded, nothing is resliced -->
+        {#if previewOpen}
+          <ToolFrame name="phantom_preview">
+            <PhantomPreview {sel} grid={{ fov: sel.state.fov, matrix: sel.state.matrix }} />
+          </ToolFrame>
         {/if}
-        {#if resliced.error}<p class="text-xs text-error-500">{resliced.error}</p>{/if}
-      </section>
-      {#if sel.error || maps.error}
-        <p class="text-xs text-error-500">{sel.error ?? maps.error}</p>
-      {/if}
-    </aside>
+      </Collapsible.Content>
+    </Collapsible>
+  {:else if sel.error}
+    <p class="text-error-500">{sel.error}</p>
+  {:else}
+    <p class="text-muted">Lade Session …</p>
   {/if}
+  {#if sel.state && sel.error}<p class="text-xs text-error-500">{sel.error}</p>{/if}
 </div>

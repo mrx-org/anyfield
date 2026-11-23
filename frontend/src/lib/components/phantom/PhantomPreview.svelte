@@ -2,6 +2,7 @@
   // The phantom preview: a large, square view of the chosen phantom, with the plane,
   // the property and the tissues to pick (state field `view`). Loads the phantom's
   // maps only while it is shown. Standalone (open_phantom_preview) or nested in the browser.
+  // With a `grid` (FOV + matrix), the maps are resliced onto that grid (nested in the FOV planner).
   import ChevronDown from "@lucide/svelte/icons/chevron-down";
   import Check from "@lucide/svelte/icons/check";
   import { Menu, Portal } from "@skeletonlabs/skeleton-svelte";
@@ -9,10 +10,10 @@
   import { MapsLoader } from "../../state/maps.svelte";
   import { DEFAULT_PHANTOM } from "../../state/patch";
   import type { Selection } from "../../state/selection";
-  import type { PhantomChoice, Plane } from "../../types";
+  import type { PhantomChoice, Plane, ScanGrid } from "../../types";
   import PhantomViewer from "./PhantomViewer.svelte";
 
-  let { sel }: { sel: Selection } = $props();
+  let { sel, grid = null }: { sel: Selection; grid?: ScanGrid | null } = $props();
 
   const PLANES: { key: Plane; label: string }[] = [
     { key: "tra", label: "Transversal" },
@@ -22,6 +23,8 @@
   ];
   // Several clicks on tissues in a row compute the maps once (each takes seconds)
   const LOAD_DELAY_MS = 400;
+  // Every new grid is resliced by the gateway (seconds): only once the FOV rests
+  const RESLICE_DELAY_MS = 800;
 
   // svelte-ignore state_referenced_locally
   const maps = new MapsLoader(sel.client);
@@ -32,24 +35,26 @@
   /** Tissues chosen; null: all. */
   const chosen = $derived(sel.state?.view.tissues?.length ? sel.state.view.tissues : null);
 
-  // The maps to load: phantom and tissues together, so a new phantom never goes out
+  // The maps to load: phantom, tissues and grid together, so a new phantom never goes out
   // with the old one's tissues. The first request goes at once, later ones settle first.
-  let request = $state<{ phantom: PhantomChoice | null; tissues: string[] | null } | null>(null);
+  let request = $state<{ phantom: PhantomChoice | null; tissues: string[] | null; grid: ScanGrid | null } | null>(
+    null,
+  );
   // Not reactive: reading `request` here would re-run this effect on every request it sets
   let requested = false;
   $effect(() => {
     if (!sel.state) return;
-    const next = $state.snapshot({ phantom, tissues: chosen });
+    const next = $state.snapshot({ phantom, tissues: chosen, grid });
     if (!requested) {
       requested = true;
       request = next;
       return;
     }
-    const t = setTimeout(() => (request = next), LOAD_DELAY_MS);
+    const t = setTimeout(() => (request = next), next.grid ? RESLICE_DELAY_MS : LOAD_DELAY_MS);
     return () => clearTimeout(t);
   });
   $effect(() => {
-    if (request) maps.load(request.phantom, undefined, request.tissues);
+    if (request) maps.load(request.phantom, request.grid ?? undefined, request.tissues);
   });
 
   // The phantom's tissues, for the third dropdown
@@ -164,6 +169,9 @@
 
   {#if shown?.range}
     <span class="text-xs text-muted">{shown.label}: {fmt(shown.range[0])} … {fmt(shown.range[1])} {shown.unit}</span>
+  {/if}
+  {#if grid && maps.maps && maps.maps.coarsening > 1}
+    <span class="text-xs text-muted">Im FOV-Raster, {maps.maps.coarsening}× vergröbert</span>
   {/if}
   {#if maps.error}<p class="text-xs text-error-500">{maps.error}</p>{/if}
   {#if tissueError}<p class="text-xs text-error-500">Gewebe: {tissueError}</p>{/if}

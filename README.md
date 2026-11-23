@@ -56,14 +56,14 @@ Wer eine Session mit einem CAS-Phantom geteilt bekommt, sieht es, auch als `visi
 sie werden nicht gespeichert. `view` ist die Ansicht der Phantom-Vorschau (Eigenschaft;
 Ebene `tra`, `cor`, `sag` oder `3d`; Gewebe, die die Karten kombinieren, Namen aus
 `list_phantom_tissues`, `null` für alle). Ein anderes Phantom setzt die Gewebe auf alle
-zurück, außer sie werden mit ihm zusammen gesetzt. Der FOV-Planer zeigt vorerst immer PD
-aller Gewebe.
+zurück, außer sie werden mit ihm zusammen gesetzt. Eigenschaft und Gewebe gelten auch
+für die Ansichten des FOV-Planers; die Ebene im visuellen FOV-Planer ist pro Gerät.
 
 `open_*` zeigen in Clients mit MCP Apps das jeweilige Tool im Chat. Mit `session_key`
 arbeitet es auf der Session; ohne wählt der Nutzer lokal, jede Änderung geht als
 Kontext an das Modell (`updateModelContext`), „In den Chat“ schickt die Auswahl als
 Nachricht. `select_phantom` geht auch ohne Session (prüft nur die Wahl). Die Website
-zeigt unter `/s/{key}` beide Tools nebeneinander.
+zeigt unter `/s/{key}` Phantom-Browser, visuellen FOV-Planer und FOV-Planer nebeneinander.
 
 Der Phantom-Browser hat zwei Reiter: **Katalog** (bifti-Registry) und **CAS**, die
 `.zip`-Dateien des Aufrufers aus `list_files` des Gateways (`list_cas_phantoms`), dazu das
@@ -90,7 +90,14 @@ B1±; über die Gewebe kombiniert) sind NIfTIs unter `<gateway>/files/<hash>`, d
 und MCP Apps ohne Login laden. Mit `fov` und `matrix` liefert `get_phantom_maps` die
 Karten auf dem geplanten Scan-Raster (Reslicing); das FOV wird dafür aus dem
 Scanner-Rahmen der Karten in den RAS+-Rahmen des Phantoms zurückgedreht. Der FOV-Planer
-zeigt so eine Vorschau „Im Scan-Raster“.
+zeigt so die Vorschau im FOV.
+
+FOV-Planung sind zwei Tools: der **FOV-Planer** (`fov_planner`) mit Slidern für Position,
+Rotation, Größe und Matrix (eine Affine mit Raster) und darunter, zum Aufklappen, der
+Phantom-Vorschau auf diesem Raster; und der **visuelle FOV-Planer** (`fov_viewer`), das
+Phantom mit der FOV-Box, breit im 2×2-Raster, schmal eine Ebene mit Umschalter. Beide
+nutzen denselben Viewer-Baustein wie die Phantom-Vorschau (`PhantomViewer`). Der visuelle
+Planer läuft bisher nur auf der Website, noch ohne Maus-Gesten.
 
 ## Aufbau
 
@@ -106,8 +113,8 @@ backend/   Python (uv), FastMCP, Modal
 frontend/  Svelte 5, TypeScript, Vite, NiiVue, Skeleton (UI), Lucide (Icons)
   src/lib/client/            Transport: MCP-HTTP (Web), MCP App, Mock
   src/lib/state/             Selection: SessionStore (Polling, optimistisch) oder LocalSelection
-  src/lib/components/fov/    FOV-Planer (eigenständige Komponente)
-  src/lib/components/phantom/  Phantom-Browser und Phantom-Vorschau (eigenständige Komponenten)
+  src/lib/components/fov/    FOV-Planer (Slider) und visueller FOV-Planer
+  src/lib/components/phantom/  Phantom-Browser, Phantom-Vorschau, Viewer-Baustein PhantomViewer
   src/web/                   Web-App
   src/mcp-app/               MCP Apps (je eine HTML-Datei, gemeinsame Hülle McpApp.svelte)
   dev/app-host.html          Test-Host für die MCP App

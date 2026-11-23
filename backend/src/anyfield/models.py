@@ -58,7 +58,7 @@ Plane = Literal["tra", "cor", "sag", "3d"]
 
 
 class View(BaseModel):
-    """How the phantom preview shows the phantom (the FOV planner always shows PD)."""
+    """How the phantom preview shows the phantom (property and tissues also in the FOV views)."""
 
     model_config = ConfigDict(extra="forbid")
 
