@@ -1,29 +1,38 @@
 <script lang="ts">
-  // NiiVue view of one volume (e.g. a phantom map), the one viewer of all tools.
+  // NiiVue view of a phantom's maps, the one viewer of all tools.
   // Two independent options: the layout (one plane, the 2×2 grid of three planes and
   // 3D, or chosen by the width) and the FOV box on top (none when `fov` is null).
-  // While one plane is shown, the viewer picks it itself (a switch above it): the
-  // plane is per viewer, not in the state.
+  // Above the view: the property shown (PD, T1, ...; state field `view.property`, the
+  // same in all viewers, so it comes in and goes out through `onproperty`) and, while
+  // one plane is shown, the plane (per viewer, not in the state).
   import { MULTIPLANAR_TYPE, NVMesh, Niivue, SHOW_RENDER, SLICE_TYPE } from "@niivue/niivue";
   import { SegmentedControl } from "@skeletonlabs/skeleton-svelte";
   import { onMount } from "svelte";
   import { fovMesh } from "../../geometry/fov";
   import { niftiName } from "../../state/maps.svelte";
-  import type { Fov, Plane } from "../../types";
+  import type { Fov, PhantomMaps, Plane } from "../../types";
 
   export type Layout = "single" | "grid" | "auto";
 
   let {
-    url,
-    range = null,
+    maps,
+    loading = false,
+    property,
+    onproperty,
     layout = "single",
     plane = $bindable("tra"),
     fov = null,
     class: cls = "w-full self-center",
     viewClass = "aspect-square w-full",
   }: {
-    url: string | null;
-    range?: [number, number] | null;
+    /** The maps to show; null: none (yet). */
+    maps: PhantomMaps | null;
+    /** New maps are on their way: the old ones stay until they are there. */
+    loading?: boolean;
+    /** Key of the property shown; a phantom without it shows its first map (PD). */
+    property: string;
+    /** The user picked another property. */
+    onproperty: (key: string) => void;
     /** `auto`: the grid from `GRID_MIN_WIDTH_PX` on, below it one plane. */
     layout?: Layout;
     /** The plane while one plane is shown; the switch above the view changes it. */
@@ -52,6 +61,8 @@
   };
   const FOV_RGBA = new Uint8Array([245, 165, 36, 255]);
 
+  const fmt = (v: number) => (Math.abs(v) >= 100 ? v.toFixed(0) : Math.abs(v) >= 1 ? v.toFixed(2) : v.toPrecision(2));
+
   /** The body's background colour as RGBA in 0..1, for NiiVue. A 2D canvas turns
    * any CSS colour (rgb, oklch, ...) into RGB. */
   function pageBackground(): [number, number, number, number] {
@@ -71,6 +82,9 @@
   let loaded: string | null = null;
   let loadError = $state<string | null>(null);
   let width = $state(0);
+  const shown = $derived(maps?.properties.find((p) => p.key === property) ?? maps?.properties[0] ?? null);
+  const url = $derived(loading ? null : (shown?.url ?? null));
+  const range = $derived(shown?.range ?? null);
   const single = $derived(layout === "single" || (layout === "auto" && width < GRID_MIN_WIDTH_PX));
 
   onMount(() => {
@@ -110,7 +124,8 @@
   $effect(() => {
     if (!ready || !nv || !url || url === loaded) return;
     loaded = url;
-    const opts = range ? { cal_min: range[0], cal_max: range[1] } : {};
+    const r = $state.snapshot(range);
+    const opts = r ? { cal_min: r[0], cal_max: r[1] } : {};
     nv.loadVolumes([{ url, name: niftiName(url), ...opts }])
       .then(() => {
         loadError = null;
@@ -141,23 +156,37 @@
 </script>
 
 <div bind:this={box} class="flex flex-col gap-1 {cls}">
-  {#if single}
-    <SegmentedControl value={plane} onValueChange={(d) => d.value && (plane = d.value as Plane)}>
-      <SegmentedControl.Control class="w-full">
-        <SegmentedControl.Indicator />
-        {#each PLANES as p (p.key)}
-          <SegmentedControl.Item value={p.key} class="flex-1 text-xs">
-            <SegmentedControl.ItemText>{p.label}</SegmentedControl.ItemText>
-            <SegmentedControl.ItemHiddenInput />
-          </SegmentedControl.Item>
-        {/each}
-      </SegmentedControl.Control>
-    </SegmentedControl>
-  {/if}
+  <div class="flex items-center gap-1">
+    {#if single}
+      <SegmentedControl class="min-w-0 flex-1" value={plane} onValueChange={(d) => d.value && (plane = d.value as Plane)}>
+        <SegmentedControl.Control class="w-full">
+          <SegmentedControl.Indicator />
+          {#each PLANES as p (p.key)}
+            <SegmentedControl.Item value={p.key} class="flex-1 text-xs">
+              <SegmentedControl.ItemText>{p.label}</SegmentedControl.ItemText>
+              <SegmentedControl.ItemHiddenInput />
+            </SegmentedControl.Item>
+          {/each}
+        </SegmentedControl.Control>
+      </SegmentedControl>
+    {/if}
+    <select
+      class="select w-auto text-xs {single ? '' : 'ml-auto'}"
+      aria-label="Eigenschaft"
+      value={shown?.key ?? ""}
+      disabled={!maps}
+      onchange={(e) => onproperty(e.currentTarget.value)}
+    >
+      {#each maps?.properties ?? [] as p (p.key)}<option value={p.key}>{p.label}</option>{/each}
+    </select>
+  </div>
   <div class="relative {viewClass}">
     <canvas bind:this={canvas} class="absolute inset-0 h-full w-full"></canvas>
     {#if loadError}
       <p class="absolute inset-x-0 top-2 text-center text-xs text-error-500">Viewer: {loadError}</p>
     {/if}
   </div>
+  {#if shown?.range}
+    <span class="text-xs text-muted">{shown.label}: {fmt(shown.range[0])} … {fmt(shown.range[1])} {shown.unit}</span>
+  {/if}
 </div>

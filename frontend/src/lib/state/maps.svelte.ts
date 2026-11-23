@@ -1,5 +1,5 @@
 import type { AnyfieldClient } from "../client/anyfield";
-import type { PhantomChoice, PhantomMaps, PhantomProperty, ScanGrid } from "../types";
+import type { PhantomChoice, PhantomMaps, ScanGrid } from "../types";
 
 /**
  * The display maps of the chosen phantom (loaded on demand from the gateway, not
@@ -33,12 +33,6 @@ export class MapsLoader {
         this.error = e instanceof Error ? e.message : String(e);
       },
     );
-  }
-
-  /** The map of `key`, or the first one (PD) if the phantom has no such property. */
-  property(key: string): PhantomProperty | null {
-    const props = this.maps?.properties ?? [];
-    return props.find((p) => p.key === key) ?? props[0] ?? null;
   }
 }
 

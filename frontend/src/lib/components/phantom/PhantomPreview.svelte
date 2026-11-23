@@ -21,7 +21,6 @@
   const maps = new MapsLoader(sel.client);
   const phantom = $derived(sel.state?.phantom ?? null);
   const name = $derived((phantom ?? DEFAULT_PHANTOM).name.replace(/\.(json|zip)$/, ""));
-  const shown = $derived(maps.property(sel.state?.view.property ?? "density"));
   /** Tissues chosen; null: all. */
   const chosen = $derived(sel.state?.tissues?.length ? sel.state.tissues : null);
 
@@ -47,7 +46,6 @@
     if (request) maps.load(request.phantom, request.grid ?? undefined, request.tissues);
   });
 
-  const fmt = (v: number) => (Math.abs(v) >= 100 ? v.toFixed(0) : Math.abs(v) >= 1 ? v.toFixed(2) : v.toPrecision(2));
 </script>
 
 <div class="flex flex-col gap-2 p-2 text-sm text-text">
@@ -58,21 +56,12 @@
     {#if maps.loading}<span class="shrink-0 text-xs text-accent">wird vorbereitet …</span>{/if}
   </div>
 
-  <PhantomViewer url={maps.loading ? null : (shown?.url ?? null)} range={shown?.range ?? null} />
-
-  <select
-    class="select text-xs"
-    aria-label="Eigenschaft"
-    value={shown?.key ?? ""}
-    disabled={!maps.maps}
-    onchange={(e) => sel.patch({ view: { property: e.currentTarget.value } })}
-  >
-    {#each maps.maps?.properties ?? [] as p (p.key)}<option value={p.key}>{p.label}</option>{/each}
-  </select>
-
-  {#if shown?.range}
-    <span class="text-xs text-muted">{shown.label}: {fmt(shown.range[0])} … {fmt(shown.range[1])} {shown.unit}</span>
-  {/if}
+  <PhantomViewer
+    maps={maps.maps}
+    loading={maps.loading}
+    property={sel.state?.view.property ?? "density"}
+    onproperty={(property) => sel.patch({ view: { property } })}
+  />
   {#if grid && maps.maps && maps.maps.coarsening > 1}
     <span class="text-xs text-muted">Im FOV-Raster, {maps.maps.coarsening}× vergröbert</span>
   {/if}
