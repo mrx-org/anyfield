@@ -23,12 +23,6 @@ export interface CasPhantom {
 
 export type PhantomChoice = CatalogPhantom | CasPhantom;
 
-/** A phantom in the caller's CAS files (`list_cas_phantoms`). */
-export interface CasPhantomEntry extends CasPhantom {
-  size: number | null;
-  uploaded_at: string | null;
-}
-
 /** A file of the user in the gateway's storage (`list_user_files`). */
 export interface UserFile {
   sha256: string;

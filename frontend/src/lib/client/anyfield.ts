@@ -1,5 +1,5 @@
 import { phantomArgs, phantomKey } from "../phantom";
-import type { CasPhantomEntry, FovChange, PhantomChoice, PhantomCollection, PhantomMaps, PhantomTree, ScanGrid, Session, SessionSummary, StatePatch, UserFile, Vec3 } from "../types";
+import type { FovChange, PhantomChoice, PhantomCollection, PhantomMaps, PhantomTree, ScanGrid, Session, SessionSummary, StatePatch, UserFile, Vec3 } from "../types";
 import type { Transport } from "./transport";
 
 export type SessionPoll = Session | { rev: number; unchanged: true };
@@ -62,7 +62,6 @@ export class AnyfieldClient {
   listPhantoms = (collection: string, path?: string[]) =>
     this.call<PhantomTree>("list_phantoms", { collection, ...(path ? { path } : {}) });
   /** The caller's bifti .zip files in the gateway's CAS. */
-  listCasPhantoms = () => this.call<CasPhantomEntry[]>("list_cas_phantoms");
 
   /** The tissue names of a phantom (null: the default), cached per phantom. */
   listTissues(phantom: PhantomChoice | null): Promise<string[]> {

@@ -52,7 +52,7 @@ Sha256Arg = Annotated[
     str | None,
     Field(
         description="CAS phantom: hash of a bifti .zip in the CAS "
-        "(from list_cas_phantoms, an upload or bifti_get_phantom)"
+        "(a .zip from list_user_files, an upload or bifti_get_phantom)"
     ),
 ]
 TissuesArg = Annotated[
@@ -150,14 +150,6 @@ def register(
         """Phantoms of a collection: file names (e.g. 'subj04-3T-2mm.json') and nested
         groups ({group, default, phantoms}). Narrow large collections with `path`."""
         return await guard(catalog.phantoms(collection, path))
-
-    @mcp.tool(annotations={"readOnlyHint": True})
-    async def list_cas_phantoms() -> list[dict[str, Any]]:
-        """The caller's phantoms in the gateway's CAS (uploads and bifti_get_phantom
-        results): the bifti .zip files among their files, newest first, each with
-        `sha256`, `name`, `size` and `uploaded_at`. Choose one with select_phantom
-        (`sha256`); a zip that is no phantom fails when its maps are loaded."""
-        return await guard(cas.phantoms())
 
     @mcp.tool
     async def select_phantom(

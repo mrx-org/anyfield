@@ -301,9 +301,8 @@ async def test_phantom_preview_with_session_shows_the_session(client):
         await call(client, "open_phantom_preview", session_key=client.key, phantom="shapes.json")
 
 
-async def test_cas_phantoms_are_the_zips_of_the_callers_files(client):
-    r = await client.call_tool("list_cas_phantoms", {})
-    phantoms = r.structured_content["result"]
+async def test_cas_phantoms_are_the_zips_of_the_callers_files(gateway):
+    phantoms = await CasFiles(gateway).phantoms()
     # Only zips, each hash once, newest first
     assert [(p["sha256"], p["name"]) for p in phantoms] == [(CAS_ZIP, "mine.zip"), (OLD_ZIP, "old.zip")]
 

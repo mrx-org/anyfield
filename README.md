@@ -34,7 +34,7 @@ Web-App: `/` (eigene Sessions), `/s/{key}` (eine Session, mit Ansicht des Zustan
 | Zustand | `get_state`, `patch_state` (JSON Merge Patch), `open_session` (JSON-Editor) |
 | Dateien | `list_user_files`, `create_file_upload_url`, `open_file_upload`, `open_file_list`, `open_file_manager` |
 | FOV-Planer | `set_fov`, `move_fov`, `rotate_fov`, `open_fov_planner`, `open_fov_viewer` |
-| Phantom (BIfTI) | `list_phantom_collections`, `list_phantoms`, `list_cas_phantoms`, `list_phantom_tissues`, `select_phantom`, `set_phantom_view`, `get_phantom_maps`, `open_phantom_browser`, `open_phantom_preview` |
+| Phantom (BIfTI) | `list_phantom_collections`, `list_phantoms`, `list_phantom_tissues`, `select_phantom`, `set_phantom_view`, `get_phantom_maps`, `open_phantom_browser`, `open_phantom_preview` |
 
 Der Session-Zustand ist ein kleines JSON nur mit der Auswahl, keine Daten:
 
@@ -74,7 +74,7 @@ zeigt unter `/s/{key}` Phantom-Browser, visuellen FOV-Planer und FOV-Planer nebe
 Der Phantom-Browser hat zwei Reiter: **Katalog** (bifti-Registry) und **CAS**, die
 Dateiliste (`file_list`, siehe Datei-Tools) fest im Modus BIfTI, ohne Download; ein Klick
 wählt das Phantom. Ein geteiltes CAS-Phantom, das nicht in den eigenen Dateien liegt,
-steht dort nicht (MRX-90). Für die KI gibt es weiter `list_cas_phantoms`. Ob ein Zip ein
+steht dort nicht (MRX-90). Die KI findet BIfTIs mit `list_user_files`. Ob ein Zip ein
 Phantom ist, zeigt sich erst beim Laden der Karten. Wer was listen darf (z. B. kein
 `list_files` für `visitor`), regelt das Gateway.
 
