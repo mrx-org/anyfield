@@ -311,7 +311,7 @@ def build(
 
     # --- Phantoms (BIfTI): a separate tool ----------------------------------
 
-    file_tools.register(mcp, files, base_url=base_url, static_dir=static_dir)
+    file_tools.register(mcp, files, opened=opened, base_url=base_url, static_dir=static_dir)
 
     phantom_tools.register(
         mcp,

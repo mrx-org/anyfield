@@ -72,8 +72,9 @@ Nachricht. `select_phantom` geht auch ohne Session (prüft nur die Wahl). Die We
 zeigt unter `/s/{key}` Phantom-Browser, visuellen FOV-Planer und FOV-Planer nebeneinander.
 
 Der Phantom-Browser hat zwei Reiter: **Katalog** (bifti-Registry) und **CAS**, die
-`.zip`-Dateien des Aufrufers aus `list_files` des Gateways (`list_cas_phantoms`), dazu das
-gewählte CAS-Phantom, auch wenn es nicht in den eigenen Dateien liegt. Ob ein Zip ein
+Dateiliste (`file_list`, siehe Datei-Tools) fest im Modus BIfTI, ohne Download; ein Klick
+wählt das Phantom. Ein geteiltes CAS-Phantom, das nicht in den eigenen Dateien liegt,
+steht dort nicht (MRX-90). Für die KI gibt es weiter `list_cas_phantoms`. Ob ein Zip ein
 Phantom ist, zeigt sich erst beim Laden der Karten. Wer was listen darf (z. B. kein
 `list_files` für `visitor`), regelt das Gateway.
 
@@ -137,10 +138,14 @@ anyfield hält keine Dateien, die Bytes gehen direkt zwischen Browser und Gatewa
 - `file_list` (`open_file_list`): Tabelle aus `list_files` des Gateways, nach jeder
   Spalte sortierbar, mit Suche, schmal horizontal scrollbar. Erste Spalte lädt herunter
   (`<gateway>/files/<hash>`, ohne Login: der Hash ist die Berechtigung; im Chat über
-  `openLink`, das iframe darf nicht selbst herunterladen). Ein Klick auf den Namen
-  schickt `"name": <hash>` in den Chat, auf der Website kopiert er die Zeile. Ein
-  Dropdown neben der Suche zeigt alle Dateien oder nur BIfTIs (`.zip`). Das Gateway
-  löscht eine Datei einen Tag nach ihrer letzten Nutzung.
+  `openLink`, das iframe darf nicht selbst herunterladen). Ein Dropdown neben der Suche
+  zeigt alle Dateien oder nur BIfTIs (`.zip`). Optionen des Tools: `mode` (`all` oder
+  `bifti`) legt das Dropdown fest und graut es aus, bei `bifti` ohne Spalte „Typ“;
+  `download=false` blendet die Downloads aus. Ein Klick auf den Namen: ohne Session
+  `"name": <hash>` in den Chat (auf der Website kopiert), mit Session je nach Modus, bei
+  `bifti` wird die Datei Phantom der Session (hervorgehoben), bei `all` nichts. Weitere
+  Modi (z. B. Sequenzen) setzen später ihr Feld. Das Gateway löscht eine Datei einen Tag
+  nach ihrer letzten Nutzung.
 - `file_manager` (`open_file_manager`): beides untereinander; ein Upload lädt die Liste
   neu. Auf der Website hinter „Dateien“ in der Kopfzeile.
 

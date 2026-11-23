@@ -13,7 +13,7 @@ from __future__ import annotations
 import time
 from collections.abc import Awaitable, Callable
 from pathlib import Path
-from typing import Annotated, Any
+from typing import Annotated, Any, Literal
 
 from fastmcp import FastMCP
 from fastmcp.apps.config import AppConfig
@@ -34,6 +34,11 @@ MANAGER_APP_URI = "ui://anyfield/file-manager.html"
 # upload) asks the gateway again.
 LIST_TTL = 300  # seconds
 MAX_CACHED = 1000
+
+
+def is_bifti(f: dict[str, Any]) -> bool:
+    """A bifti phantom as far as a listing can tell: a .zip (as `CasFiles`)."""
+    return str(f.get("name", "")).lower().endswith(".zip") or "zip" in str(f.get("type") or "")
 
 
 class UserFiles:
@@ -92,7 +97,25 @@ class UserFiles:
         return f"{self.gateway_url}/files/{sha256}"
 
 
-def register(mcp: FastMCP, files: UserFiles, *, base_url: str, static_dir: Path | None) -> None:
+FileMode = Literal["all", "bifti"]
+# Own copy, as in phantom_tools: annotations resolve in this module
+OptionalSessionKey = Annotated[
+    str | None,
+    Field(
+        description="Optional session key: clicking a bifti then makes it the session's phantom. "
+        "Without one a click sends the file's name and sha256 to the chat"
+    ),
+]
+
+
+def register(
+    mcp: FastMCP,
+    files: UserFiles,
+    *,
+    opened: Callable[[str | None], Awaitable[dict[str, Any]]],
+    base_url: str,
+    static_dir: Path | None,
+) -> None:
     from .server import app_html
 
     @mcp.tool(annotations={"readOnlyHint": True})
@@ -125,11 +148,27 @@ def register(mcp: FastMCP, files: UserFiles, *, base_url: str, static_dir: Path 
         return {"message": "Drop files into the box to upload them."}
 
     @mcp.tool(app=AppConfig(resource_uri=LIST_APP_URI), annotations={"readOnlyHint": True})
-    async def open_file_list() -> dict[str, Any]:
-        """Show the user's files as a sortable table (name, type, size, uploaded)
-        with download buttons; clicking a name sends its name and sha256 to
-        the chat. Returns the files too (see list_user_files)."""
-        return {"files": await files.list()}
+    async def open_file_list(
+        session_key: OptionalSessionKey = None,
+        mode: Annotated[
+            FileMode | None,
+            Field(
+                description="Fix what the list shows: 'all' files or only 'bifti' phantoms (.zip; "
+                "the type column is left out). Omit to let the user switch."
+            ),
+        ] = None,
+        download: Annotated[bool, Field(description="Show the download buttons")] = True,
+    ) -> dict[str, Any]:
+        """Show the user's files as a sortable, searchable table (name, type, size,
+        uploaded) with download buttons. Clicking a name: without a session it sends
+        `"name": <sha256>` to the chat; with a session it depends on the mode - in
+        'bifti' mode it makes the file the session's phantom, in 'all' mode nothing.
+        E.g. mode='bifti' to let the user pick one of their phantoms. Returns the files
+        (and with a session the session) too."""
+        listed = await files.list()
+        if mode == "bifti":
+            listed = [f for f in listed if is_bifti(f)]
+        return {**(await opened(session_key) if session_key else {}), "files": listed}
 
     @mcp.tool(app=AppConfig(resource_uri=MANAGER_APP_URI), annotations={"readOnlyHint": True})
     async def open_file_manager() -> dict[str, Any]:

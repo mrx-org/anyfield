@@ -1,7 +1,8 @@
 <script lang="ts">
   // The phantom browser: browse the BIfTI catalog or the phantoms in the gateway's
-  // CAS and pick one. The CAS tab lists the caller's .zip files plus the chosen CAS
-  // phantom, so whoever opens a shared session sees it even if it is not theirs.
+  // CAS and pick one. The CAS tab is the file list (file_list) fixed to the caller's
+  // biftis (.zip); a phantom someone shared that is not among them does not show
+  // there (see MRX-90).
   // Bound to a Selection: a session or local (MCP App without session, result back
   // to the chat). The phantom preview folds out at the top; folded (the
   // default) it is not rendered, so changing the phantom loads no maps here.
@@ -16,13 +17,13 @@
   import { isCas, phantomPatch, phantomSource } from "../../phantom";
   import { DEFAULT_PHANTOM } from "../../state/patch";
   import type { Selection } from "../../state/selection";
-  import type { CasPhantomEntry, CatalogPhantom, PhantomCollection, PhantomTree } from "../../types";
+  import type { CatalogPhantom, PhantomCollection, PhantomTree } from "../../types";
+  import FileList from "../files/FileList.svelte";
   import ToolFrame from "../ToolFrame.svelte";
   import PhantomPreview from "./PhantomPreview.svelte";
   import TissueMenu from "./TissueMenu.svelte";
   import ChevronRight from "@lucide/svelte/icons/chevron-right";
   import LoaderCircle from "@lucide/svelte/icons/loader-circle";
-  import RefreshCw from "@lucide/svelte/icons/refresh-cw";
 
   let { sel }: { sel: Selection } = $props();
 
@@ -63,15 +64,6 @@
 
   /** Open tab: per view, follows the kind of phantom chosen (here, by the AI, elsewhere). */
   let tab = $state<"catalog" | "cas">("catalog");
-  let casList = $state<CasPhantomEntry[] | null>(null);
-  let casLoading = $state(false);
-  let casError = $state<string | null>(null);
-  // The CAS phantom chosen comes first, also when it is not among the caller's files
-  const casShown = $derived.by(() => {
-    const own = casList ?? [];
-    if (!currentCas || own.some((e) => e.sha256 === currentCas.sha256)) return own;
-    return [{ ...currentCas, size: null, uploaded_at: null }, ...own];
-  });
   let kindShown: string | null = null;
 
   // Whenever another phantom is chosen (here, by the AI, on another device), open the tree to it.
@@ -87,23 +79,6 @@
     kindShown = kind;
     tab = kind;
   });
-
-  // The CAS list loads when its tab is first shown
-  $effect(() => {
-    if (tab === "cas" && casList === null && !casLoading && !casError) void loadCas();
-  });
-
-  async function loadCas() {
-    casLoading = true;
-    casError = null;
-    try {
-      casList = await sel.client.listCasPhantoms();
-    } catch (e) {
-      casError = message(e);
-    } finally {
-      casLoading = false;
-    }
-  }
 
   onMount(async () => {
     try {
@@ -196,14 +171,6 @@
     sel.patch({ phantom: phantomPatch({ collection, name }), tissues: null });
   }
 
-  function chooseCas(entry: CasPhantomEntry) {
-    if (currentCas?.sha256 === entry.sha256) return;
-    sel.patch({ phantom: phantomPatch({ sha256: entry.sha256, name: entry.name }), tissues: null });
-  }
-
-  const size = (n: number | null) =>
-    n === null ? "" : n >= 1e6 ? `${(n / 1e6).toFixed(1)} MB` : n >= 1e3 ? `${(n / 1e3).toFixed(0)} kB` : `${n} B`;
-
   const message = (e: unknown) => (e instanceof Error ? e.message : String(e));
 </script>
 
@@ -270,33 +237,11 @@
   </section>
   </Tabs.Content>
   <Tabs.Content value="cas">
-    <section class="flex flex-col gap-1 text-xs">
-      <div class="flex items-center gap-2">
-        <span class="flex-1 text-muted">Phantome (bifti .zip) in deinen Dateien</span>
-        <button class="btn-icon btn-icon-sm" title="Aktualisieren" aria-label="Aktualisieren" disabled={casLoading} onclick={loadCas}>
-          <RefreshCw class="size-4 {casLoading ? 'animate-spin' : ''}" />
-        </button>
-      </div>
-      {#if casError}<p class="text-error-500">{casError}</p>{/if}
-      {#if casLoading && casList === null}<p class="text-muted">Lade CAS …</p>{/if}
-      <ul class="flex flex-col">
-        {#each casShown as e (e.sha256)}
-          <li>
-            <button
-              class="flex w-full items-baseline gap-2 rounded px-2 py-1 text-left hover:preset-tonal {currentCas?.sha256 === e.sha256 ? 'preset-tonal-primary' : ''}"
-              title="{e.name} · sha256 {e.sha256}"
-              aria-pressed={currentCas?.sha256 === e.sha256}
-              onclick={() => chooseCas(e)}
-            >
-              <span class="min-w-0 flex-1 truncate">{e.name}</span>
-              <span class="shrink-0 text-muted">{e.uploaded_at === null ? "aus der Session" : size(e.size)}</span>
-            </button>
-          </li>
-        {:else}
-          {#if casList !== null}<li class="px-2 py-1 text-muted">Keine Phantome im CAS.</li>{/if}
-        {/each}
-      </ul>
-    </section>
+    <!-- The user's bifti phantoms: file_list, fixed to biftis, a click picks the phantom
+         (also without a session); it loads when the tab is first shown -->
+    {#if tab === "cas"}
+      <ToolFrame name="file_list"><FileList {sel} mode="bifti" download={false} select /></ToolFrame>
+    {/if}
   </Tabs.Content>
   </Tabs>
 </div>

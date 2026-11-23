@@ -1,8 +1,13 @@
 <script lang="ts">
-  // The user's files as a table: download, name (click: name and hash to the chat),
-  // type, size, uploaded. Every column sorts (click its header), a search field filters
-  // by name and type, a dropdown next to it shows all files or only the bifti
-  // phantoms. Narrow, the table scrolls sideways.
+  // The user's files as a table: download, name, type, size, uploaded. Every column
+  // sorts (click its header), a search field filters by name and type, a dropdown next
+  // to it shows all files or only the bifti phantoms. Narrow, the table scrolls sideways.
+  // Options (MCP tool open_file_list, or set by a parent): `mode` fixes the dropdown
+  // (bifti: no type column), `download` the download buttons.
+  // Clicking a name: without a session, `"name": <sha256>` to the chat (website: copied);
+  // with a session it depends on the mode: bifti makes the file the session's phantom
+  // (highlighted), all does nothing. `select` (the phantom browser) picks the phantom
+  // also into a local selection.
   // Bump `reload` to load the list again (e.g. after an upload). Opened again, the list
   // this client loaded last shows at once while the server's (cached a few minutes)
   // comes in.
@@ -11,25 +16,54 @@
   import Download from "@lucide/svelte/icons/download";
   import RefreshCw from "@lucide/svelte/icons/refresh-cw";
   import { FILE_MODES, filterFiles, formatSize, formatTime, isBifti, sortFiles, type FileMode, type SortKey } from "../../files";
+  import { isCas, phantomPatch } from "../../phantom";
   import type { Selection } from "../../state/selection";
   import type { UserFile } from "../../types";
   import FileName from "./FileName.svelte";
 
-  let { sel, reload = 0 }: { sel: Selection; reload?: number } = $props();
+  let {
+    sel,
+    reload = 0,
+    mode: fixedMode,
+    download: showDownload = true,
+    select,
+  }: {
+    sel: Selection;
+    reload?: number;
+    /** Fixed: the dropdown is disabled (bifti: no type column). */
+    mode?: FileMode | null;
+    /** Show the download buttons. */
+    download?: boolean;
+    /** A click in bifti mode picks the phantom, also without a session (default: with one). */
+    select?: boolean;
+  } = $props();
 
-  const COLUMNS: { key: SortKey; label: string }[] = [
+  const ALL_COLUMNS: { key: SortKey; label: string }[] = [
     { key: "name", label: "Name" },
     { key: "type", label: "Typ" },
     { key: "size", label: "Größe" },
     { key: "uploaded_at", label: "Hochgeladen" },
   ];
+  const columns = $derived(fixedMode === "bifti" ? ALL_COLUMNS.filter((c) => c.key !== "type") : ALL_COLUMNS);
 
   // svelte-ignore state_referenced_locally
   let files = $state<UserFile[] | null>(sel.client.lastFiles);
   let loading = $state(false);
   let error = $state<string | null>(null);
   let query = $state("");
-  let mode = $state<FileMode>("all");
+  let chosenMode = $state<FileMode>("all");
+  const mode = $derived(fixedMode ?? chosenMode);
+  /** What a click on a name does. */
+  const click = $derived(
+    mode === "bifti" && (select ?? !!sel.sessionKey) ? "phantom" : sel.sessionKey ? "none" : "chat",
+  );
+  const phantomSha = $derived(sel.state?.phantom && isCas(sel.state.phantom) ? sel.state.phantom.sha256 : null);
+
+  function pick(f: UserFile) {
+    if (f.sha256 === phantomSha) return;
+    // Another phantom has other tissues: back to all of them
+    sel.patch({ phantom: phantomPatch({ sha256: f.sha256, name: f.name }), tissues: null });
+  }
   let sortKey = $state<SortKey>("uploaded_at");
   let ascending = $state(false);
 
@@ -78,7 +112,13 @@
 <div class="flex min-h-0 min-w-0 flex-col gap-2 text-sm text-text">
   <div class="flex items-center gap-2">
     <input class="input min-w-0 flex-1 text-xs" type="search" placeholder="Suchen (Name, Typ)" bind:value={query} />
-    <select class="select w-auto shrink-0 text-xs" aria-label="Modus" bind:value={mode}>
+    <select
+      class="select w-auto shrink-0 text-xs"
+      aria-label="Modus"
+      value={mode}
+      disabled={!!fixedMode}
+      onchange={(e) => (chosenMode = e.currentTarget.value as FileMode)}
+    >
       {#each FILE_MODES as m (m.key)}<option value={m.key}>{m.label}</option>{/each}
     </select>
     <button
@@ -105,8 +145,8 @@
       <table class="table text-xs">
         <thead>
           <tr>
-            <th class="sticky top-0 z-10 w-0 bg-bg px-2 py-1 text-left"><span class="sr-only">Download</span></th>
-            {#each COLUMNS as c (c.key)}
+            {#if showDownload}<th class="sticky top-0 z-10 w-0 bg-bg px-2 py-1 text-left"><span class="sr-only">Download</span></th>{/if}
+            {#each columns as c (c.key)}
               <th class="sticky top-0 z-10 bg-bg px-2 py-1 text-left whitespace-nowrap">
                 <button type="button" class="inline-flex items-center gap-0.5 hover:text-text" onclick={() => sortBy(c.key)}>
                   {c.label}
@@ -120,20 +160,36 @@
         </thead>
         <tbody>
           {#each shown as f (f.sha256)}
-            <tr class="hover:preset-tonal">
-              <td class="px-2 py-1">
-                {#if chat}
-                  <button type="button" class="btn-icon btn-icon-sm hover:preset-tonal" aria-label="{f.name} herunterladen" title="Herunterladen" onclick={() => download(f)}>
-                    <Download class="size-4" aria-hidden="true" />
-                  </button>
+            <tr class="hover:preset-tonal {click === 'phantom' && f.sha256 === phantomSha ? 'preset-tonal-primary' : ''}">
+              {#if showDownload}
+                            <td class="px-2 py-1">
+                  {#if chat}
+                    <button type="button" class="btn-icon btn-icon-sm hover:preset-tonal" aria-label="{f.name} herunterladen" title="Herunterladen" onclick={() => download(f)}>
+                      <Download class="size-4" aria-hidden="true" />
+                    </button>
+                  {:else}
+                    <a class="btn-icon btn-icon-sm hover:preset-tonal" href={f.url} download={f.name} aria-label="{f.name} herunterladen" title="Herunterladen">
+                      <Download class="size-4" aria-hidden="true" />
+                    </a>
+                  {/if}
+                </td>
+              {/if}
+              <td class="max-w-64 px-2 py-1">
+                {#if click === "phantom"}
+                  <button
+                    type="button"
+                    class="max-w-full truncate text-left hover:text-accent hover:underline"
+                    title="Als Phantom wählen"
+                    aria-pressed={f.sha256 === phantomSha}
+                    onclick={() => pick(f)}>{f.name}</button
+                  >
+                {:else if click === "chat"}
+                  <FileName client={sel.client} name={f.name} sha256={f.sha256} />
                 {:else}
-                  <a class="btn-icon btn-icon-sm hover:preset-tonal" href={f.url} download={f.name} aria-label="{f.name} herunterladen" title="Herunterladen">
-                    <Download class="size-4" aria-hidden="true" />
-                  </a>
+                  <span class="block truncate" title={f.sha256}>{f.name}</span>
                 {/if}
               </td>
-              <td class="max-w-64 px-2 py-1"><FileName client={sel.client} name={f.name} sha256={f.sha256} /></td>
-              <td class="px-2 py-1 whitespace-nowrap text-muted">{f.type ?? "–"}</td>
+              {#if fixedMode !== "bifti"}<td class="px-2 py-1 whitespace-nowrap text-muted">{f.type ?? "–"}</td>{/if}
               <td class="px-2 py-1 whitespace-nowrap">{formatSize(f.size)}</td>
               <td class="px-2 py-1 whitespace-nowrap">{formatTime(f.uploaded_at)}</td>
             </tr>

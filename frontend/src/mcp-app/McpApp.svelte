@@ -26,7 +26,8 @@
     name: string;
     /** Shown on the frame: the MCP tool that opens this app, without `open_`. */
     toolName: string;
-    tool: Component<{ sel: Selection }>;
+    /** Gets the Selection and the tool call's other arguments as props (its options). */
+    tool: Component<{ sel: Selection } & Record<string, unknown>>;
     /** What goes back to the chat without a session; none: the tool needs no footer
      * (e.g. the file tools, which talk to the chat themselves). */
     summary?: (state: State) => string;
@@ -36,6 +37,8 @@
   const app = new App({ name, version: "0.1.0" });
   const client = new AnyfieldClient(new McpAppTransport(app));
   let sel = $state<Selection | null>(null);
+  /** The tool call's arguments but the session key: options of the tool (e.g. mode). */
+  let options = $state<Record<string, unknown>>({});
   let error = $state<string | null>(null);
   let sent = $state(false);
   let container = $state<McpUiHostContext["containerDimensions"]>(undefined);
@@ -78,6 +81,8 @@
   // Without a session the local selection starts from the tool result's state (e.g.
   // the phantom the preview was opened for), so it opens only once that arrives.
   app.ontoolinput = (params) => {
+    const { session_key: _, ...rest } = params.arguments ?? {};
+    options = rest;
     const key = params.arguments?.session_key;
     if (typeof key === "string" && key) openSession(key);
   };
@@ -119,7 +124,7 @@
 <div class="flex w-full flex-col p-1" style={sizeStyle}>
   <ToolFrame name={toolName} class="flex-1">
     {#if sel}
-      <div class="min-h-0 min-w-0 flex-1 overflow-y-auto"><Tool {sel} /></div>
+      <div class="min-h-0 min-w-0 flex-1 overflow-y-auto"><Tool {sel} {...options} /></div>
       {#if !sel.sessionKey && summary}
         <footer class="flex items-center gap-2 border-t border-border bg-panel px-3 py-2 text-xs">
           <span class="min-w-0 flex-1 truncate text-muted" title={sel.state ? summary(sel.state) : ""}>
