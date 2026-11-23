@@ -10,7 +10,10 @@
   // grabbed), Ctrl + right drag turns it about the tile's normal (Shift: finer),
   // Ctrl + wheel resizes the box axis along the tile's vertical (by how far the wheel
   // turns, ~2 mm per notch; Shift: finer). Without Ctrl, NiiVue handles the mouse.
+  // On touch screens a toggle above the view hands the fingers to the box: one finger
+  // moves it, two fingers turn it (after a few degrees) and pinch its size in the plane.
   import Info from "@lucide/svelte/icons/info";
+  import Move from "@lucide/svelte/icons/move";
   import { MULTIPLANAR_TYPE, NVMesh, Niivue, SHOW_RENDER, SLICE_TYPE } from "@niivue/niivue";
   import { Popover, Portal } from "@skeletonlabs/skeleton-svelte";
   import { onMount } from "svelte";
@@ -104,6 +107,10 @@
     view.addEventListener("mousedown", onDown, { capture: true });
     view.addEventListener("wheel", onWheel, { capture: true, passive: false });
     view.addEventListener("contextmenu", onContextMenu, { capture: true });
+    view.addEventListener("touchstart", onTouch, { capture: true, passive: false });
+    view.addEventListener("touchmove", onTouch, { capture: true, passive: false });
+    view.addEventListener("touchend", onTouch, { capture: true, passive: false });
+    view.addEventListener("touchcancel", onTouch, { capture: true, passive: false });
     nv = new Niivue({
       // The page's background (transparent comes out black)
       backColor: pageBackground(),
@@ -124,6 +131,8 @@
       view.removeEventListener("mousedown", onDown, { capture: true });
       view.removeEventListener("wheel", onWheel, { capture: true });
       view.removeEventListener("contextmenu", onContextMenu, { capture: true });
+      for (const t of ["touchstart", "touchmove", "touchend", "touchcancel"] as const)
+        view.removeEventListener(t, onTouch, { capture: true });
       endDrag();
       cancelAnimationFrame(frame);
       mesh = null;
@@ -193,7 +202,7 @@
   let drag: Drag | null = null;
 
   /** The world point under the mouse in a 2D tile (`tile`: only that one), or null. */
-  function hit(e: MouseEvent, tile = -1): Hit | null {
+  function hit(e: { clientX: number; clientY: number }, tile = -1): Hit | null {
     if (!nv) return null;
     const rect = canvas.getBoundingClientRect();
     const dpr = nv.uiData.dpr ?? window.devicePixelRatio ?? 1;
@@ -254,7 +263,7 @@
     if (p) apply(e, p);
   }
 
-  function apply(e: MouseEvent, p: Hit) {
+  function apply(e: { shiftKey: boolean }, p: Hit) {
     if (!drag) return;
     if (drag.kind === "move") {
       // The box moves as far as the mouse, in the tile's plane; its depth stays
@@ -298,6 +307,109 @@
   function onContextMenu(e: MouseEvent) {
     if (editing(e)) e.preventDefault();
   }
+
+  // --- Editing the FOV box with the fingers ------------------------------------------
+
+  /** A touch screen (also a laptop with one): show the toggle that hands the fingers to the box. */
+  const touchScreen = typeof window !== "undefined" && window.matchMedia("(any-pointer: coarse)").matches;
+  /** Fingers edit the box instead of NiiVue (per viewer, off at first). */
+  let touchEdit = $state(false);
+  /** Degrees two fingers must turn before the box turns: a pinch alone always turns a little. */
+  const TURN_DEAD_ZONE_DEG = 5;
+
+  type Pinch = {
+    tile: number;
+    axCorSag: 0 | 1 | 2;
+    rotation: Vec3;
+    size: Vec3;
+    angle: number; // of the line between the fingers, in the tile's plane
+    dist: number; // between the fingers, mm
+    turning: boolean;
+  };
+  let pinch: Pinch | null = null;
+
+  /** The two fingers in world mm (in `tile`, or wherever the first one is), or null. */
+  function fingers(e: TouchEvent, tile = -1): [Hit, Hit] | null {
+    const a = hit(e.touches[0], tile);
+    const b = a ? hit(e.touches[1], a.tile) : null;
+    return a && b ? [a, b] : null;
+  }
+
+  const planeDist = (axCorSag: 0 | 1 | 2, a: Vec3, b: Vec3) => {
+    const [h, v] = TILE[axCorSag].axes;
+    return Math.hypot(b[h] - a[h], b[v] - a[v]);
+  };
+
+  function startPinch(e: TouchEvent) {
+    const f = fingers(e);
+    if (!f || !fov) return;
+    const [a, b] = f;
+    pinch = {
+      tile: a.tile,
+      axCorSag: a.axCorSag,
+      rotation: [...fov.rotation_deg] as Vec3,
+      size: [...fov.size_mm] as Vec3,
+      angle: angleIn(a.axCorSag, a.mm, b.mm),
+      dist: planeDist(a.axCorSag, a.mm, b.mm),
+      turning: false,
+    };
+  }
+
+  function movePinch(e: TouchEvent) {
+    if (!pinch) return;
+    const f = fingers(e, pinch.tile);
+    if (!f) return;
+    const [a, b] = f;
+    const t = TILE[pinch.axCorSag];
+    let d = angleIn(pinch.axCorSag, a.mm, b.mm) - pinch.angle;
+    d = (Math.atan2(Math.sin(d), Math.cos(d)) * 180) / Math.PI;
+    if (!pinch.turning && Math.abs(d) > TURN_DEAD_ZONE_DEG) {
+      // Turn from here on, without the jump of the dead zone
+      pinch.turning = true;
+      pinch.angle += (Math.sign(d) * TURN_DEAD_ZONE_DEG * Math.PI) / 180;
+      d -= Math.sign(d) * TURN_DEAD_ZONE_DEG;
+    }
+    const change: Partial<Fov> = {};
+    if (pinch.turning) {
+      change.rotation_deg = rotateAboutWorldAxis(pinch.rotation, t.normal, t.turn * d).map((v) => round(v, 0.1)) as Vec3;
+    }
+    // Spreading scales the box axes that lie in the tile's plane
+    const ratio = pinch.dist > 0 ? planeDist(pinch.axCorSag, a.mm, b.mm) / pinch.dist : 1;
+    const size = [...pinch.size] as Vec3;
+    for (const i of new Set(t.axes.map((w) => boxAxisAlong(pinch!.rotation, w)))) {
+      size[i] = Math.min(MAX_SIZE_MM, Math.max(1, round(pinch.size[i] * ratio, 0.1)));
+    }
+    change.size_mm = size;
+    send(change);
+  }
+
+  function onTouch(e: TouchEvent) {
+    if (!touchEdit || !onfov || !fov) return;
+    e.preventDefault(); // no scrolling, no synthetic mouse events
+    e.stopPropagation(); // and nothing for NiiVue
+    const n = e.touches.length;
+    if (e.type === "touchstart") {
+      drag = null;
+      pinch = null;
+      if (n === 1) {
+        const p = hit(e.touches[0]);
+        if (p) drag = { kind: "move", tile: p.tile, axCorSag: p.axCorSag, center: [...fov.center_mm] as Vec3, grab: p.mm };
+      } else if (n === 2) {
+        startPinch(e);
+      }
+    } else if (e.type === "touchmove") {
+      if (drag?.kind === "move" && n === 1) {
+        const p = hit(e.touches[0], drag.tile);
+        if (p) apply(e, p);
+      } else if (pinch && n === 2) {
+        movePinch(e);
+      }
+    } else {
+      // A finger lifted: the gesture ends; the next touch starts a new one
+      drag = null;
+      pinch = null;
+    }
+  }
 </script>
 
 <div bind:this={box} class="flex flex-col gap-1 {cls}">
@@ -321,6 +433,18 @@
     >
       {#each maps?.properties ?? [] as p (p.key)}<option value={p.key}>{p.label}</option>{/each}
     </select>
+    {#if onfov && touchScreen}
+      <button
+        type="button"
+        class="btn-icon btn-icon-sm shrink-0 {touchEdit ? 'preset-filled-primary-500' : 'hover:preset-tonal'}"
+        aria-label="FOV-Box mit den Fingern bearbeiten"
+        aria-pressed={touchEdit}
+        title="FOV-Box mit den Fingern bearbeiten"
+        onclick={() => (touchEdit = !touchEdit)}
+      >
+        <Move class="size-4" aria-hidden="true" />
+      </button>
+    {/if}
     {#if onfov}
       <!-- How to edit the box: behind a button, the view stays free of text -->
       <Popover>
@@ -338,6 +462,14 @@
                   <li><b>Strg + Mausrad:</b> Größe (Shift: fein)</li>
                 </ul>
                 <p class="mt-2 text-muted">Ohne Strg: Klick setzt das Fadenkreuz, Mausrad blättert die Schichten, Rechtsklick ziehen ändert die Fensterung.</p>
+                {#if touchScreen}
+                  <p class="mt-2 font-semibold">Touch, mit eingeschaltetem Bearbeiten-Knopf:</p>
+                  <ul class="space-y-1">
+                    <li><b>Ein Finger:</b> verschieben</li>
+                    <li><b>Zwei Finger drehen:</b> drehen</li>
+                    <li><b>Zwei Finger spreizen:</b> Größe</li>
+                  </ul>
+                {/if}
               </Popover.Description>
             </Popover.Content>
           </Popover.Positioner>
@@ -345,7 +477,7 @@
       </Popover>
     {/if}
   </div>
-  <div bind:this={view} class="relative {viewClass}">
+  <div bind:this={view} class="relative {viewClass} {touchEdit ? 'touch-none' : ''}">
     <canvas bind:this={canvas} class="absolute inset-0 h-full w-full"></canvas>
     {#if loadError}
       <p class="absolute inset-x-0 top-2 text-center text-xs text-error-500">Viewer: {loadError}</p>
