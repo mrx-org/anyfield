@@ -13,9 +13,15 @@ import logging
 from pathlib import Path
 from typing import Protocol
 
+from .migrations import migrate_json
 from .models import Session
 
 log = logging.getLogger(__name__)
+
+
+def load_session(raw: str) -> Session:
+    """A stored session, migrated to the current schema if it is older (migrations.py)."""
+    return Session.model_validate_json(migrate_json(raw) or raw)
 
 
 class SessionStore(Protocol):
@@ -33,7 +39,7 @@ class MemoryStore:
 
     async def get(self, key: str) -> Session | None:
         raw = self.sessions.get(key)
-        return None if raw is None else Session.model_validate_json(raw)
+        return None if raw is None else load_session(raw)
 
     async def put(self, session: Session) -> None:
         self.sessions[session.key] = session.model_dump_json()
@@ -113,7 +119,7 @@ class ModalStore:
 
     async def get(self, key: str) -> Session | None:
         raw = await self._get(f"s:{key}")
-        return None if raw is None else Session.model_validate_json(raw)
+        return None if raw is None else load_session(raw)
 
     async def put(self, session: Session) -> None:
         await self._put(f"s:{session.key}", session.model_dump_json())

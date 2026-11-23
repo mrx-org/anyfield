@@ -107,6 +107,7 @@ backend/   Python (uv), FastMCP, Modal
   src/anyfield/auth.py       Login (AuthKit) nur für Session-Verwaltung
   src/anyfield/gateway.py    Gateway-Tools im Namen des Nutzers (Token Exchange) oder als `visitor`
   src/anyfield/store.py      Modal Dict + Volume (Dict-Einträge verfallen nach 7 Tagen)
+  src/anyfield/migrations.py Migrationen gespeicherter Sessions (Schema-Versionen)
   src/anyfield/phantoms.py   Katalog und Karten vom Gateway, FOV → Scan-Raster
   src/anyfield/phantom_tools.py  Phantom-Tool
   src/anyfield/modal_app.py  Deployment
@@ -123,6 +124,29 @@ frontend/  Svelte 5, TypeScript, Vite, NiiVue, Skeleton (UI), Lucide (Icons)
 UI-Bausteine kommen aus Skeleton (`@skeletonlabs/skeleton-svelte`), Icons **immer** aus
 Lucide (`@lucide/svelte`, je Icon importiert: `import ChevronRight from
 "@lucide/svelte/icons/chevron-right"`). Keine Unicode-Zeichen oder eigenen SVGs als Icons.
+
+## Session-Schema und Migrationen
+
+Jede gespeicherte Session trägt `version` (Schema-Version, fehlt bei alten Sessions: 0).
+Ändert sich die Form des Zustands so, dass gespeicherte Sessions nicht mehr passen
+(Feld entfällt, wird umbenannt oder verschoben), kommt ein Migrationsschritt in
+`backend/src/anyfield/migrations.py`, nicht in Modelle oder Tools:
+
+1. `SCHEMA_VERSION` um eins erhöhen.
+2. Schritt `_vN_to_vN+1` in `STEPS` eintragen: rohes JSON (dict) rein, rohes JSON raus,
+   ohne I/O und ohne die aktuellen Modelle. So bleibt er gültig, wenn die Modelle sich
+   später wieder ändern.
+3. Test in `tests/test_migrations.py` mit einer Session, wie sie vorher gespeichert war.
+
+Ein veröffentlichter Schritt wird nie mehr geändert; jede Änderung bekommt einen neuen.
+Neue Felder mit Standardwert brauchen keine Migration.
+
+Beim Start jedes Containers (`modal_app.web`) schreibt `migrate_modal_store` alle
+Sessions in Dict und Volume auf die aktuelle Version um. Ein Marker im Dict
+(`meta:schema_version`) lässt spätere Starts das überspringen; laufen mehrere Container
+gleichzeitig los, schreiben sie dasselbe. Zusätzlich migriert der Store jede Session beim
+Lesen: Während eines Deploys können Container mit altem Code noch Sessions im alten Format
+schreiben. Eine Session mit neuerer Version als der Code wird abgelehnt.
 
 ## Entwickeln
 

@@ -58,9 +58,12 @@ if modal.is_local():
 def web():
     from .auth import authkit_auth
     from .gateway import GatewayClient
+    from .migrations import migrate_modal_store
     from .server import build, http_app
     from .store import ModalStore
 
+    # Stored sessions of older schema versions to the current one (once per version)
+    migrate_modal_store(sessions_dict, state_volume, STATE_PATH / "sessions")
     store = ModalStore(sessions_dict, state_volume, STATE_PATH / "sessions")
     auth = authkit_auth(PUBLIC_URL)
     return http_app(

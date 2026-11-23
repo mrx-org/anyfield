@@ -11,7 +11,9 @@ import secrets
 import time
 from typing import Any
 
-from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
+from pydantic import BaseModel, ConfigDict, Field, field_validator
+
+from .migrations import SCHEMA_VERSION
 
 Vec3 = tuple[float, float, float]
 Int3 = tuple[int, int, int]
@@ -84,16 +86,11 @@ class State(BaseModel):
     fov: Fov = Field(default_factory=Fov)
     matrix: Int3 = Field(default=(128, 128, 1), description="Resolution (x, y, z) of the planned scan")
 
-    @model_validator(mode="before")
-    @classmethod
-    def _stored(cls, data: Any) -> Any:
-        """Read sessions stored before a field moved or went away."""
-        if isinstance(data, dict) and isinstance(data.get("view"), dict) and "plane" in data["view"]:
-            data = {**data, "view": {k: v for k, v in data["view"].items() if k != "plane"}}
-        return data
-
 
 class Session(BaseModel):
+    version: int = Field(
+        default=SCHEMA_VERSION, description="Schema version of the stored session (migrations.py)"
+    )
     key: str
     name: str
     owner: str | None = Field(default=None, description="User id (WorkOS `sub`) of the creator")
