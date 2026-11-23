@@ -20,6 +20,7 @@ from fastmcp.apps.config import AppConfig
 from fastmcp.exceptions import ToolError
 from pydantic import Field
 
+from .args import OptionalSessionKey
 from .auth import current_user
 
 Call = Callable[[str, dict[str, Any]], Awaitable[Any]]
@@ -98,14 +99,6 @@ class UserFiles:
 
 
 FileMode = Literal["all", "bifti"]
-# Own copy, as in phantom_tools: annotations resolve in this module
-OptionalSessionKey = Annotated[
-    str | None,
-    Field(
-        description="Optional session key: clicking a bifti then makes it the session's phantom. "
-        "Without one a click sends the file's name and sha256 to the chat"
-    ),
-]
 
 
 def register(

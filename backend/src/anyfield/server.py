@@ -26,6 +26,7 @@ from starlette.types import ASGIApp, Receive, Scope, Send
 
 from . import file_tools, phantom_tools
 from . import fov as fov_ops
+from .args import ExpectedRev, OptionalSessionKey, SessionKey, Vec3Arg
 from .auth import AuthProvider, make_login_on_demand, require_user
 from .file_tools import UserFiles
 from .gateway import GATEWAY_URL, GatewayClient
@@ -38,18 +39,6 @@ FOV_VIEWER_APP_URI = "ui://anyfield/fov-viewer.html"
 SESSION_APP_URI = "ui://anyfield/session.html"
 MAX_SESSIONS_PER_USER = 200
 MAX_MATRIX = 1024
-
-SessionKey = Annotated[str, Field(description="Key of the session (from create_session or a shared link)")]
-OptionalSessionKey = Annotated[
-    str | None,
-    Field(
-        description="Optional session key: store the choice in that session. Without one it goes back to the chat"
-    ),
-]
-Vec3Arg = Annotated[list[float], Field(min_length=3, max_length=3)]
-ExpectedRev = Annotated[
-    int | None, Field(description="Optional: fail instead of overwriting if the session changed since")
-]
 
 
 def build(

@@ -15,6 +15,7 @@ from fastmcp.exceptions import ToolError
 from pydantic import Field, ValidationError
 
 from . import fov as fov_ops
+from .args import OptionalSessionKey, SessionKey
 from .models import CasPhantom, Fov, Phantom, PhantomChoice, Session, State, View
 from .phantoms import (
     DEFAULT_PHANTOM,
@@ -28,13 +29,6 @@ from .phantoms import (
 
 PHANTOM_APP_URI = "ui://anyfield/phantom-browser.html"
 PREVIEW_APP_URI = "ui://anyfield/phantom-preview.html"
-SessionKey = Annotated[str, Field(description="Key of the session (from create_session or a shared link)")]
-OptionalSessionKey = Annotated[
-    str | None,
-    Field(
-        description="Optional session key: store the choice in that session. Without one it goes back to the chat"
-    ),
-]
 PropertyArg = Annotated[
     str, Field(description=f"Property to show: one of {', '.join(PROPERTY_KEYS)} (if the phantom has it)")
 ]
