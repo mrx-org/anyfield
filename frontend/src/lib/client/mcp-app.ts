@@ -11,4 +11,18 @@ export class McpAppTransport implements Transport {
     const result = await this.app.callServerTool({ name, arguments: plain });
     return unwrapResult(name, result as Parameters<typeof unwrapResult>[1]);
   }
+
+  async sendToChat(text: string): Promise<void> {
+    const r = await this.app.sendMessage({ role: "user", content: [{ type: "text", text }] });
+    if (r.isError) throw new Error("Der Chat hat die Nachricht nicht angenommen.");
+  }
+
+  async setChatContext(text: string): Promise<void> {
+    await this.app.updateModelContext({ content: [{ type: "text", text }] });
+  }
+
+  async openLink(url: string): Promise<void> {
+    const r = await this.app.openLink({ url });
+    if (r.isError) throw new Error("Der Chat hat den Link nicht geöffnet.");
+  }
 }

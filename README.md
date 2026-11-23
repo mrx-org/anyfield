@@ -32,6 +32,7 @@ Web-App: `/` (eigene Sessions), `/s/{key}` (eine Session, mit Ansicht des Zustan
 | -- | -- |
 | Sessions (Login) | `list_sessions`, `create_session`, `rename_session`, `delete_session` |
 | Zustand | `get_state`, `patch_state` (JSON Merge Patch), `open_session` (JSON-Editor) |
+| Dateien | `list_user_files`, `create_file_upload_url`, `open_file_upload`, `open_file_list`, `open_file_manager` |
 | FOV-Planer | `set_fov`, `move_fov`, `rotate_fov`, `open_fov_planner`, `open_fov_viewer` |
 | Phantom (BIfTI) | `list_phantom_collections`, `list_phantoms`, `list_cas_phantoms`, `list_phantom_tissues`, `select_phantom`, `set_phantom_view`, `get_phantom_maps`, `open_phantom_browser`, `open_phantom_preview` |
 
@@ -125,6 +126,26 @@ Editor und der Text bleibt. „Reload“ verwirft die Änderungen und lädt den 
 Zustand; hat sich die Session seit dem Laden geändert, zeigt er ein Warn-Icon. Auf der
 Website öffnet „Zustand (JSON)“ denselben Editor als Modal.
 
+Die **Datei-Tools** zeigen die Dateien des Nutzers im Speicher (CAS) des Gateways.
+anyfield hält keine Dateien, die Bytes gehen direkt zwischen Browser und Gateway:
+
+- `file_upload` (`open_file_upload`): Dateien in eine Box ziehen oder anklicken. Der
+  Browser holt je Datei eine kurzlebige Upload-URL (`create_file_upload_url`, beim
+  Gateway `create_upload_url`) und lädt per POST dorthin hoch (CORS des Gateways
+  erlaubt kein PUT), mit Fortschritt. Danach Name und Hash; im Chat erfährt auch das
+  Modell davon.
+- `file_list` (`open_file_list`): Tabelle aus `list_files` des Gateways, nach jeder
+  Spalte sortierbar, mit Suche, schmal horizontal scrollbar. Erste Spalte lädt herunter
+  (`<gateway>/files/<hash>`, ohne Login: der Hash ist die Berechtigung; im Chat über
+  `openLink`, das iframe darf nicht selbst herunterladen). Ein Klick auf den Namen
+  schickt `"name": <hash>` in den Chat, auf der Website kopiert er die Zeile. Mit
+  Session lässt sich eine `.zip` als Phantom wählen. Das Gateway löscht eine Datei
+  einen Tag nach ihrer letzten Nutzung.
+- `file_manager` (`open_file_manager`): beides untereinander; ein Upload lädt die Liste
+  neu. Auf der Website hinter „Dateien“ in der Kopfzeile.
+
+Ohne Login laufen die Datei-Tools als gemeinsamer `visitor` (siehe MRX-90).
+
 ## Aufbau
 
 ```
@@ -136,6 +157,7 @@ backend/   Python (uv), FastMCP, Modal
   src/anyfield/migrations.py Migrationen gespeicherter Sessions (Schema-Versionen)
   src/anyfield/phantoms.py   Katalog und Karten vom Gateway, FOV → Scan-Raster
   src/anyfield/phantom_tools.py  Phantom-Tool
+  src/anyfield/file_tools.py     Datei-Tools (Upload, Liste, Download über das Gateway)
   src/anyfield/modal_app.py  Deployment
 frontend/  Svelte 5, TypeScript, Vite, NiiVue, Skeleton (UI), Lucide (Icons)
   src/lib/client/            Transport: MCP-HTTP (Web), MCP App, Mock
@@ -143,6 +165,7 @@ frontend/  Svelte 5, TypeScript, Vite, NiiVue, Skeleton (UI), Lucide (Icons)
   src/lib/components/fov/    FOV-Planer (Slider) und visueller FOV-Planer
   src/lib/components/phantom/  Phantom-Browser, Phantom-Vorschau, Viewer-Baustein PhantomViewer
   src/lib/components/session/  Session-Editor (JSON)
+  src/lib/components/files/    Datei-Upload, Dateiliste, Dateimanager
   src/web/                   Web-App
   src/mcp-app/               MCP Apps (je eine HTML-Datei, gemeinsame Hülle McpApp.svelte)
   dev/app-host.html          Test-Host für die MCP App

@@ -9,6 +9,8 @@
   import FovViewer from "../lib/components/fov/FovViewer.svelte";
   import PhantomBrowser from "../lib/components/phantom/PhantomBrowser.svelte";
   import SessionEditor from "../lib/components/session/SessionEditor.svelte";
+  import FileManager from "../lib/components/files/FileManager.svelte";
+  import { LocalSelection } from "../lib/state/local.svelte";
   import ToolFrame from "../lib/components/ToolFrame.svelte";
   import { SessionStore } from "../lib/state/session.svelte";
   import type { SessionSummary } from "../lib/types";
@@ -23,9 +25,13 @@
   let loggedIn = $state(transport.loggedIn);
   let copied = $state(false);
   let showState = $state(false);
+  let showFiles = $state(false);
 
   const sessionKey = $derived(path.match(/^\/s\/([^/]+)/)?.[1] ?? null);
   let store = $state<SessionStore | null>(null);
+  // The file manager needs a Selection: the session's (a .zip can become its
+  // phantom), else a local one
+  const filesSel = $derived(store ?? new LocalSelection(client));
 
   $effect(() => {
     if (!sessionKey) return;
@@ -102,11 +108,40 @@
       <button class="ml-auto text-muted hover:text-text" onclick={() => (showState = true)} aria-haspopup="dialog">
         Zustand (JSON)
       </button>
+    {/if}
+    <button class="text-muted hover:text-text {store && sessionKey ? '' : 'ml-auto'}" onclick={() => (showFiles = true)} aria-haspopup="dialog">
+      Dateien
+    </button>
+    {#if store && sessionKey}
       <button class="rounded border border-border px-2 py-0.5 hover:bg-bg" onclick={copyLink}>
         {copied ? "Kopiert" : "Link kopieren"}
       </button>
     {/if}
   </header>
+
+  <!-- The file manager (MCP tool open_file_manager) as a modal: the user's files -->
+  <Dialog open={showFiles} onOpenChange={(e) => (showFiles = e.open)}>
+    <Portal>
+      <Dialog.Backdrop class="fixed inset-0 z-50 bg-bg/80 backdrop-blur-sm" />
+      <Dialog.Positioner class="fixed inset-0 z-50 flex items-center justify-center p-4">
+        <Dialog.Content class="card flex max-h-[85vh] w-full max-w-3xl flex-col gap-2 overflow-hidden border border-border bg-bg p-3 shadow-xl">
+          <header class="flex items-center">
+            <Dialog.Title class="text-sm font-semibold">Dateien</Dialog.Title>
+            <Dialog.CloseTrigger class="btn-icon btn-icon-sm hover:preset-tonal ml-auto" aria-label="Schließen">
+              <X class="size-4" aria-hidden="true" />
+            </Dialog.CloseTrigger>
+          </header>
+          {#if showFiles}
+            <!-- Scrolls outside the tool's frame: a fieldset passes no height on to its
+                 content, so nothing inside it can scroll -->
+            <div class="min-h-0 flex-1 overflow-auto">
+              <ToolFrame name="file_manager"><FileManager sel={filesSel} /></ToolFrame>
+            </div>
+          {/if}
+        </Dialog.Content>
+      </Dialog.Positioner>
+    </Portal>
+  </Dialog>
 
   {#if sessionKey && store}
     <!-- The session editor (MCP tool open_session) as a modal; opened fresh each time -->

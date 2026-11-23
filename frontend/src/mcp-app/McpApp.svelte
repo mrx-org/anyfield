@@ -27,7 +27,9 @@
     /** Shown on the frame: the MCP tool that opens this app, without `open_`. */
     toolName: string;
     tool: Component<{ sel: Selection }>;
-    summary: (state: State) => string;
+    /** What goes back to the chat without a session; none: the tool needs no footer
+     * (e.g. the file tools, which talk to the chat themselves). */
+    summary?: (state: State) => string;
   } = $props();
 
   // svelte-ignore state_referenced_locally
@@ -61,12 +63,13 @@
     }
     sel = new LocalSelection(client, initial, (state) => {
       sent = false;
+      if (!summary) return;
       app.updateModelContext({ content: [{ type: "text", text: summary(state) }] }).catch(() => {});
     });
   }
 
   async function sendToChat() {
-    if (!sel?.state) return;
+    if (!sel?.state || !summary) return;
     const r = await app.sendMessage({ role: "user", content: [{ type: "text", text: summary(sel.state) }] });
     sent = !r.isError;
   }
@@ -116,8 +119,8 @@
 <div class="flex w-full flex-col p-1" style={sizeStyle}>
   <ToolFrame name={toolName} class="flex-1">
     {#if sel}
-      <div class="min-h-0 flex-1 overflow-y-auto"><Tool {sel} /></div>
-      {#if !sel.sessionKey}
+      <div class="min-h-0 min-w-0 flex-1 overflow-y-auto"><Tool {sel} /></div>
+      {#if !sel.sessionKey && summary}
         <footer class="flex items-center gap-2 border-t border-border bg-panel px-3 py-2 text-xs">
           <span class="min-w-0 flex-1 truncate text-muted" title={sel.state ? summary(sel.state) : ""}>
             {sel.state ? summary(sel.state) : ""}

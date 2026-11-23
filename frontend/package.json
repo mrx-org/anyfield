@@ -5,7 +5,7 @@
   "type": "module",
   "scripts": {
     "dev": "vite",
-    "build": "vite build && APP=fov vite build --config vite.app.config.ts && APP=phantom vite build --config vite.app.config.ts && APP=phantom-preview vite build --config vite.app.config.ts && APP=fov-viewer vite build --config vite.app.config.ts && APP=session vite build --config vite.app.config.ts",
+    "build": "vite build && APP=fov vite build --config vite.app.config.ts && APP=phantom vite build --config vite.app.config.ts && APP=phantom-preview vite build --config vite.app.config.ts && APP=fov-viewer vite build --config vite.app.config.ts && APP=session vite build --config vite.app.config.ts && APP=file-upload vite build --config vite.app.config.ts && APP=file-list vite build --config vite.app.config.ts && APP=file-manager vite build --config vite.app.config.ts",
     "check": "svelte-check --tsconfig ./tsconfig.json",
     "test": "vitest run"
   },

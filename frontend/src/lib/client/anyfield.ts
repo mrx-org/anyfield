@@ -1,5 +1,5 @@
 import { phantomArgs, phantomKey } from "../phantom";
-import type { CasPhantomEntry, FovChange, PhantomChoice, PhantomCollection, PhantomMaps, PhantomTree, ScanGrid, Session, SessionSummary, StatePatch, Vec3 } from "../types";
+import type { CasPhantomEntry, FovChange, PhantomChoice, PhantomCollection, PhantomMaps, PhantomTree, ScanGrid, Session, SessionSummary, StatePatch, UserFile, Vec3 } from "../types";
 import type { Transport } from "./transport";
 
 export type SessionPoll = Session | { rev: number; unchanged: true };
@@ -28,6 +28,34 @@ export class AnyfieldClient {
   patchState = (key: string, patch: StatePatch, expectedRev?: number) =>
     this.call<Session>("patch_state", { session_key: key, patch, ...(expectedRev !== undefined ? { expected_rev: expectedRev } : {}) });
   moveFov = (key: string, delta_mm: Vec3) => this.call<FovChange>("move_fov", { session_key: key, delta_mm });
+
+  // The user's files in the gateway's storage
+  /** The last list this client loaded: shown at once while a new one loads. */
+  lastFiles: UserFile[] | null = null;
+  /** `refresh`: past the server's cache of a few minutes (after an upload, reload). */
+  listUserFiles = async (refresh = false) =>
+    (this.lastFiles = await this.call<UserFile[]>("list_user_files", refresh ? { refresh } : {}));
+  createFileUploadUrl = (fileName: string) =>
+    this.call<{ url: string; expires_in: number | null }>("create_file_upload_url", { file_name: fileName });
+
+  /** Upload a file straight to the gateway (not through MCP); resolves with its sha256. */
+  async uploadFile(file: File, onprogress?: (fraction: number) => void): Promise<string> {
+    const { url } = await this.createFileUploadUrl(file.name);
+    // XHR, not fetch: only XHR reports upload progress. POST, not PUT: the gateway's
+    // CORS allows no PUT from a browser.
+    return new Promise((resolve, reject) => {
+      const xhr = new XMLHttpRequest();
+      xhr.open("POST", url);
+      if (file.type) xhr.setRequestHeader("Content-Type", file.type);
+      xhr.upload.onprogress = (e) => e.lengthComputable && onprogress?.(e.loaded / e.total);
+      xhr.onload = () =>
+        xhr.status >= 200 && xhr.status < 300
+          ? resolve(xhr.responseText.trim())
+          : reject(new Error(`Upload fehlgeschlagen (${xhr.status}): ${xhr.responseText || xhr.statusText}`));
+      xhr.onerror = () => reject(new Error("Upload fehlgeschlagen (Netzwerk)."));
+      xhr.send(file);
+    });
+  }
 
   // Phantoms (BIfTI catalog from the gateway)
   listPhantomCollections = () => this.call<PhantomCollection[]>("list_phantom_collections");

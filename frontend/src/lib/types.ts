@@ -29,6 +29,17 @@ export interface CasPhantomEntry extends CasPhantom {
   uploaded_at: string | null;
 }
 
+/** A file of the user in the gateway's storage (`list_user_files`). */
+export interface UserFile {
+  sha256: string;
+  name: string;
+  type: string | null;
+  size: number | null;
+  uploaded_at: string | null;
+  /** Download link (no login needed: the hash is the permission). */
+  url: string;
+}
+
 /** Plane of a viewer: transversal, coronal, sagittal or a 3D rendering. Per viewer, not in the state. */
 export type Plane = "tra" | "cor" | "sag" | "3d";
 

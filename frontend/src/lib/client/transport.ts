@@ -8,6 +8,12 @@
 export interface Transport {
   /** Calls an MCP tool; resolves with its structured result, rejects with ToolCallError. */
   callTool(name: string, args?: Record<string, unknown>): Promise<unknown>;
+  /** In a chat (MCP App): post a message as the user. Absent elsewhere. */
+  sendToChat?(text: string): Promise<void>;
+  /** In a chat: tell the model something without a message (replaces the last). */
+  setChatContext?(text: string): Promise<void>;
+  /** In a chat: open a URL in the browser (the app's iframe may not navigate or download). */
+  openLink?(url: string): Promise<void>;
 }
 
 export class ToolCallError extends Error {
