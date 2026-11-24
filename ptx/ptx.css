@@ -50,10 +50,64 @@
   border-color: var(--accent, #3b82f6);
 }
 
+.bshim-mode {
+  display: flex;
+  gap: 4px;
+}
+
+.bshim-mode button {
+  flex: 1;
+  background: var(--bg-panel, #141b2d);
+  color: var(--text, #e8ecff);
+  border: 1px solid var(--border, rgba(255, 255, 255, 0.12));
+  border-radius: 4px;
+  padding: 5px 0;
+  font-size: 12px;
+  cursor: pointer;
+}
+
+.bshim-mode button.active {
+  color: var(--accent, #3b82f6);
+  border-color: var(--accent, #3b82f6);
+}
+
+.ptx-coil-line {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  color: var(--muted, #a9b3da);
+  font-size: 11px;
+  cursor: pointer;
+}
+
+.b0-ch {
+  display: grid;
+  grid-template-columns: 52px minmax(40px, 1fr) 36px;
+  gap: 0 4px;
+  align-items: center;
+  padding: 1px 2px;
+}
+
+.b0-name {
+  font-size: 11px;
+  font-weight: 600;
+  color: var(--ch, var(--text, #e8ecff));
+}
+
+.b0-ch input[type="range"] {
+  width: 100%;
+  accent-color: var(--ch, var(--accent, #3b82f6));
+  margin: 0;
+}
+
+html:not(.pro-user) .tab-btn[data-tab="bshim"] {
+  display: none !important;
+}
+
 .ptx-ring-wrap {
   position: relative;
   width: 100%;
-  max-width: 148px;
+  max-width: 120px;
   margin: 0 auto;
   flex: 0 0 auto;
 }

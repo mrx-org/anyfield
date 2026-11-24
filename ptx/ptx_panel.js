@@ -10,8 +10,10 @@ import {
   densityFromVolume,
   wrapDeg,
 } from "./ptx_b1.js";
+import { SHIM_CHANNELS, buildB0Basis, combineB0 } from "./b0_shim.js";
 
 const COLORS = ["#5eead4", "#67e8f9", "#93c5fd", "#c4b5fd", "#f0abfc", "#fda4af", "#fdba74", "#fde047"];
+const SHIM_COLORS = ["#e5e7eb", "#5eead4", "#67e8f9", "#93c5fd", "#fde047", "#fdba74", "#fda4af", "#c4b5fd", "#f0abfc"];
 const CX = 110;
 const CY = 110;
 const RING = 74;
@@ -91,9 +93,32 @@ function coilTube(pointsM, com, radius, sides) {
   return { pts, tris };
 }
 
+/** Several closed loops drawn as one mesh, so a shim term keeps a single color. */
+function coilTubes(loops, com, radius, sides) {
+  const parts = loops.map((lp) => coilTube(lp.pointsM, com, radius, sides));
+  let nPts = 0;
+  let nTris = 0;
+  for (const p of parts) {
+    nPts += p.pts.length;
+    nTris += p.tris.length;
+  }
+  const pts = new Float32Array(nPts);
+  const tris = new Uint32Array(nTris);
+  let po = 0;
+  let to = 0;
+  let base = 0;
+  for (const p of parts) {
+    pts.set(p.pts, po);
+    po += p.pts.length;
+    for (let i = 0; i < p.tris.length; i++) tris[to++] = p.tris[i] + base;
+    base += p.pts.length / 3;
+  }
+  return { pts, tris };
+}
+
 /**
- * Left-sidebar pTx steering for the 8-channel stadium triangular array.
- * Magnitude and phase of the combined B1+ are shown on the preview viewers.
+ * B-shim rider. B1 shim steers the 8-channel stadium array.
+ * B0 shim drives a second-order insert. The tab is mounted only for pro users.
  */
 export class PtxPanel {
   constructor(nvMod) {
@@ -119,30 +144,49 @@ export class PtxPanel {
     this.coilMeshes = null;
     this._coilKey = "";
     this._meshClip = null;
+    this.mode = "b1";
+    this.b0currents = SHIM_CHANNELS.map(() => 0);
+    this.b0basis = null;
+    this.b0basisKey = "";
+    this._b0building = null;
   }
 
   mount(root) {
     this.root = root;
     root.innerHTML = `
       <div class="ptx-panel">
-        <p class="ptx-note">8Tx stadium triangular head array
-          (<a href="https://doi.org/10.1002/mrm.70269" target="_blank" rel="noopener">MRM 2026</a>).
-          Magnitude and phase relative to Tx1, drawn on the loaded BIfTI grid.</p>
-        <div class="ptx-presets" role="group" aria-label="Drive presets">
-          <button type="button" data-preset="cp" title="Circularly polarized, phase = −azimuth">CP</button>
-          <button type="button" data-preset="center" title="Align every channel at the head center">Center</button>
-          <button type="button" data-preset="cp2" title="Second-order CP, null near the center">CP2</button>
-          <button type="button" data-preset="equal" title="All phases equal">0°</button>
+        <div class="bshim-mode" role="group" aria-label="Shim field">
+          <button type="button" data-mode="b1" class="active">B1 shim</button>
+          <button type="button" data-mode="b0">B0 shim</button>
         </div>
-        <div class="ptx-ring-wrap">
-          <svg id="ptx-ring" viewBox="0 0 220 220" role="img" aria-label="Eight transmit channels around the head"></svg>
+        <label class="ptx-coil-line" title="Draw the active coil on the phantom viewer"><input type="checkbox" id="ptx-coil" checked> Show coil</label>
+        <div id="bshim-b1">
+          <p class="ptx-note">8Tx stadium triangular head array
+            (<a href="https://doi.org/10.1002/mrm.70269" target="_blank" rel="noopener">MRM 2026</a>).
+            Magnitude and phase relative to Tx1, drawn on the loaded BIfTI grid.</p>
+          <div class="ptx-presets" role="group" aria-label="Drive presets">
+            <button type="button" data-preset="cp" title="Circularly polarized, phase = −azimuth">CP</button>
+            <button type="button" data-preset="center" title="Align every channel at the head center">Center</button>
+            <button type="button" data-preset="cp2" title="Second-order CP, null near the center">CP2</button>
+            <button type="button" data-preset="equal" title="All phases equal">0°</button>
+          </div>
+          <div class="ptx-ring-wrap">
+            <svg id="ptx-ring" viewBox="0 0 220 220" role="img" aria-label="Eight transmit channels around the head"></svg>
+          </div>
+          <div class="ptx-options">
+            <label><input type="checkbox" id="ptx-power" checked> Constant transmit power</label>
+            <label title="Retarded phase at 7 T in brain tissue. Off is quasi-static."><input type="checkbox" id="ptx-wave" checked> 7 T tissue phase</label>
+          </div>
+          <div class="ptx-channels" id="ptx-channels"></div>
         </div>
-        <div class="ptx-options">
-          <label><input type="checkbox" id="ptx-power" checked> Constant transmit power</label>
-          <label title="Retarded phase at 7 T in brain tissue. Off is quasi-static."><input type="checkbox" id="ptx-wave" checked> 7 T tissue phase</label>
-          <label title="Draw the eight loops on the phantom viewer"><input type="checkbox" id="ptx-coil" checked> Show coil</label>
+        <div id="bshim-b0" hidden>
+          <p class="ptx-note">Second-order shim insert on a 15 cm cylinder: Z0, X, Y, Z, Z², ZX, ZY, X²−Y², XY.
+            Signed current. Biot–Savart Bz on the loaded BIfTI grid, each term scaled to its own head percentile.</p>
+          <div class="ptx-presets">
+            <button type="button" id="b0-zero" title="Set every shim current to zero">Zero</button>
+          </div>
+          <div class="ptx-channels" id="b0-channels"></div>
         </div>
-        <div class="ptx-channels" id="ptx-channels"></div>
         <div class="ptx-stats" id="ptx-stats">CoV —</div>
         <div class="ptx-status" id="ptx-status">Load a BIfTI phantom, then open this tab.</div>
       </div>
@@ -167,6 +211,15 @@ export class PtxPanel {
       this.showCoil = e.target.checked;
       this.updateCoilMeshes();
     });
+    root.querySelectorAll(".bshim-mode button").forEach((btn) => {
+      btn.addEventListener("click", () => this.setMode(btn.dataset.mode));
+    });
+    root.querySelector("#b0-zero").addEventListener("click", () => {
+      this.b0currents = SHIM_CHANNELS.map(() => 0);
+      this._syncB0Readouts();
+      this.scheduleRedraw();
+    });
+    this._renderB0();
     this.svg.addEventListener("pointerdown", (e) => this._onPointerDown(e));
     this.svg.addEventListener("dblclick", (e) => {
       const g = e.target.closest?.("[data-ch]");
@@ -361,6 +414,55 @@ export class PtxPanel {
     this.statusEl.classList.toggle("error", !!isError);
   }
 
+  setMode(mode) {
+    if (mode !== "b1" && mode !== "b0") return;
+    if (mode === this.mode) return;
+    this.mode = mode;
+    const b1 = this.root?.querySelector("#bshim-b1");
+    const b0 = this.root?.querySelector("#bshim-b0");
+    if (b1) b1.hidden = mode !== "b1";
+    if (b0) b0.hidden = mode !== "b0";
+    this.root?.querySelectorAll(".bshim-mode button").forEach((btn) => {
+      btn.classList.toggle("active", btn.dataset.mode === mode);
+    });
+    this._pendingShow = null;
+    this._focused = false;
+    this._clearCoilMeshes();
+    if (this.active) this.refresh();
+  }
+
+  _renderB0() {
+    const host = this.root?.querySelector("#b0-channels");
+    if (!host) return;
+    host.innerHTML = "";
+    SHIM_CHANNELS.forEach((ch, i) => {
+      const row = document.createElement("div");
+      row.className = "b0-ch";
+      row.style.setProperty("--ch", SHIM_COLORS[i % SHIM_COLORS.length]);
+      row.innerHTML = `
+        <span class="b0-name">${ch.label}</span>
+        <input type="range" min="-1" max="1" step="0.01" value="${this.b0currents[i]}" aria-label="${ch.label} current">
+        <span class="ptx-read">${Number(this.b0currents[i]).toFixed(2)}</span>
+      `;
+      row.querySelector("input").addEventListener("input", (e) => {
+        this.b0currents[i] = Number(e.target.value);
+        row.querySelector(".ptx-read").textContent = this.b0currents[i].toFixed(2);
+        this.scheduleRedraw();
+      });
+      host.appendChild(row);
+    });
+  }
+
+  _syncB0Readouts() {
+    const rows = this.root?.querySelectorAll(".b0-ch") || [];
+    rows.forEach((row, i) => {
+      const input = row.querySelector("input");
+      if (input) input.value = String(this.b0currents[i] ?? 0);
+      const read = row.querySelector(".ptx-read");
+      if (read) read.textContent = Number(this.b0currents[i] ?? 0).toFixed(2);
+    });
+  }
+
   onShow() {
     this.active = true;
     this.refresh();
@@ -379,13 +481,22 @@ export class PtxPanel {
   }
 
   notifyVolumes() {
-    const key = this._volumeKey();
-    if (key === this._volKey) return;
-    this._volKey = key;
+    const key = this._phantomKey();
+    if (key === this._phantomSeen) return;
+    this._phantomSeen = key;
     this.basis = null;
     this.basisKey = "";
+    this.b0basis = null;
+    this.b0basisKey = "";
     this._clearCoilMeshes();
     if (this.active) this.refresh();
+  }
+
+  _phantomKey() {
+    const info = this.nvMod?.getReferenceVolumeInfoForFovSync?.();
+    const vol = info?.vol;
+    if (!vol?.img || !info.dim3) return "";
+    return `${vol.id || vol.name || "vol"}:${info.dim3.join("x")}:${vol.img.length}`;
   }
 
   _volumeKey() {
@@ -404,6 +515,7 @@ export class PtxPanel {
   }
 
   async refresh() {
+    if (this.mode === "b0") return this.refreshB0();
     if (!this.channels.length) return;
     try {
       await this.ensureBasis();
@@ -448,13 +560,57 @@ export class PtxPanel {
       this.basisKey = key;
       this._focused = false;
       this.updateCoilMeshes();
-      this.setStatus("B1+ ready. Drag a knob. Quasi-static model, not full-wave.");
+      this.setStatus("B1 shim ready. Drag a knob. Quasi-static model, not full-wave.");
     } finally {
       this._building = null;
     }
   }
 
+  async refreshB0() {
+    try {
+      await this.ensureB0Basis();
+      if (this.mode !== "b0" || !this.active) return;
+      await this.redrawB0();
+    } catch (e) {
+      console.error(e);
+      this.setStatus(e.message || String(e), true);
+    }
+  }
+
+  async ensureB0Basis() {
+    const key = this._phantomKey();
+    if (!key) {
+      this.setStatus("Load a BIfTI phantom to map B0.");
+      return;
+    }
+    if (this.b0basis && this.b0basisKey === key) return;
+    if (this._b0building) {
+      await this._b0building;
+      if (this.b0basis && this.b0basisKey === key) return;
+    }
+    const info = this.nvMod.getReferenceVolumeInfoForFovSync();
+    if (!info?.affine || info.affine.length < 12) {
+      throw new Error("Phantom affine is missing");
+    }
+    const grid = densityFromVolume(info.vol, info.affine);
+    this.setStatus("Computing the second-order shim set…");
+    this._b0building = buildB0Basis({
+      ...grid,
+      onProgress: (done, total) => this.setStatus(`Shim term ${done} / ${total}`),
+    });
+    try {
+      this.b0basis = await this._b0building;
+      this.b0basisKey = key;
+      this._focused = false;
+      this.updateCoilMeshes();
+      this.setStatus("B0 shim ready. Currents are relative. Drag a slider.");
+    } finally {
+      this._b0building = null;
+    }
+  }
+
   async redraw() {
+    if (this.mode === "b0") return this.redrawB0();
     if (!this.active || !this.basis) return;
     const weights = this.channels.map((_, i) => ({
       mag: this.mags[i],
@@ -470,7 +626,27 @@ export class PtxPanel {
     const dims = [this.basis.nx, this.basis.ny, this.basis.nz];
     const calMin = Math.max(0.02, field.p98 * 0.04);
     const calMax = Math.max(calMin + 0.05, field.p98);
-    this._enqueueShow({ mag: field.mag, phase: field.phase, affine, dims, calMin, calMax });
+    this._enqueueShow({ kind: "b1", mag: field.mag, phase: field.phase, affine, dims, calMin, calMax });
+  }
+
+  async redrawB0() {
+    if (!this.active || !this.b0basis || this.mode !== "b0") return;
+    const field = combineB0(this.b0basis, this.b0currents);
+    const amp = Math.max(0.05, field.p98);
+    if (this.statsEl) {
+      this.statsEl.textContent = `std ${field.std.toFixed(2)} · span ±${field.p98.toFixed(2)}`;
+    }
+    this.updateCoilMeshes();
+    const affine = this.nvMod.getReferenceVolumeInfoForFovSync().affine;
+    const dims = [this.b0basis.nx, this.b0basis.ny, this.b0basis.nz];
+    this._enqueueShow({
+      kind: "b0",
+      data: field.field,
+      affine,
+      dims,
+      calMin: -amp,
+      calMax: amp,
+    });
   }
 
   _encode(affine, dims, data) {
@@ -492,6 +668,7 @@ export class PtxPanel {
       while (this._pendingShow && this.active) {
         const next = this._pendingShow;
         this._pendingShow = null;
+        if (next.kind === "b0" ? this.mode !== "b0" : this.mode !== "b1") continue;
         try {
           await this._showPair(next);
         } catch (e) {
@@ -509,6 +686,8 @@ export class PtxPanel {
   }
 
   async _showPair(job) {
+    if (job.kind === "b0") return this._showB0(job);
+    if (this.mode !== "b1") return;
     const ctx = this.nvMod?.ctx;
     const preview = ctx?.scanPreview;
     const compare = ctx?.scanCompare;
@@ -520,9 +699,9 @@ export class PtxPanel {
       ctx.viewManager.setMode("planning");
     }
     const wasActive = !!compare.isActive;
-    await compare.ensureInitialized();
     if (!wasActive) this.weOpenedCompare = true;
-    if (!this.active) return;
+    await compare.ensureInitialized();
+    if (this.mode !== "b1" || !this.active) return;
     this.ownsPreview = true;
     if (this._canReplace(preview.nv, job.mag) && this._canReplace(compare.module.nv, job.phase)) {
       this._replaceVolume(preview.nv, job.mag, job.calMin, job.calMax);
@@ -559,6 +738,51 @@ export class PtxPanel {
     compare.module.nv?.resizeListener?.();
   }
 
+  async _showB0(job) {
+    if (this.mode !== "b0") return;
+    const ctx = this.nvMod?.ctx;
+    const preview = ctx?.scanPreview;
+    const compare = ctx?.scanCompare;
+    if (!preview?.loadNiftiBytes) {
+      this.setStatus("Viewers are not ready yet.");
+      return;
+    }
+    if (ctx.viewManager && ctx.viewManager.currentMode !== "planning") {
+      ctx.viewManager.setMode("planning");
+    }
+    if (this.weOpenedCompare && compare?.deactivate) {
+      this.ownsPreview = true;
+      compare.deactivate();
+      this.weOpenedCompare = false;
+    }
+    if (this.mode !== "b0" || !this.active) return;
+    this.ownsPreview = true;
+    if (this._canReplace(preview.nv, job.data)) {
+      this._replaceVolume(preview.nv, job.data, job.calMin, job.calMax);
+      const vol = preview.nv.volumes[0];
+      preview.nv.setColormap?.(vol.id, "jet");
+      preview.updateLabel?.("B0 shim");
+    } else {
+      const bytes = this._encode(job.affine, job.dims, job.data);
+      if (this.mode !== "b0" || !this.active) return;
+      await preview.loadNiftiBytes(bytes, "bifti_B0.nii", {
+        skipPeerSync: true,
+        colormap: "jet",
+        calMin: job.calMin,
+        calMax: job.calMax,
+        colormapType: 1,
+        label: "B0 shim",
+      });
+    }
+    if (this.mode !== "b0" || !this.active) return;
+    this._applyCal(preview.nv, job.calMin, job.calMax);
+    if (!this._focused) {
+      this._focusHead(preview.nv);
+      this._focused = true;
+    }
+    preview.nv?.resizeListener?.();
+  }
+
   _clearCoilMeshes() {
     const nv = this.nvMod?.nv;
     if (nv && this.coilMeshes?.length) {
@@ -575,6 +799,7 @@ export class PtxPanel {
   }
 
   updateCoilMeshes() {
+    if (this.mode === "b0") return this._updateB0Meshes();
     const nv = this.nvMod?.nv;
     if (!this.showCoil || !nv?.gl || !this.basis?.com || !this.channels.length || !nv.volumes?.length) {
       if (this.coilMeshes) {
@@ -584,7 +809,7 @@ export class PtxPanel {
       return;
     }
     const com = this.basis.com;
-    const key = `${com[0].toFixed(2)},${com[1].toFixed(2)},${com[2].toFixed(2)}:${this.channels.length}`;
+    const key = `b1:${com[0].toFixed(2)},${com[1].toFixed(2)},${com[2].toFixed(2)}:${this.channels.length}`;
     if (this._coilKey !== key || !this.coilMeshes) {
       this._clearCoilMeshes();
       if (this._meshClip == null) this._meshClip = nv.opts.meshThicknessOn2D;
@@ -605,6 +830,37 @@ export class PtxPanel {
     nv.drawScene();
   }
 
+  _updateB0Meshes() {
+    const nv = this.nvMod?.nv;
+    if (!this.showCoil || !nv?.gl || !this.b0basis?.com || !nv.volumes?.length) {
+      if (this.coilMeshes) {
+        this._clearCoilMeshes();
+        nv?.drawScene?.();
+      }
+      return;
+    }
+    const com = this.b0basis.com;
+    const key = `b0:${com[0].toFixed(2)},${com[1].toFixed(2)},${com[2].toFixed(2)}`;
+    if (this._coilKey !== key || !this.coilMeshes) {
+      this._clearCoilMeshes();
+      if (this._meshClip == null) this._meshClip = nv.opts.meshThicknessOn2D;
+      if (typeof nv.setMeshThicknessOn2D === "function") nv.setMeshThicknessOn2D(COIL_SLICE_MM);
+      this.coilMeshes = SHIM_CHANNELS.map((ch, i) => {
+        const { pts, tris } = coilTubes(ch.loops, com, COIL_TUBE_MM * 0.7, COIL_TUBE_SIDES);
+        const mesh = new NVMesh(pts, tris, ch.label, hexRgba(SHIM_COLORS[i % SHIM_COLORS.length]), 1, true, nv.gl);
+        mesh.colorbarVisible = false;
+        nv.addMesh(mesh);
+        return mesh;
+      });
+      this._coilKey = key;
+    }
+    this.coilMeshes.forEach((mesh, i) => {
+      const amp = Math.max(0, Math.min(1, Math.abs(this.b0currents[i] || 0)));
+      mesh.opacity = 0.22 + 0.78 * amp;
+    });
+    nv.drawScene();
+  }
+
   _canReplace(nv, data) {
     const img = nv?.volumes?.[0]?.img;
     return img instanceof Float32Array && img.length === data?.length;
@@ -621,7 +877,7 @@ export class PtxPanel {
   }
 
   _focusHead(nv) {
-    const mm = this.basis?.com;
+    const mm = (this.mode === "b0" ? this.b0basis : this.basis)?.com;
     if (!nv?.volumes?.[0] || !mm || typeof nv.mm2frac !== "function") return;
     nv.scene.crosshairPos = nv.mm2frac(mm, 0, true);
     nv.drawScene?.();
@@ -639,4 +895,4 @@ export class PtxPanel {
   }
 }
 
-export { OUTSIDE_PHASE_SENTINEL };
+export { PtxPanel as BshimPanel, OUTSIDE_PHASE_SENTINEL };

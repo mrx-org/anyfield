@@ -6,7 +6,6 @@ import { formatScanDisplayTitle } from "./scan_zero/scan_module.js";
 import { volumeIs4D, syncVolumeClimsToCurrent4DFrame, installFrameAwareContrastDrag, installFrameAwareBriConReset } from "./hist_panel/histogram-clim-panel.js";
 import { DEFAULT_CACHE_PHANTOM_ID, biftiCacheAdminBase, fetchCachedPhantomIds, downloadPhantomTarGz, normalizeCacheId, splitCacheId, phantomFolderId } from "./scan_zero/bifti_cache.js";
 import { PyWorkerHost } from "./py_worker_host.js";
-import { PtxPanel } from "./ptx/ptx_panel.js";
 
 /**
  * Base URL for the bundled default nifti_phantom (JSON + NIfTIs).
@@ -365,14 +364,14 @@ export class NiivueModule {
         <div class="tabbed-controls">
           <div class="tabs-header">
             <button class="tab-btn active" data-tab="scans">SCANS</button>
-            <button class="tab-btn" data-tab="ptx" title="8-channel parallel transmit">PTX</button>
+            ${isProUser() ? `<button class="tab-btn" data-tab="bshim" title="B1 and B0 shim">B-SHIM</button>` : ""}
             <button class="tab-btn" data-tab="phantoms">PHANTOMS</button>
             <button class="tab-btn" data-tab="fov">FOV</button>
             <button class="tab-btn" data-tab="view">OPTIONS</button>
           </div>
           <div class="tabs-content">
             <div class="tab-pane active" id="tab-scans-${this.instanceId}">${this._getPanelScansHtml()}</div>
-            <div class="tab-pane" id="tab-ptx-${this.instanceId}"><div id="ptx-root-${this.instanceId}"></div></div>
+            ${isProUser() ? `<div class="tab-pane" id="tab-bshim-${this.instanceId}"><div id="ptx-root-${this.instanceId}"></div></div>` : ""}
             <div class="tab-pane" id="tab-phantoms-${this.instanceId}">${this._getPanelPhantomsHtml()}</div>
             <div class="tab-pane" id="tab-fov-${this.instanceId}">
                 <div class="panel-flat">
@@ -427,9 +426,14 @@ export class NiivueModule {
           btn.classList.add('active');
           const tab = btn.dataset.tab;
           this.containerControls.querySelector(`#tab-${tab}-${this.instanceId}`).classList.add('active');
-          if (labGrid) labGrid.classList.toggle('ptx-sidebar', tab === 'ptx');
-          if (tab === 'ptx') this.ptxPanel?.onShow();
-          else this.ptxPanel?.onHide();
+          if (labGrid) labGrid.classList.toggle('ptx-sidebar', tab === 'bshim');
+          if (tab === 'bshim') {
+            this._bshimWanted = true;
+            this.ptxPanel?.onShow();
+          } else {
+            this._bshimWanted = false;
+            this.ptxPanel?.onHide();
+          }
           if (tab === 'phantoms' && this.jsonEditorCm) this.jsonEditorCm.refresh();
         };
       });
@@ -437,11 +441,15 @@ export class NiivueModule {
 
     this.bindControlElements();
     this.setupEventListeners();
-    if (useTabs) {
+    if (useTabs && isProUser()) {
       const ptxRoot = this.containerControls.querySelector(`#ptx-root-${this.instanceId}`);
       if (ptxRoot) {
-        this.ptxPanel = new PtxPanel(this);
-        this.ptxPanel.mount(ptxRoot);
+        import("./ptx/ptx_panel.js").then(({ BshimPanel }) => {
+          if (!ptxRoot.isConnected) return;
+          this.ptxPanel = new BshimPanel(this);
+          this.ptxPanel.mount(ptxRoot);
+          if (this._bshimWanted) this.ptxPanel.onShow();
+        }).catch((err) => console.error("B-shim failed to load", err));
       }
     }
     if ((this.containerControls || document).querySelector(`#json-editor-${this.instanceId}`)) this.initJsonEditor();
