@@ -15,11 +15,12 @@ Document how **MRI sequence waveforms** are plotted from Pyodide: `seq.plot(...)
 - **Entry:** `plot(..., plot_speed: str = 'chartgpu', ...)` (and related helpers used by the patched `seq.plot` path in the app).
 - **Matplotlib:** For `plot_speed` in `full` / `fast` / `faster`, rendering uses matplotlib as today (`plt.show()` in the execute script when not chartgpu).
 - **ChartGPU export:** For `plot_speed == 'chartgpu'`:
-  - Builds in-memory panel/series data and stores it on **`__main__._chartgpu_last_payload`** via `build_chartgpu_payload` (see implementation for panel layout, tab10-style colors, optional `xyBase64` float32 interleaved encoding for large series).
+  - Builds in-memory panel/series data via `build_chartgpu_payload` (panel layout, tab10-style colors). Payload **`version` is 4**. Structure (titles, colours, ranges, per-series `xyOff`/`xyLen`) is stored on **`__main__._chartgpu_last_payload`**. Numeric samples are one little-endian float32 interleaved blob on **`__main__._chartgpu_last_xy`** — not inlined in the JSON.
   - **No** `plt.show()` for that branch in the injected execute script.
 - **JS bridge:**
-  - `get_chartgpu_payload_json()` — serializes the last payload for `pyodide.runPython` / `runPythonAsync` from JS.
-  - `clear_chartgpu_payload()` — clears `__main__._chartgpu_last_payload` to drop large buffers after render or on failure.
+  - `get_chartgpu_payload_json()` — serializes the structure dict (or the four characters `'null'` if unset).
+  - `get_chartgpu_payload_xy()` — returns the numeric blob as `bytes`, or `b''` if unset.
+  - `clear_chartgpu_payload()` — sets both `__main__._chartgpu_last_payload` and `__main__._chartgpu_last_xy` to `None`.
 - **K-space cache (optional, when checkbox on):**
   - `_patch_calculate_kspace()` — installed from `patch_pypulseq()`; wraps `Sequence.calculate_kspace` and stores **`seq._t_ktraj`** (per-column times aligned with `k_traj`) because the public API returns `k_traj` and `t_adc` but not gradient trajectory times.
   - `ensure_kspace_cache(seq)` — after plot, fills `__main__._kspace_cache` (`t_ktraj`, `kx/ky/kz_grad`, `t_adc`, `kx/ky/kz_adc`, `disp_range_s`).
@@ -39,11 +40,12 @@ Single module for **ChartGPU + `seq.plot` script fragments**. Chart/WebGPU handl
 |--------|------|
 | `SEQ_DEFAULT_PLOT_SPEED` | `'chartgpu'` — default speed string. |
 | `disposeSeqChartGpuHost(host)` | Async teardown: disconnect crosshair/sync, remove device listeners, dispose charts, destroy WebGPU device; clear host fields. |
-| `releaseChartgpuPythonPayload(pyodide)` | Calls `clear_chartgpu_payload()` in Python. |
+| `releaseChartgpuPythonPayload(pyodide)` | Calls `clear_chartgpu_payload()` in Python (structure + xy blob). |
 | `releaseKspaceCache(pyodide)` | Calls `clear_kspace_cache()` in Python. |
-| `renderSeqChartGpuAfterPlot(host, plotRoot, pyodide, plotContainer)` | Main path: parse payload JSON, `requestAdapter` / `requestDevice`, build six panel hosts, `ChartGPU.create`, shared theme, lockstep x-zoom, optional plain left-drag pan, fallbacks on GPU loss / errors. |
-| `buildSeqPlotExecuteFragments({ silent, plotSpeed, debug, showKspace })` | Returns `{ plotBlock, chartgpuClearPy }` — chartgpu vs matplotlib; when `showKspace`, appends `ensure_kspace_cache(seq)` after plot; clears k-space cache in `chartgpuClearPy`. |
-| `normalizeChartGpuSeries`, `chartGpuB64ToFloat32Interleaved`, `chartGpuSeriesDataToInterleavedF32` | Payload normalization / decoding for ChartGPU. |
+| `fetchChartGpuPayload(pyodide)` | Structure JSON + raw xy bytes. Uses `runPythonBytes` when present (seq_check worker bridge); else main-thread `runPythonAsync` + `toJs()`/`destroy()`. |
+| `renderSeqChartGpuAfterPlot(host, plotRoot, pyodide, plotContainer)` | Main path: `fetchChartGpuPayload`, `requestAdapter` / `requestDevice`, build six panel hosts, `ChartGPU.create`, shared theme, lockstep x-zoom, optional plain left-drag pan, fallbacks on GPU loss / errors. |
+| `buildSeqPlotExecuteFragments({ silent, plotSpeed, debug, showKspace })` | Returns `{ plotBlock, chartgpuClearPy }` — chartgpu vs matplotlib; when `showKspace`, appends `ensure_kspace_cache(seq)` after plot; `chartgpuClearPy` clears both payload globals plus k-space cache. |
+| `normalizeChartGpuSeries`, `chartGpuB64ToFloat32Interleaved`, `chartGpuSeriesDataToInterleavedF32` | Payload normalization / decoding for ChartGPU. `normalizeChartGpuSeries(series, xyBytes?)` prefers `xyOff`/`xyLen` views over the blob; then `xyBase64`; then `s.data` (k-space + PSF). |
 | `formatYTick3SigDigits` | Y tick formatter (three significant digits). |
 | `chartGpuYAnchorForExtentHelper`, `chartGpuWithSharedXExtentSeries` | Shared global **x** span across panels without pinning `xAxis.min`/`max` for tick math (invisible helper line `__seqXExtent__`). |
 

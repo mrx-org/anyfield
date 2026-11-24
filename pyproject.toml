@@ -1,0 +1,12 @@
+[tool.pytest.ini_options]
+minversion = "7.0"
+# testpaths keeps a bare `pytest` on the fast unit tests only. The browser suite in
+# tests/e2e/ needs `bash scripts/setup_e2e_deps.sh` first and boots the real app
+# (~10-30s per page), so it is opt-in: run `pytest tests/e2e/` explicitly.
+# See tests/e2e/README.md.
+testpaths = ["tests/python"]
+pythonpath = ["."]
+addopts = "-ra"
+markers = [
+    "e2e: browser test driving the real app in headless Chromium (slow, opt-in)",
+]

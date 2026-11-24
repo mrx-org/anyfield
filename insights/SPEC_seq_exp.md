@@ -103,7 +103,7 @@ _anyfield_json = r'''
   "seq_definition": "inline",
   "seq_func": "anyseq.scripts.gre_seq:seq_gre",
   "simulation": {
-    "backend": "mr0sim",
+    "backend": "modal_http_t4",
     "phantom": "brainweb-20-v2/subj04-3T-1mm-tra",
     "fov_affine": [2.5, 0, 0, -80, 0, 2.5, 0, -80, 0, 0, 2.5, -80, 0, 0, 0, 1],
     "fov_matrix": [64, 64, 1],
@@ -191,7 +191,7 @@ Protocol files are generated with:
 
 **FOV from Pulseq (authoritative for mm size):** After a successful silent execute with `protocolName`, the explorer reads **`seq.definitions['FOV']`** from the last built sequence (`SourceManager._last_sequence` / `__main__.seq`), converts **m → mm**, and emits **`sequence_fov_dims`** on the event hub. Niivue applies this to the FOV **size** sliders (`applySequenceFovDimensions`). **Why:** the sequence run defines the true acquisition FOV; traj / k-space and recon must use the same physical extent. **Mask matrix (X/Y/Z), offsets, and rotation** remain whatever the user set in the FOV tab — only the **mm box size** is overwritten from the sequence.
 
-**Order with SIM (fixes mesh vs recon mismatch):** `runSimPipeline` must call this silent execute **before** `generateFovMaskNifti()`. If the mask is built with old slider FOV and the sequence later pushes different mm values, the ref grid and PyNUFFT output no longer match the yellow box until `loadJob` resyncs — that looked like grow/shrink. With seq-first order, mask + recon + on-screen FOV stay aligned.
+**Order with SIM (fixes mesh vs recon mismatch):** `_httpPrepareAndSubmit` must call this silent execute **before** the FOV snapshot and `generateFovMaskNiftiFromSnapshot()`. If the mask is built with old slider FOV and the sequence later pushes different mm values, the ref grid and PyNUFFT output no longer match the yellow box until `loadJob` resyncs — that looked like grow/shrink. With seq-first order, mask + recon + on-screen FOV stay aligned.
 
 **Manual sync:** **`getFovFromSequence()`** still exists for explicitly re-running the sequence and pushing FOV without starting a full SIM job.
 

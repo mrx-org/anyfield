@@ -15,13 +15,19 @@ import {
     refreshKspaceForSeqWindow,
     getTimeWindowFromZoom,
 } from '../seq_plot.js';
-import { fetchSimCacheFromEvents } from './seq_check_wip_sim.js';
-import { fetchPsfTrajexBundle, runConseq } from './seq_check_psf_trajex.js';
+import { fetchSimCache } from './seq_check_wip_sim.js';
 import { trajIndicesForAdcTimeWindow } from './seq_check_adc_window.js';
 import { createFig6ReconController, renderFig6SimKspace } from './seq_check_fig6.js';
 
 const GRE_EXAMPLE_SEQ_URL =
     'https://raw.githubusercontent.com/pulseq-frame/test-seqs/refs/heads/main/pypulseq/1.4.0/gre.seq';
+/** The example's 256 lines × 256 ADC samples; the upstream file defines FOV but no Matrix. */
+const GRE_EXAMPLE_MATRIX = 'Matrix 256 256 1';
+
+function withGreExampleMatrix(seqText) {
+    if (/^\s*Matrix\s/im.test(seqText)) return seqText;
+    return seqText.replace(/^\[DEFINITIONS\][^\n]*\n/m, (head) => `${head}${GRE_EXAMPLE_MATRIX}\n`);
+}
 
 /** Short status lines for the header (no toolapi / Pyodide jargon). */
 const LOAD_STATUS = {
@@ -29,7 +35,6 @@ const LOAD_STATUS = {
     ready: 'Ready — upload a .seq or GRE example',
     queued: 'Queued — waiting for backend',
     read: 'Reading sequence…',
-    traj: 'Computing trajectories…',
     sim: 'Running simulation…',
     psf: 'Computing PSF…',
     plot: 'Drawing waveforms…',
@@ -128,6 +133,7 @@ export async function bootSeqCheckApp(root = document) {
         _loadGen: 0,
         _gridMeta: null,
         _gridMetaFromSeq: null,
+        _mplFallbackObjectUrl: null,
     };
 
     /** @type {keyof typeof LOAD_STATUS | ''} */
@@ -297,28 +303,74 @@ export async function bootSeqCheckApp(root = document) {
         console.log(`[seq_check] ${label}`, data);
     }
 
-    async function rerenderSeqWaveformsOnly() {
-        if (!py || !host._lastSeqText || !waveformsEl || processingSeq) return;
-        const wantsDark = resolveSeqPlotWantsDark(host, null);
-        const themePy = getSeqPlotMatplotlibThemePy(wantsDark);
+    function revokeMplFallbackUrl() {
+        if (host._mplFallbackObjectUrl) {
+            URL.revokeObjectURL(host._mplFallbackObjectUrl);
+            host._mplFallbackObjectUrl = null;
+        }
+    }
+
+    function mountMplFallbackPng(containerEl, bytes, plotSpeed) {
+        revokeMplFallbackUrl();
+        const copy = bytes instanceof Uint8Array ? bytes : new Uint8Array(bytes || []);
+        const blob = new Blob([copy], { type: 'image/png' });
+        const url = URL.createObjectURL(blob);
+        host._mplFallbackObjectUrl = url;
+        containerEl.innerHTML = `<div class="seq-mpl-fallback-wrap"><div class="seq-chartgpu-fallback">WebGPU unavailable — static matplotlib plot (${plotSpeed}).</div><img class="seq-mpl-fallback" alt="Sequence waveforms" src="${url}"></div>`;
+    }
+
+    /**
+     * ChartGPU when WebGPU is present. Otherwise Agg PNG: WebAgg cannot import
+     * document in this worker, and plt.show() never had a DOM to parent into.
+     * @param {HTMLElement} containerEl
+     * @param {{ stillCurrent?: () => boolean }} [opts]
+     */
+    async function plotSeqWaveformsInto(containerEl, opts = {}) {
+        const stillCurrent = opts.stillCurrent || (() => true);
         const waveformPlotSpeed = isWebGpuAvailable()
             ? 'chartgpu'
             : SEQ_CHARTGPU_FALLBACK_PLOT_SPEED;
-        const mplShow =
-            waveformPlotSpeed === SEQ_CHARTGPU_FALLBACK_PLOT_SPEED ? '\nplt.show()' : '';
-        await disposeSeqChartGpuHost(host);
-        try {
+        const themePy = getSeqPlotMatplotlibThemePy(resolveSeqPlotWantsDark(host, null));
+        if (waveformPlotSpeed === 'chartgpu') {
+            revokeMplFallbackUrl();
             await py.runPythonAsync(`
 import matplotlib.pyplot as plt
 plt.close('all')
 ${themePy}
-seq.plot(plot_now=False, plot_speed='${waveformPlotSpeed}')${mplShow}
+seq.plot(plot_now=False, plot_speed='chartgpu')
 `);
-            if (waveformPlotSpeed === 'chartgpu') {
-                await renderSeqChartGpuAfterPlot(host, null, py, waveformsEl);
-            }
+            if (!stillCurrent()) return;
+            await renderSeqChartGpuAfterPlot(host, null, py, containerEl);
+            return;
+        }
+        const png = await py.runPythonBytes(`
+import io
+import matplotlib as mpl
+mpl.use('Agg', force=True)
+import matplotlib.pyplot as plt
+plt.close('all')
+${themePy}
+seq.plot(plot_now=False, plot_speed='${waveformPlotSpeed}')
+if not plt.get_fignums():
+    raise RuntimeError('seq.plot produced no matplotlib figure')
+buf = io.BytesIO()
+fig = plt.gcf()
+fig.savefig(buf, format='png', dpi=140, bbox_inches='tight', facecolor=fig.get_facecolor())
+plt.close('all')
+buf.getvalue()
+`);
+        if (!stillCurrent()) return;
+        mountMplFallbackPng(containerEl, png, waveformPlotSpeed);
+    }
+
+    async function rerenderSeqWaveformsOnly() {
+        if (!py || !host._lastSeqText || !waveformsEl || processingSeq) return;
+        await disposeSeqChartGpuHost(host);
+        try {
+            await plotSeqWaveformsInto(waveformsEl);
         } catch (e) {
             console.error(e);
+            revokeMplFallbackUrl();
             waveformsEl.innerHTML = `<div class="seq-chartgpu-fallback error">${e?.message || e}</div>`;
         }
     }
@@ -411,7 +463,7 @@ seq.plot(plot_now=False, plot_speed='${waveformPlotSpeed}')${mplShow}
         const info = await py.runPythonAsync(
             'set_psf_bundle_py(_psf_kspace_json, _psf_tissues_json)',
         );
-        logKspace('PSF trajex bundle', JSON.parse(String(info)));
+        logKspace('PSF bundle', JSON.parse(String(info)));
     }
 
     async function installSimCacheInPyodide(sim) {
@@ -546,6 +598,7 @@ seq.plot(plot_now=False, plot_speed='${waveformPlotSpeed}')${mplShow}
             host._seqZoomKspaceCleanup = null;
         }
         await disposeSeqChartGpuHost(host);
+        revokeMplFallbackUrl();
         disposePsfSignalChart(host);
         disposePsfCharts(host);
         initSeqCheckEmptyLayout(
@@ -574,27 +627,6 @@ seq.plot(plot_now=False, plot_speed='${waveformPlotSpeed}')${mplShow}
 
         const vfsPath = '/upload.seq';
         await pyClient.fsWrite(vfsPath, seqText);
-
-        setLoadPhaseIfEarly('traj');
-        const conseqPromise = runConseq(seqText, () => {});
-
-        const simPromise = conseqPromise
-            .then((events) => {
-                if (isLoadCurrent(gen)) setLoadPhaseIfEarly('sim');
-                return fetchSimCacheFromEvents(events, () => {});
-            })
-            .then((sim) => {
-                if (!isLoadCurrent(gen)) return;
-                host._simCache = sim;
-            })
-            .catch((e) => {
-                if (!isLoadCurrent(gen) || isPyStaleError(e)) return;
-                console.error(e);
-                if (reconMetaEl) {
-                    reconMetaEl.hidden = false;
-                    reconMetaEl.textContent = `Sim failed: ${e?.message || e}`;
-                }
-            });
 
         try {
             const seqReadyPromise = py.runPythonAsync(`
@@ -627,20 +659,43 @@ seq.read('${vfsPath}')
                 logKspace('k-space cache', host._kspaceCache.meta);
             });
 
-            // PSF + sim + k-space run while ChartGPU seq.plot / waveform render is in flight.
-            const psfPromise = Promise.all([conseqPromise, gridMetaPromise])
-                .then(async ([events, gridMeta]) => {
-                    if (!gridMeta || !isLoadCurrent(gen)) return null;
-                    if (isLoadCurrent(gen)) setLoadPhaseIfEarly('psf');
-                    return fetchPsfTrajexBundle(
-                        seqText,
-                        {
-                            fov: [gridMeta.fov_x, gridMeta.fov_y, gridMeta.fov_z ?? 0.005],
-                            res: [gridMeta.Nx, gridMeta.Ny, gridMeta.Nz ?? 1],
-                        },
-                        () => {},
-                        events,
-                    );
+            // One gateway job returns the sim and the PSF; it needs the grid for the PSF, and
+            // runs while ChartGPU seq.plot / waveform render is in flight.
+            setLoadPhaseIfEarly('sim');
+            const simJobPromise = gridMetaPromise.then((gridMeta) => {
+                if (!gridMeta || !isLoadCurrent(gen)) return null;
+                return fetchSimCache(
+                    seqText,
+                    pyClient,
+                    {
+                        fov: [gridMeta.fov_x, gridMeta.fov_y, gridMeta.fov_z ?? 0.005],
+                        res: [gridMeta.Nx, gridMeta.Ny, gridMeta.Nz ?? 1],
+                    },
+                    () => {},
+                    () => isLoadCurrent(gen),
+                );
+            });
+
+            const simPromise = simJobPromise
+                .then((sim) => {
+                    if (!sim || !isLoadCurrent(gen)) return;
+                    host._simCache = sim;
+                })
+                .catch((e) => {
+                    if (!isLoadCurrent(gen) || isPyStaleError(e)) return;
+                    console.error(e);
+                    if (reconMetaEl) {
+                        reconMetaEl.hidden = false;
+                        reconMetaEl.textContent = `Sim failed: ${e?.message || e}`;
+                    }
+                });
+
+            const psfPromise = simJobPromise
+                .then((sim) => {
+                    if (!sim || !isLoadCurrent(gen)) return null;
+                    setLoadPhaseIfEarly('psf');
+                    if (!sim.psfBundle) throw new Error('gateway returned no PSF signals');
+                    return sim.psfBundle;
                 })
                 .then(async (bundle) => {
                     if (!bundle || !isLoadCurrent(gen)) return;
@@ -667,34 +722,21 @@ seq.read('${vfsPath}')
                     host._psfBundle = null;
                     disposePsfSignalChart(host);
                     if (psfSignalEl) {
-                        psfSignalEl.innerHTML = `<div class="seq-chartgpu-fallback">PSF trajex failed: ${e?.message || e}</div>`;
+                        psfSignalEl.innerHTML = `<div class="seq-chartgpu-fallback">PSF failed: ${e?.message || e}</div>`;
                         psfSignalEl.parentElement?.querySelector('.psf-signal-legend')?.remove();
                     }
                     if (psfMetaEl) {
                         psfMetaEl.hidden = false;
-                        psfMetaEl.textContent = `PSF trajex failed: ${e?.message || e}`;
+                        psfMetaEl.textContent = `PSF failed: ${e?.message || e}`;
                     }
                 });
 
             const waveformPromise = seqReadyPromise.then(async () => {
                 if (!isLoadCurrent(gen)) return;
                 setLoadPhase('plot');
-                const waveformPlotSpeed = isWebGpuAvailable()
-                    ? 'chartgpu'
-                    : SEQ_CHARTGPU_FALLBACK_PLOT_SPEED;
-                const mplShow =
-                    waveformPlotSpeed === SEQ_CHARTGPU_FALLBACK_PLOT_SPEED ? '\nplt.show()' : '';
-                const themePy = getSeqPlotMatplotlibThemePy(resolveSeqPlotWantsDark(host, null));
-                await py.runPythonAsync(`
-import matplotlib.pyplot as plt
-plt.close('all')
-${themePy}
-seq.plot(plot_now=False, plot_speed='${waveformPlotSpeed}')${mplShow}
-`);
-                if (!isLoadCurrent(gen)) return;
-                if (waveformPlotSpeed === 'chartgpu') {
-                    await renderSeqChartGpuAfterPlot(host, null, py, waveformsEl);
-                }
+                await plotSeqWaveformsInto(waveformsEl, {
+                    stillCurrent: () => isLoadCurrent(gen),
+                });
             });
 
             await Promise.all([waveformPromise, kspacePromise]);
@@ -726,6 +768,7 @@ seq.plot(plot_now=False, plot_speed='${waveformPlotSpeed}')${mplShow}
             loadStatusPhase = '';
             setStatus(`Failed — ${e?.message || e}`, true);
             if (waveformsEl) {
+                revokeMplFallbackUrl();
                 waveformsEl.innerHTML = `<div class="seq-chartgpu-fallback error">${e?.message || e}</div>`;
             }
         } finally {
@@ -755,7 +798,7 @@ seq.plot(plot_now=False, plot_speed='${waveformPlotSpeed}')${mplShow}
             if (!res.ok) {
                 throw new Error(`HTTP ${res.status} ${res.statusText}`);
             }
-            const seqText = await res.text();
+            const seqText = withGreExampleMatrix(await res.text());
             await queueOrProcessSeqText(seqText, 'gre.seq');
         } catch (e) {
             console.error(e);

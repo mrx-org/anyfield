@@ -1,5 +1,14 @@
 # Release notes
 
+## v4.0.0
+
+- **Pyodide in a Web Worker** — the main app's Python (sequence build + plot, `/phantom` JSON execute, HTTP result decode, scan recon) runs on a dedicated worker (`anyfield_py_worker.js`), so the UI stays responsive during long runs. ChartGPU samples cross as bytes; the no-WebGPU fallback renders an Agg PNG.
+- **Fly.io retired** — the WebSocket sim pipeline (conseq / trajex / mr0sim / rapisim) is gone; every SCAN runs on the Modal HTTP gateways (mr0 or PDGv2). Old links and protocols naming `mr0sim` / `rapisim` map to the default mr0 T4 backend.
+- **seq_check on Modal** — `seq_check_web` simulates on the PDGv2 gateway; signal, trajectory and the per-tissue PSF come from one job (gateway `psf` option, dominant-state trajex-like k-space) instead of Fly.io conseq/trajex. The GRE example gets a `Matrix 256 256 1` definition.
+- **seq check button (pro)** — with `?pro=1`, **seq check** next to **plot seq** opens the current protocol in `seq_check_web` in a new tab.
+- **One recon** — seq_check and the scanner share `scan_zero/recon_kernels.py`.
+- **Internals** — `ViewManager` / bootstrap extracted from `index.html`, window globals replaced by one debug seam, dead explorer/source-manager paths removed; e2e suite (Playwright) serves GitHub sources and the default phantom from local fixtures.
+
 ## v3.0.2
 
 - **HTTP SCAN + Save-as configs** — selecting a local Save-as phantom JSON (e.g. `*_copy.json`) no longer rewrites `phantom.id` to an uncached 3-segment stem. Modal HTTP jobs keep the cached folder id and send the editor JSON as `phantom.config`.

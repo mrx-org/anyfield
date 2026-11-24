@@ -10,7 +10,6 @@ import os
 import sys
 import re
 import ast
-from types import ModuleType
 from pathlib import Path
 from typing import get_origin, get_args
 
@@ -98,6 +97,17 @@ def _ast_eval_simple_default(node):
     raise ValueError(f'Cannot evaluate: {ast.dump(node)}')
 
 
+def _json_safe_default(value):
+    """JSON cannot encode NaN/Inf; use null so JS can skip with Number.isFinite."""
+    import math
+
+    if isinstance(value, float) and not math.isfinite(value):
+        return None
+    if isinstance(value, (list, tuple)):
+        return [_json_safe_default(v) for v in value]
+    return value
+
+
 def _ast_default_type_name(value):
     if isinstance(value, bool):
         return 'bool'
@@ -127,16 +137,40 @@ def _ast_param_type_from_annotation(arg):
     return None
 
 
+def _ast_np_array_payload(node):
+    """Return the first-arg AST of ``np.array(...)`` / ``numpy.array(...)``, else None.
+
+    ``seq_explorer.js`` treats type ``ndarray`` like ``list``: it JSON-stringifies
+    the default into the input box and wraps the user's text in ``np.array(...)``.
+    The inspect extractor already emits that pair; this is the AST-side match.
+    """
+    if not isinstance(node, ast.Call) or not node.args:
+        return None
+    func = node.func
+    if not (
+        isinstance(func, ast.Attribute)
+        and func.attr == 'array'
+        and isinstance(func.value, ast.Name)
+        and func.value.id in ('np', 'numpy')
+    ):
+        return None
+    return node.args[0]
+
+
 def _ast_param_dict_from_arg(arg, default_node):
     name = arg.arg
     val, type_name = None, 'None'
 
     if default_node is not None:
         try:
-            val = _ast_eval_simple_default(default_node)
+            array_payload = _ast_np_array_payload(default_node)
+            val = _ast_eval_simple_default(
+                array_payload if array_payload is not None else default_node
+            )
             if isinstance(val, (list, tuple)):
                 val = list(val)
-            type_name = _ast_default_type_name(val)
+            type_name = 'ndarray' if array_payload is not None else _ast_default_type_name(val)
+            val = _json_safe_default(val)
         except Exception:
             try:
                 val = ast.unparse(default_node)
@@ -308,13 +342,72 @@ def parse_metadata_toml(toml_text):
     })
 
 
+# IPython line/cell magic at a statement boundary: %matplotlib, %%time, ...
+_INLINE_IPYTHON_MAGIC = re.compile(r'%%?[A-Za-z]\w*')
+
+
+def _strip_inline_ipython_magic(line):
+    """Remove a trailing IPython magic, leaving Python ``%`` alone.
+
+    Whole-line magics are dropped by the caller. This only strips
+    ``statement %magic args`` when ``%`` sits outside string literals and
+    comments, so ``y = '%d' % n`` and ``x = 5 %2`` stay intact.
+    """
+    i = 0
+    n = len(line)
+    quote = None
+
+    while i < n:
+        if quote:
+            if quote in ("'''", '"""'):
+                if line.startswith(quote, i):
+                    i += 3
+                    quote = None
+                else:
+                    i += 1
+                continue
+            ch = line[i]
+            if ch == '\\':
+                i += 2
+                continue
+            if ch == quote:
+                quote = None
+            i += 1
+            continue
+
+        if line.startswith("'''", i):
+            quote = "'''"
+            i += 3
+            continue
+        if line.startswith('"""', i):
+            quote = '"""'
+            i += 3
+            continue
+
+        ch = line[i]
+        if ch in "'\"":
+            quote = ch
+            i += 1
+            continue
+        if ch == '#':
+            break
+        if ch == '%':
+            preceded = i == 0 or line[i - 1].isspace() or line[i - 1] == ';'
+            if preceded and _INLINE_IPYTHON_MAGIC.match(line, i):
+                start = i
+                while start > 0 and line[start - 1].isspace():
+                    start -= 1
+                return line[:start]
+        i += 1
+
+    return line
+
+
 class SourceManager:
     """Manages sequence sources and their extraction."""
     
     def __init__(self, pyodide=None):
         self.pyodide = pyodide
-        self.sources = []
-        self.sequences = {}
         
     def load_sources_config(self, config_path_or_code):
         """
@@ -343,16 +436,10 @@ class SourceManager:
                     raise ValueError("sources.toml must define a [[sources]] array")
                 except ValueError:
                     raise
-                except Exception as e:
-                    raise ValueError(f"Failed to parse sources.toml: {type(e).__name__}: {e}")
 
             raise ValueError("Config must be sources.toml ([[sources]] array) or JSON")
         else:
             raise ValueError("Config must be a string (TOML or JSON)")
-    
-    def add_source(self, source):
-        """Add a source to the manager."""
-        self.sources.append(source)
     
     def get_functions_from_package(self, package_path, filter_seq_prefix=False):
         """
@@ -378,7 +465,9 @@ class SourceManager:
                     
                     try:
                         module = importlib.import_module(modname)
-                        module_basename = os.path.basename(modname)
+                        # Last dotted segment, matching noexec's file stem. The tree
+                        # stores `${moduleName}.py` and labels the last segment.
+                        module_basename = modname.rsplit('.', 1)[-1]
                         
                         functions = []
                         for name in dir(module):
@@ -408,7 +497,7 @@ class SourceManager:
             else:
                 # Single module
                 module = importlib.import_module(package_path)
-                module_name = os.path.basename(package_path)
+                module_name = package_path.rsplit('.', 1)[-1]
                 functions = []
                 for name in dir(module):
                     if name.startswith('_'):
@@ -630,7 +719,9 @@ class SourceManager:
                         args = get_args(ann)
                         if len(args) >= 2 and args[1] in ('file', 'url'):
                             type_name = args[1]
-                
+
+                val = _json_safe_default(val)
+
                 params.append({
                     'name': name,
                     'default': val,
@@ -675,8 +766,8 @@ class SourceManager:
                     trimmed = line.strip()
                     # Skip empty lines, shell commands (!), magic commands (%), and help commands (?)
                     if trimmed and not trimmed.startswith('!') and not trimmed.startswith('%') and not trimmed.startswith('?'):
-                        # Remove inline magic commands (e.g., "code %matplotlib inline")
-                        cleaned_line = re.sub(r'\s*%\w+.*$', '', line)
+                        # Trailing IPython magics only (e.g. "code %matplotlib inline")
+                        cleaned_line = _strip_inline_ipython_magic(line)
                         if cleaned_line.strip():
                             cleaned_lines.append(cleaned_line)
                 
@@ -701,7 +792,6 @@ class SourceManager:
         import os
         import sys
         import importlib
-        from types import ModuleType
 
         # Ensure filesystem root is on path so /built_in_seq can be imported
         # (protocols wrapping built-in sequences use "from built_in_seq.xxx import seq_xxx")
@@ -713,24 +803,6 @@ class SourceManager:
         SourceManager._last_sequence = None
         if hasattr(__main__, 'seq'):
             __main__.seq = None
-        
-        # Remove any mock modules that might interfere with real imports
-        for module_name in ['pypulseq', 'mrseq', 'ismrmrd']:
-            if module_name in sys.modules:
-                mod = sys.modules[module_name]
-                # Check if it's a mock (simple ModuleType without __file__ or proper structure)
-                is_mock = (
-                    hasattr(mod, '__class__') and 
-                    mod.__class__.__name__ == 'ModuleType' and
-                    not hasattr(mod, '__file__') and
-                    len(dir(mod)) < 10  # Mocks have very few attributes
-                )
-                if is_mock:
-                    del sys.modules[module_name]
-                    # Also remove any submodules
-                    keys_to_remove = [k for k in list(sys.modules.keys()) if k.startswith(module_name + '.')]
-                    for k in keys_to_remove:
-                        del sys.modules[k]
         
         # Force reimport of packages to ensure real modules are loaded
         try:
@@ -792,7 +864,7 @@ class SourceManager:
             elif isinstance(result, (list, tuple)) and len(result) > 0 and is_seq(result[0]):
                 seq_to_store = result[0]
             
-            if seq_to_store:
+            if seq_to_store is not None:
                 __main__.seq = seq_to_store
                 # Also store via sys.modules to ensure it's accessible
                 sys.modules['__main__'].seq = seq_to_store

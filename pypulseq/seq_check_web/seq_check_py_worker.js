@@ -23,6 +23,27 @@ function post(msg, transfer = []) {
     self.postMessage(msg, transfer);
 }
 
+/** A byte view is only safe to transfer when it owns its whole backing buffer. */
+function detachable(bytes) {
+    const buf = bytes instanceof Uint8Array ? bytes : new Uint8Array(bytes);
+    // A view into the WASM heap would detach the heap out from under the interpreter.
+    const heap = pyodide && pyodide._module && pyodide._module.HEAPU8;
+    if (heap && buf.buffer === heap.buffer) {
+        return new Uint8Array(buf);
+    }
+    if (buf.byteOffset !== 0 || buf.byteLength !== buf.buffer.byteLength) {
+        return new Uint8Array(buf);
+    }
+    return buf;
+}
+
+function isPyBytesLike(result) {
+    if (result == null) return false;
+    if (result instanceof ArrayBuffer || ArrayBuffer.isView(result)) return true;
+    const t = result.type;
+    return t === 'bytes' || t === 'bytearray' || t === 'memoryview';
+}
+
 function isStale(gen) {
     return gen != null && gen !== activeGen;
 }
@@ -52,16 +73,30 @@ async function handleInit(gen) {
 
     if (isStale(gen)) return;
 
-    const [plotUtilsCode, reconCode, psfCode] = await Promise.all([
+    const [plotUtilsCode, reconCode, psfCode, reconKernelsCode] = await Promise.all([
         fetchPyModuleText('seq_plot_utils.py'),
         fetchPyModuleText('seq_check_web/seq_check_py_recon.py'),
         fetchPyModuleText('seq_check_web/seq_check_py_psf.py'),
+        // Shared with the main app's SIM pipeline; seq_check_py_recon.py imports it
+        // rather than carrying its own copy of the DCF and adjoint NUFFT.
+        fetchPyModuleText('../scan_zero/recon_kernels.py'),
     ]);
 
     if (isStale(gen)) return;
 
+    pyodide.FS.mkdirTree('/scan_zero');
+    pyodide.FS.writeFile('/scan_zero/recon_kernels.py', reconKernelsCode);
+    await pyodide.runPythonAsync(`
+import sys
+if "/scan_zero" not in sys.path:
+    sys.path.insert(0, "/scan_zero")
+`);
+
     await pyodide.runPythonAsync(`
 import matplotlib as mpl
+# Worker has no DOM; WebAgg fails at import (from js import document).
+# ChartGPU export never rasterises a figure; the no-WebGPU path returns an Agg PNG.
+mpl.use('Agg')
 import matplotlib.pyplot as plt
 mpl.rcParams.update({
     'figure.facecolor': '#0f1424',
@@ -92,6 +127,25 @@ async function handleRunPython(id, gen, code) {
     const result = await pyodide.runPythonAsync(code);
     if (isStale(gen)) {
         post({ type: 'result', id, gen, stale: true });
+        return;
+    }
+    if (isPyBytesLike(result)) {
+        let jsBytes = result;
+        if (typeof result.toJs === 'function') {
+            try {
+                jsBytes = result.toJs();
+            } finally {
+                if (typeof result.destroy === 'function') {
+                    try {
+                        result.destroy();
+                    } catch {
+                        /* already destroyed */
+                    }
+                }
+            }
+        }
+        const buf = detachable(jsBytes || new Uint8Array(0));
+        post({ type: 'result', id, gen, ok: true, bytes: buf }, [buf.buffer]);
         return;
     }
     let value = null;
@@ -132,7 +186,13 @@ async function handleFsRead(id, gen, path) {
         return;
     }
     const bytes = pyodide.FS.readFile(path);
-    const buf = bytes instanceof Uint8Array ? bytes : new Uint8Array(bytes);
+    let buf = bytes instanceof Uint8Array ? bytes : new Uint8Array(bytes);
+    // Only ever transfer a buffer this view owns outright. FS.readFile hands back
+    // a fresh allocation today, but transferring a view *into* the WASM heap
+    // would detach the heap out from under the interpreter.
+    if (buf.byteOffset !== 0 || buf.byteLength !== buf.buffer.byteLength) {
+        buf = new Uint8Array(buf);
+    }
     post({ type: 'result', id, gen, ok: true, bytes: buf }, [buf.buffer]);
 }
 
@@ -179,14 +239,16 @@ self.onmessage = async (ev) => {
 
         post({ type: 'result', id, gen, ok: false, error: `Unknown RPC type: ${type}` });
     } catch (e) {
-        if (!isStale(gen)) {
-            post({
-                type: 'result',
-                id,
-                gen,
-                ok: false,
-                error: e?.message || String(e),
-            });
-        }
+        // Always send a terminal reply, even once the generation has moved on.
+        // The client queues each request off the previous one, so a request that
+        // never settles wedges the queue for the rest of the session.
+        post({
+            type: 'result',
+            id,
+            gen,
+            ok: false,
+            stale: isStale(gen),
+            error: e?.message || String(e),
+        });
     }
 };

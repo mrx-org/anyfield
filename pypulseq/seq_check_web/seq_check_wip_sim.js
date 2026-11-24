@@ -1,166 +1,165 @@
 /**
- * MR sim via toolapi-wasm — same approach as the Fly.io demo pages:
- *   https://tool-rapisim.fly.dev/  and  https://tool-mr0sim.fly.dev/
+ * seq_check's simulated k-space and PSF, from one PDGv2 Modal HTTP gateway job.
  *
- * Uses toolapi-wasm@0.4.5 (unpkg CDN) to call the Fly.io tool pipeline:
- *   conseq → phantomlib + (rapisim | mr0sim) + trajex
- * All in the browser over WebSocket, no Python proxy needed.
+ * The gateway simulates the uploaded `.seq` on a cached BIfTI phantom and returns signal
+ * and trajectory together (`signal` + `ktraj` in the result `.npz`). The job's `psf`
+ * option adds one dominant-state (trajex-like) signal per PSF tissue on that same
+ * trajectory (`psf_signal`), so the PSF needs no separate call either. The phantom grid is
+ * brainweb subj04's central axial slice at 2.5 mm, the same grid the retired Fly.io
+ * phantomlib served.
  */
 
-import init, { call } from 'https://unpkg.com/toolapi-wasm@0.4.5/toolapi_wasm.js';
-import { runConseq } from './seq_check_psf_trajex.js';
+import { DEFAULT_CACHE_PHANTOM_ID } from '../../scan_zero/bifti_cache.js';
+import { resolveHttpSimBaseUrl, SIM_BACKENDS } from '../../scan_zero/sim_backends.js';
 
-const CONSEQ_ADDR = 'wss://tool-conseq.fly.dev/tool';
-const TRAJEX_ADDR = 'wss://tool-trajex.fly.dev/tool';
-/** Modal-hosted mr0sim on a T4 GPU (same toolapi protocol as the Fly mr0sim tool). */
-const MR0SIM_T4_ADDR = 'wss://mzaiss--tool-mr0sim-modal-serve-t4.modal.run/tool';
-const PHANTOMLIB_ADDR = 'wss://tool-phantomlib-flyio.fly.dev/tool';
+const SIM_BACKEND = SIM_BACKENDS.pdgv2_t4;
+const SIM_LABEL = SIM_BACKEND.label;
+const PHANTOM_RES = [72, 87, 1];
+const PHANTOM_AFFINE = [
+    [2.5, 0.0, 0.0, -90.0],
+    [0.0, 2.5, 0.0, -108.75],
+    [0.0, 0.0, 2.5, -1.25],
+];
 
-let wasmReady = false;
+/** Applied to res/(2·fov) per axis before the PSF (relaxes the in-simulator Nyquist cutoff). */
+const NYQUIST_SCALE_FACTOR = 1.5;
 
-/** Initialize toolapi-wasm (idempotent). */
-export async function initToolApi() {
-    if (!wasmReady) {
-        await init();
-        wasmReady = true;
+/** Same tissues / T1,T2,T2' as seq_check.py get_or_compute_psf_bundle. */
+export const PSF_TISSUES = [
+    { name: 'Gray Matter', T1: 1.56, T2: 0.083, T2dash: 0.32 },
+    { name: 'White Matter', T1: 0.83, T2: 0.075, T2dash: 0.18 },
+    { name: 'CSF', T1: 4.16, T2: 1.65, T2dash: 0.059 },
+    /** brain_default phantom; the PSF uses T1/T2/T2′ only (no dB0 shift). */
+    { name: 'Fat', T1: 0.37, T2: 0.125, T2dash: 0.012 },
+];
+
+const POLL_MS = 2000;
+/** Gives up on a job that never finishes (Modal cold start + queue + sim). */
+const JOB_TIMEOUT_MS = 10 * 60 * 1000;
+const NPZ_VFS_PATH = '/tmp/seq_check_sim.npz';
+
+/** Decodes the result `.npz` on the seq_check worker; the last expression is the JSON reply. */
+const DECODE_NPZ_PY = `
+import json
+import numpy as np
+_d = np.load(${JSON.stringify(NPZ_VFS_PATH)})
+_s = np.asarray(_d["signal"]).ravel()
+_k = np.asarray(_d["ktraj"], dtype=np.float64)
+if _k.ndim == 2 and _k.shape[0] in (3, 4) and _k.shape[1] not in (3, 4):
+    _k = _k.T
+_n = int(min(_s.size, _k.shape[0]))
+_t = np.zeros((_k.shape[0], 4))
+_t[:, :min(4, _k.shape[1])] = _k[:, :4]
+_psf = None
+if "psf_signal" in _d.files:
+    _ps = np.asarray(_d["psf_signal"])
+    _psf = {
+        "names": [str(x) for x in _d["psf_tissue_names"]],
+        "signal": [np.stack([p.real, p.imag], axis=1).tolist() for p in _ps],
+        "nyquist": np.asarray(_d["psf_nyquist"], dtype=np.float64).tolist(),
     }
+json.dumps({
+    "traj": _t[:_n].tolist(),
+    "signal": np.stack([_s.real[:_n], _s.imag[:_n]], axis=1).tolist(),
+    "psf_kspace": _t.tolist(),
+    "psf": _psf,
+})
+`;
+
+async function readJson(resp, what) {
+    if (!resp.ok) {
+        const detail = await resp.text().catch(() => '');
+        throw new Error(`${what} failed (${resp.status}): ${detail}`);
+    }
+    return resp.json();
 }
 
-function buildPhantomInput() {
-    return {
-        Dict: {
-            subject: { Int: 4 },
-            res_x: { Int: 72 },
-            res_y: { Int: 87 },
-            res_z: { Int: 1 },
-            affine: {
-                List: [
-                    { List: [{ Float: 2.5 }, { Float: 0.0 }, { Float: 0.0 }, { Float: -90.0 }] },
-                    { List: [{ Float: 0.0 }, { Float: 2.5 }, { Float: 0.0 }, { Float: -108.75 }] },
-                    { List: [{ Float: 0.0 }, { Float: 0.0 }, { Float: 2.5 }, { Float: -1.25 }] },
-                ],
-            },
+/**
+ * Simulate `seqText` and return its k-space trajectory, signal and PSF bundle.
+ *
+ * @param {string} seqText raw .seq file content
+ * @param {import('./seq_check_py_client.js').SeqCheckPyClient} pyClient decodes the `.npz`
+ * @param {{ fov: number[], res: number[] }} psfGrid recon grid the PSF is computed for (m, voxels)
+ * @param {(msg: string) => void} [onMessage]
+ * @param {() => boolean} [isCurrent] false once the user loaded another sequence; the job is aborted
+ * @returns {Promise<{ traj: number[][], signal: number[][], nSamples: number, phantom: string,
+ *   simBackend: string, psfBundle: { kspace: number[][], tissues: object[], nyquist: number[], source: string } | null }>}
+ *   `traj` / `psfBundle.kspace` rows are `[kx, ky, kz, tau]` (1/m, s); signal rows are `[re, im]`.
+ *   PSF tissue signals already include the T2′ decay. `psfBundle` is null if the gateway
+ *   returned no `psf_signal`.
+ */
+export async function fetchSimCache(seqText, pyClient, psfGrid, onMessage = () => {}, isCurrent = () => true) {
+    const base = resolveHttpSimBaseUrl(SIM_BACKEND.httpBaseUrl);
+    const options = {
+        exact_trajectories: SIM_BACKEND.exactTrajectories,
+        worker: SIM_BACKEND.worker,
+        backend: SIM_BACKEND.forwardBackend,
+        accuracy: SIM_BACKEND.accuracy,
+        phantom: {
+            type: 'bifti',
+            id: DEFAULT_CACHE_PHANTOM_ID,
+            res: PHANTOM_RES,
+            affine: PHANTOM_AFFINE,
+        },
+        psf: {
+            res: psfGrid.res,
+            fov: psfGrid.fov,
+            tissues: PSF_TISSUES,
+            nyquist_scale: NYQUIST_SCALE_FACTOR,
         },
     };
-}
+    const form = new FormData();
+    form.append('seq', new Blob([seqText], { type: 'application/octet-stream' }), 'upload.seq');
+    form.append('options', JSON.stringify(options));
 
-/**
- * Extract complex signal from sim result.
- * rapisim returns TypedList.Complex; mr0sim may return List of Complex or TypedList.Complex.
- */
-function extractSignal(result) {
-    try {
-        return result.List.map((x) => x.Complex);
-    } catch {
-        return result.TypedList.Complex;
-    }
-}
+    onMessage(`${SIM_LABEL}: submitting…`);
+    const { job_id: jobId } = await readJson(
+        await fetch(`${base}/v1/jobs`, { method: 'POST', body: form }),
+        'sim submit',
+    );
 
-async function fetchPhantom(onMessage) {
-    return call(PHANTOMLIB_ADDR, buildPhantomInput(), (msg) => {
-        onMessage('phantomlib: ' + msg);
-        return true;
-    });
-}
-
-/**
- * Sim + ADC trajex from precomputed conseq events (skips conseq).
- *
- * seq_check always simulates on the Modal T4 GPU (`mr0sim`); the sim backend is fixed (no selector).
- *
- * @param {*} events InstantSeqEvent list from conseq
- * @param {(msg: string) => void} [onMessage]
- * @param {*} [phantomResult] optional pre-fetched phantom
- */
-export async function fetchSimCacheFromEvents(
-    events,
-    onMessage = () => {},
-    phantomResult = null,
-) {
-    await initToolApi();
-
-    const simAddr = MR0SIM_T4_ADDR;
-    const simLabel = 'mr0 T4 (Modal)';
-
-    if (!events?.length) throw new Error('conseq returned no events');
-
-    if (!phantomResult) {
-        onMessage('phantomlib…');
-        phantomResult = await fetchPhantom(onMessage);
+    const t0 = performance.now();
+    for (;;) {
+        if (!isCurrent()) {
+            fetch(`${base}/v1/jobs/${jobId}/abort`, { method: 'POST' }).catch(() => {});
+            throw new Error('Stale Pyodide request');
+        }
+        const status = await readJson(await fetch(`${base}/v1/jobs/${jobId}`), 'sim status');
+        const st = String(status.status || '').toLowerCase();
+        if (st === 'done') break;
+        if (st === 'failed' || st === 'aborted') {
+            throw new Error(status.error || status.message || `simulation ${st}`);
+        }
+        if (performance.now() - t0 > JOB_TIMEOUT_MS) {
+            throw new Error(`simulation timed out after ${JOB_TIMEOUT_MS / 60000} min`);
+        }
+        if (status.message) onMessage(`${SIM_LABEL}: ${status.message}`);
+        await new Promise((resolve) => setTimeout(resolve, POLL_MS));
     }
 
-    // Phase 2: sim + trajex in parallel
-    // trajex params match seq_check.py: T1=1.0, T2=0.1, min_mag=1e-4
-    onMessage(`${simLabel} + trajex…`);
-    const [simResult, trajexResult] = await Promise.all([
-        call(
-            simAddr,
-            {
-                Dict: {
-                    sequence: { TypedList: { InstantSeqEvent: events } },
-                    phantom: phantomResult,
-                },
-            },
-            (msg) => { onMessage(simLabel + ': ' + msg); return true; },
-        ),
-        call(
-            TRAJEX_ADDR,
-            {
-                Dict: {
-                    sequence: { TypedList: { InstantSeqEvent: events } },
-                    t1: { Float: 1.0 },
-                    t2: { Float: 0.1 },
-                    min_mag: { Float: 1e-4 },
-                },
-            },
-            (msg) => { onMessage('trajex: ' + msg); return true; },
-        ),
-    ]);
-
-    const signal = extractSignal(simResult);
-    const trajectory = trajexResult.TypedList.Vec4;
-
-    const nSamples = Math.min(signal.length, trajectory.length);
-
-    // Normalize to [[kx, ky, kz], …] and [[re, im], …]
-    const traj = [];
-    const sig = [];
-    for (let i = 0; i < nSamples; i++) {
-        const t = trajectory[i];
-        const kx = Array.isArray(t) ? t[0] : (t[0] ?? t.kx ?? t.k_x ?? 0);
-        const ky = Array.isArray(t) ? t[1] : (t[1] ?? t.ky ?? t.k_y ?? 0);
-        const kz = Array.isArray(t) ? t[2] : (t[2] ?? t.kz ?? t.k_z ?? 0);
-        const tau = Array.isArray(t) ? (t[3] ?? 0) : (t.tau ?? t[3] ?? 0);
-        traj.push([kx, ky, kz, tau]);
-
-        const s = signal[i];
-        const re = Array.isArray(s) ? s[0] : (s.re ?? s[0] ?? 0);
-        const im = Array.isArray(s) ? s[1] : (s.im ?? s[1] ?? 0);
-        sig.push([re, im]);
+    const resp = await fetch(`${base}/v1/jobs/${jobId}/result`);
+    if (!resp.ok) {
+        const detail = await resp.text().catch(() => '');
+        throw new Error(`sim result fetch failed (${resp.status}): ${detail}`);
     }
+    await pyClient.fsWrite(NPZ_VFS_PATH, new Uint8Array(await resp.arrayBuffer()));
+    const decoded = JSON.parse(String(await pyClient.runPython(DECODE_NPZ_PY)));
+    const { traj, signal, psf } = decoded;
 
-    onMessage(`sim done · ${nSamples} samples`);
+    onMessage(`sim done · ${traj.length} samples`);
     return {
         traj,
-        signal: sig,
-        nSamples,
-        phantom: 'brainweb-subj04 (72×87×1)',
-        simBackend: `${simLabel}+trajex (toolapi-wasm)`,
+        signal,
+        nSamples: traj.length,
+        phantom: `${DEFAULT_CACHE_PHANTOM_ID} (${PHANTOM_RES.join('×')})`,
+        simBackend: SIM_LABEL,
+        psfBundle: psf
+            ? {
+                kspace: decoded.psf_kspace,
+                tissues: psf.names.map((name, i) => ({ name, signal: psf.signal[i] })),
+                nyquist: psf.nyquist,
+                source: `${SIM_LABEL} psf (dominant-state trajex)`,
+            }
+            : null,
     };
-}
-
-/**
- * Run the full sim pipeline (conseq + phantomlib, then sim + trajex).
- *
- * @param {string} seqText  raw .seq file content
- * @param {(msg: string) => void} [onMessage]
- */
-export async function fetchSimCache(seqText, onMessage = () => {}) {
-    await initToolApi();
-    onMessage('conseq + phantomlib…');
-    const [events, phantomResult] = await Promise.all([
-        runConseq(seqText, (msg) => onMessage(msg)),
-        fetchPhantom(onMessage),
-    ]);
-    return fetchSimCacheFromEvents(events, onMessage, phantomResult);
 }

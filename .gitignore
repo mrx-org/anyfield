@@ -20,3 +20,13 @@ terminals/
 tests/prot_uv_colab_conform_tests/_colab_notebooks/
 tests/prot_uv_colab_conform_tests/.colab_conform_*
 zu_tun.md
+__pycache__/
+*.pyc
+.pytest_cache/
+# Repo-local extracted system libs for headless Chromium (Playwright e2e tests)
+# on machines without root/apt access -- see scripts/setup_e2e_deps.sh
+.pw-system-libs/
+# Repo-local copy of the 25 MB default phantom .tar.gz that tests/e2e/phantom_stub.py
+# serves instead of the Modal cache admin. Re-fetchable at any time with
+# scripts/fetch_e2e_phantom.py (the stub also fills it on a miss, loudly).
+tests/e2e/.phantom-cache/
