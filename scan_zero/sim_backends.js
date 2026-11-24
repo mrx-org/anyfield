@@ -1,9 +1,3 @@
-/** toolapi-wasm WebSocket URLs (same path `/tool`, different host). */
-export const TOOL_CONSEQ = 'wss://tool-conseq.fly.dev/tool';
-export const TOOL_TRAJEX = 'wss://tool-trajex.fly.dev/tool';
-export const TOOL_RAPISIM = 'wss://tool-rapisim.fly.dev/tool';
-export const TOOL_MR0SIM = 'wss://tool-mr0sim.fly.dev/tool';
-export const TOOL_MR0SIM_T4 = 'wss://mzaiss--tool-mr0sim-modal-serve-t4.modal.run/tool';
 /** Modal HTTP gateway (tool-mr0sim-modal_http); worker chosen per job (`cpu` / `t4` / `a10g` / `a100`). */
 export const TOOL_MR0SIM_HTTP_MODAL =
     'https://mzaiss--tool-mr0sim-modal-http-gateway.modal.run';
@@ -21,8 +15,6 @@ export const SIM_BACKEND_COMPARE_STORAGE_KEY = 'anyfield.simBackendCompare';
 
 /** Pro settings dialog order. */
 const SIM_BACKEND_OPTION_IDS = [
-    'mr0sim',
-    'rapisim',
     'modal_http_cpu',
     'modal_http_t4',
     'modal_http_a10g',
@@ -33,19 +25,6 @@ const SIM_BACKEND_OPTION_IDS = [
 
 /** Sim backend registry — stable ids for TOML `[simulation].backend`. */
 export const SIM_BACKENDS = {
-    mr0sim: {
-        id: 'mr0sim',
-        label: 'mr0 CPU (f)',
-        toolUrl: TOOL_MR0SIM,
-        proOnly: false,
-    },
-    rapisim: {
-        id: 'rapisim',
-        label: 'mr0r CPU (f)',
-        toolUrl: TOOL_RAPISIM,
-        useGpu: false,
-        proOnly: true,
-    },
     modal_http_cpu: {
         id: 'modal_http_cpu',
         label: 'mr0 CPU (m)',
@@ -150,7 +129,9 @@ export function resolveSimBackendId(backendId, fallback = DEFAULT_SIM_BACKEND_ID
     const id = String(backendId || '').trim();
     if (SIM_BACKENDS[id]) return id;
     if (id === 'pdgv2') return 'pdgv2_t4';
-    if (id === 'mrzero') return DEFAULT_SIM_BACKEND_ID;
+    // `mr0sim` / `rapisim` were the retired Fly.io WebSocket backends; old protocols,
+    // shared links and stored choices still name them.
+    if (id === 'mrzero' || id === 'mr0sim' || id === 'rapisim') return DEFAULT_SIM_BACKEND_ID;
     return fallback;
 }
 

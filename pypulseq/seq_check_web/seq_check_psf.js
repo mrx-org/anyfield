@@ -11,7 +11,7 @@ import {
     planeViewFromChartOptions,
     seqChartGpuLabTheme,
 } from '../seq_plot.js';
-import { PSF_TISSUES } from './seq_check_psf_trajex.js';
+import { PSF_TISSUES } from './seq_check_wip_sim.js';
 import { gridMetaToPsfGridJson } from './seq_check_fig4.js';
 
 const TISSUE_COLOR_BY_NAME = {
@@ -454,7 +454,7 @@ export function appendPsfLegend(containerEl) {
 
 const PSF_SIGNAL_GRID = { ...KSPACE_GRID, bottom: 44 };
 
-/** Match set_psf_bundle_py: complex trajex signal × exp(−|τ|/T2′), magnitude. */
+/** Match set_psf_bundle_py: magnitude of the per-tissue signal (T2′ decay already included). */
 function buildPsfInputMagnitudes(bundle) {
     const kspace = bundle?.kspace;
     if (!kspace?.length || !bundle?.tissues?.length) return null;
@@ -462,19 +462,15 @@ function buildPsfInputMagnitudes(bundle) {
     const tissues = [];
     for (let ti = 0; ti < bundle.tissues.length; ti++) {
         const tissue = bundle.tissues[ti];
-        const t2d = Number(tissue.T2dash);
-        if (!(t2d > 0)) continue;
         const adcIdx = [];
         const mags = [];
         const n = Math.min(kspace.length, tissue.signal?.length ?? 0);
         for (let i = 0; i < n; i++) {
-            const tau = kspace[i][3];
             const re = tissue.signal[i][0];
             const im = tissue.signal[i][1];
             if (!Number.isFinite(re) || !Number.isFinite(im)) continue;
-            const tauVal = Number.isFinite(tau) ? tau : 0;
             adcIdx.push(i);
-            mags.push(Math.hypot(re, im) * Math.exp(-Math.abs(tauVal) / t2d));
+            mags.push(Math.hypot(re, im));
         }
         if (adcIdx.length) {
             tissues.push({ name: tissue.name, adcIdx, mags, nSamples: n });

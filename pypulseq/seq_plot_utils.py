@@ -1,4 +1,3 @@
-import base64
 import json
 import math
 
@@ -100,12 +99,13 @@ def collect_seq_waveform_data(
             tc, ic = calc_rf_center(rf)
             time, signal = rf.t, rf.signal
 
+            # Zero-pad plot copies only. `ic` stays on the original pulse so the
+            # phase-centre marker reads rf.signal[ic], not one sample past it.
             if abs(signal[0]) != 0 or abs(signal[-1]) != 0:
                 time, signal = time.copy(), signal.copy()
                 if abs(signal[0]) != 0:
                     signal = np.concatenate(([0], signal))
                     time = np.concatenate(([time[0]], time))
-                    ic += 1
                 if abs(signal[-1]) != 0:
                     signal = np.concatenate((signal, [0]))
                     time = np.concatenate((time, [time[-1]]))
@@ -211,8 +211,8 @@ def _segments_to_line_series(segments, color: str, width: float = 1.0):
     return series
 
 
-def _encode_xy_interleaved_f32_b64(xy: np.ndarray) -> str:
-    """Little-endian float32 x,y,x,y… as base64 (compact ChartGPU bridge; avoids huge JSON nested lists)."""
+def _encode_xy_interleaved_f32(xy: np.ndarray) -> bytes:
+    """Little-endian float32 x,y,x,y… (compact ChartGPU numeric blob)."""
     a = np.asarray(xy, dtype=np.float64)
     if a.ndim == 2 and a.shape[1] == 2:
         flat = a.astype(np.float32, copy=False).ravel()
@@ -220,7 +220,18 @@ def _encode_xy_interleaved_f32_b64(xy: np.ndarray) -> str:
         flat = a.astype(np.float32, copy=False)
     else:
         flat = np.reshape(a, (-1, 2)).astype(np.float32, copy=False).ravel()
-    return base64.b64encode(flat.tobytes()).decode('ascii')
+    return flat.tobytes()
+
+
+def _append_xy_interleaved_f32(xy_blob: bytearray, xy: np.ndarray):
+    """Append one interleaved series to ``xy_blob``; return ``(xyOff, xyLen)`` (bytes, 4-aligned)."""
+    raw = _encode_xy_interleaved_f32(xy)
+    pad = (-len(xy_blob)) % 4
+    if pad:
+        xy_blob.extend(b'\x00' * pad)
+    off = len(xy_blob)
+    xy_blob.extend(raw)
+    return off, len(raw)
 
 
 # Matplotlib default tab10 (CSS hex) — matches ``plot_speed='fast'`` where each ``plot()`` advances the cycle.
@@ -238,8 +249,10 @@ _MPL_TAB10 = [
 ]
 
 
-def _segments_to_line_series_tab10_chartgpu(segments, line_width: float = 0.6):
-    """One ChartGPU line per segment (tab10 by segment index); interleaved f32 via xyBase64 (no cross-segment merge)."""
+def _segments_to_line_series_tab10_chartgpu(segments, line_width: float = 0.6, xy_blob=None):
+    """One ChartGPU line per segment (tab10 by segment index); interleaved f32 via xyOff/xyLen (no cross-segment merge)."""
+    if xy_blob is None:
+        xy_blob = bytearray()
     series = []
     for i, seg in enumerate(segments):
         if seg is None or len(seg) == 0:
@@ -248,10 +261,12 @@ def _segments_to_line_series_tab10_chartgpu(segments, line_width: float = 0.6):
         arr = np.asarray(seg, dtype=np.float64)
         if arr.ndim != 2 or arr.shape[1] < 2:
             continue
+        xy_off, xy_len = _append_xy_interleaved_f32(xy_blob, arr[:, :2])
         series.append(
             {
                 'type': 'line',
-                'xyBase64': _encode_xy_interleaved_f32_b64(arr[:, :2]),
+                'xyOff': xy_off,
+                'xyLen': xy_len,
                 'style': {'color': c, 'lineWidth': line_width},
             }
         )
@@ -270,7 +285,10 @@ def _segments_to_line_series_tab10(segments, line_width: float = 0.6):
 
 
 def build_chartgpu_payload(data, is_dark: bool):
-    """Build JSON-serializable dict for browser ChartGPU from collect_seq_waveform_data output.
+    """Build ChartGPU structure dict + one interleaved-f32 blob from collect_seq_waveform_data.
+
+    The dict is JSON-serializable (panels, titles, colours, ``xyOff``/``xyLen``). Numeric
+    samples live in the returned ``bytes`` so ``json.dumps`` never sees the blob.
 
     Colors follow matplotlib ``plot_speed='fast'``: tab10 per RF/gradient segment, ADC ``r``,
     phase markers ``yellow``/``black`` (dark/light), label markers on ADC use parula (same as mpl).
@@ -280,6 +298,7 @@ def build_chartgpu_payload(data, is_dark: bool):
     # mpl scatter ADC: c='r'
     adc_red = '#ff0000'
     lw = 1.1
+    xy_blob = bytearray()
 
     x0, x1 = data['disp_range']
     common_x = {'min': x0, 'max': x1}
@@ -288,10 +307,12 @@ def build_chartgpu_payload(data, is_dark: bool):
     if data['adc_times']:
         all_adc_t = np.concatenate(data['adc_times'])
         adc_xy = np.column_stack([all_adc_t, np.zeros_like(all_adc_t)]).astype(np.float64, copy=False)
+        xy_off, xy_len = _append_xy_interleaved_f32(xy_blob, adc_xy)
         adc_series.append(
             {
                 'type': 'scatter',
-                'xyBase64': _encode_xy_interleaved_f32_b64(adc_xy),
+                'xyOff': xy_off,
+                'xyLen': xy_len,
                 'style': {'color': adc_red},
                 'symbolSize': 2,
             }
@@ -311,10 +332,12 @@ def build_chartgpu_payload(data, is_dark: bool):
                 rgba = np.asarray(label_colors[label_idx]).ravel()
                 lbl_color = mcolors.to_hex(rgba[:3])
                 xy = np.asarray(pts, dtype=np.float64)
+                xy_off, xy_len = _append_xy_interleaved_f32(xy_blob, xy)
                 adc_label_series.append(
                     {
                         'type': 'scatter',
-                        'xyBase64': _encode_xy_interleaved_f32_b64(xy),
+                        'xyOff': xy_off,
+                        'xyLen': xy_len,
                         'style': {'color': lbl_color},
                         'symbolSize': 1.5,
                     }
@@ -322,29 +345,36 @@ def build_chartgpu_payload(data, is_dark: bool):
 
     adc_series.extend(adc_label_series)
 
-    rf_mag_series = _segments_to_line_series_tab10_chartgpu(data['rf_mag_segments'], lw)
+    rf_mag_series = _segments_to_line_series_tab10_chartgpu(data['rf_mag_segments'], lw, xy_blob)
 
-    rf_phase_series = _segments_to_line_series_tab10_chartgpu(data['rf_phase_segments'], lw)
+    rf_phase_series = _segments_to_line_series_tab10_chartgpu(data['rf_phase_segments'], lw, xy_blob)
     if data['adc_phases']:
         all_t = np.concatenate([t for t, _ in data['adc_phases']])
         all_p = np.concatenate([p for _, p in data['adc_phases']])
+        xy_off, xy_len = _append_xy_interleaved_f32(
+            xy_blob, np.column_stack([all_t, all_p]).astype(np.float64, copy=False)
+        )
         rf_phase_series.append(
             {
                 'type': 'scatter',
-                'xyBase64': _encode_xy_interleaved_f32_b64(np.column_stack([all_t, all_p]).astype(np.float64, copy=False)),
+                'xyOff': xy_off,
+                'xyLen': xy_len,
                 'style': {'color': phase_marker},
                 'symbolSize': 0.85,
             }
         )
     if data['rf_phase_center_times']:
+        xy_off, xy_len = _append_xy_interleaved_f32(
+            xy_blob,
+            np.column_stack(
+                [np.asarray(data['rf_phase_center_times'], dtype=np.float64), np.asarray(data['rf_phase_center_vals'], dtype=np.float64)]
+            ),
+        )
         rf_phase_series.append(
             {
                 'type': 'scatter',
-                'xyBase64': _encode_xy_interleaved_f32_b64(
-                    np.column_stack(
-                        [np.asarray(data['rf_phase_center_times'], dtype=np.float64), np.asarray(data['rf_phase_center_vals'], dtype=np.float64)]
-                    )
-                ),
+                'xyOff': xy_off,
+                'xyLen': xy_len,
                 'style': {'color': phase_marker},
                 'symbolSize': 2.25,
             }
@@ -356,18 +386,20 @@ def build_chartgpu_payload(data, is_dark: bool):
         grad_panels.append(
             {
                 'title': f'G{grad_plot_labels[x]} ({data["grad_disp"]})',
-                'series': _segments_to_line_series_tab10_chartgpu(data['grad_segments'][x], lw),
+                'series': _segments_to_line_series_tab10_chartgpu(data['grad_segments'][x], lw, xy_blob),
                 'x': common_x,
             }
         )
 
+    ph_off, ph_len = _append_xy_interleaved_f32(xy_blob, np.array([[x0, 0.0], [x1, 0.0]], dtype=np.float64))
     placeholder = {
         'type': 'line',
-        'xyBase64': _encode_xy_interleaved_f32_b64(np.array([[x0, 0.0], [x1, 0.0]], dtype=np.float64)),
+        'xyOff': ph_off,
+        'xyLen': ph_len,
         'style': {'color': '#7f7f7f', 'lineWidth': 0.5},
     }
-    return {
-        'version': 3,
+    payload = {
+        'version': 4,
         'isDark': is_dark,
         'timeUnit': data['time_disp'],
         'gradUnit': data['grad_disp'],
@@ -376,9 +408,10 @@ def build_chartgpu_payload(data, is_dark: bool):
             {'title': 'ADC', 'series': adc_series if adc_series else [placeholder], 'x': common_x},
             {'title': 'RF mag (Hz)', 'series': rf_mag_series or [placeholder], 'x': common_x},
             {'title': 'RF/ADC ph (rad)', 'series': rf_phase_series or [placeholder], 'x': common_x},
-            *grad_panels,
+            *[{**panel, 'series': panel['series'] or [placeholder]} for panel in grad_panels],
         ],
     }
+    return payload, bytes(xy_blob)
 
 
 def get_chartgpu_payload_json():
@@ -390,11 +423,24 @@ def get_chartgpu_payload_json():
     return json.dumps(p)
 
 
+def get_chartgpu_payload_xy():
+    """Raw little-endian float32 interleaved blob, or ``b''`` if unset."""
+    import __main__
+
+    p = getattr(__main__, '_chartgpu_last_xy', None)
+    if p is None:
+        return b''
+    if isinstance(p, bytes):
+        return p
+    return bytes(p)
+
+
 def clear_chartgpu_payload():
     """Drop exported payload on the Python side after the browser has consumed it (lower Pyodide heap)."""
     import __main__
 
     setattr(__main__, '_chartgpu_last_payload', None)
+    setattr(__main__, '_chartgpu_last_xy', None)
 
 
 def _patch_calculate_kspace():
@@ -581,7 +627,7 @@ def seq_plot(
     time_disp: str = 's',
     grad_disp: str = 'kHz/m',
     plot_now: bool = True,
-    max_points_per_block: int = 100,
+    max_points_per_block=None,
     plot_speed: str = 'chartgpu',
 ) -> None:
     """
@@ -592,31 +638,42 @@ def seq_plot(
     use_line_collection = plot_speed == 'faster'
 
     if plot_speed == 'full':
-        max_points_per_block = 10000000
+        speed_max_pts = 10000000
         print('PYTHON: Using full resolution plot in single figure')
         rf_color = phase_color = None
         grad_colors = [None, None, None]
     elif plot_speed == 'faster':
-        max_points_per_block = 100
+        speed_max_pts = 100
         print('PYTHON: Using optimized seq_plot (LineCollection + aggressive Decimation)')
         rf_color = 'orange'
         phase_color = 'yellow' if is_dark else 'black'
         grad_colors = ['#ffb3d9', '#99ccff', '#99ff99'] if is_dark else ['#ff69b4', '#0000ff', '#00ff00']
     elif plot_speed == 'chartgpu':
-        max_points_per_block = 10000000
+        speed_max_pts = 10000000
         print('PYTHON: Exporting sequence waveforms for ChartGPU (no matplotlib figure)')
         rf_color = phase_color = None
         grad_colors = [None, None, None]
     else:
-        max_points_per_block = 100
+        speed_max_pts = 100
         print('PYTHON: Using fast seq_plot (Standard Plot + Decimation, no LineCollection)')
         rf_color = phase_color = None
         grad_colors = [None, None, None]
 
+    # A caller-supplied positive int wins; None / unused keep the plot_speed default.
+    if isinstance(max_points_per_block, (int, np.integer)) and max_points_per_block > 0:
+        max_points_per_block = int(max_points_per_block)
+    else:
+        max_points_per_block = speed_max_pts
+
     valid_time_units = ['s', 'ms', 'us']
     valid_grad_units = ['kHz/m', 'mT/m']
 
-    if not all(isinstance(x, (int, float)) for x in time_range) or len(time_range) != 2:
+    # np.float64 subclasses float; np.int64 does not subclass int. A worker
+    # passes the range as data (numpy scalars), so both must be accepted.
+    if (
+        not all(isinstance(x, (int, float, np.integer, np.floating)) for x in time_range)
+        or len(time_range) != 2
+    ):
         raise ValueError('Invalid time range')
     if time_disp not in valid_time_units:
         raise ValueError('Unsupported time unit')
@@ -628,16 +685,47 @@ def seq_plot(
     if plot_speed == 'chartgpu':
         import __main__
 
-        __main__._chartgpu_last_payload = build_chartgpu_payload(data, is_dark)
+        payload, xy = build_chartgpu_payload(data, is_dark)
+        __main__._chartgpu_last_payload = payload
+        __main__._chartgpu_last_xy = xy
         if save:
             print('PYTHON: ChartGPU export ignores save=True')
         return
 
-    mpl.rcParams['lines.linewidth'] = 0.6
-    mpl.rcParams['font.size'] = 8
-    mpl.rcParams['path.simplify'] = True
-    mpl.rcParams['path.simplify_threshold'] = 1.0
+    with mpl.rc_context(
+        {
+            'lines.linewidth': 0.6,
+            'font.size': 8,
+            'path.simplify': True,
+            'path.simplify_threshold': 1.0,
+        }
+    ):
+        _seq_plot_matplotlib(
+            data,
+            time_disp,
+            grad_disp,
+            use_line_collection,
+            rf_color,
+            phase_color,
+            grad_colors,
+            is_dark,
+            save,
+            plot_now,
+        )
 
+
+def _seq_plot_matplotlib(
+    data,
+    time_disp,
+    grad_disp,
+    use_line_collection,
+    rf_color,
+    phase_color,
+    grad_colors,
+    is_dark,
+    save,
+    plot_now,
+):
     fig = plt.figure(figsize=(8, 5.6))
     sp1 = fig.add_subplot(611)
     sp2 = fig.add_subplot(612, sharex=sp1)

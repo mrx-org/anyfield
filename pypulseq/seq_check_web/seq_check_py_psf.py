@@ -1,9 +1,9 @@
-"""Pyodide PSF profiles (Fig 7): trajex signal=True per tissue + 1D adjoint NUFFT (seq_check.py)."""
+"""Pyodide PSF profiles (Fig 7): gateway trajex-like signal per tissue + 1D adjoint NUFFT (seq_check.py)."""
 
 _PSF_RES = 10000
 _PSF_FOV_M = 0.01
 
-# Module global: trajex PSF bundle from JS (not rapisim sim signal).
+# Module global: PSF bundle from JS (per-tissue PSF signal, not the phantom sim signal).
 _psf_bundle_py = None
 
 
@@ -52,7 +52,7 @@ def _seq_fov_res():
 
 
 def set_psf_bundle_py(kspace_json, tissues_json):
-    """Load PSF bundle from fetchPsfTrajexBundle (k-space Nx4, per-tissue trajex signal)."""
+    """Load the gateway PSF bundle (k-space Nx4, per-tissue signal incl. T2′ decay)."""
     import json
 
     global _psf_bundle_py
@@ -61,18 +61,15 @@ def set_psf_bundle_py(kspace_json, tissues_json):
     if kspace.ndim != 2 or kspace.shape[1] < 4:
         raise ValueError("kspace must be Nx4 [kx, ky, kz, tau]")
     tissues_in = json.loads(tissues_json)
-    tau = kspace[:, 3]
     psf_tensors = []
     tissue_names = []
     for t in tissues_in:
         name = str(t.get("name", "tissue"))
-        t2d = float(t.get("T2dash", 0.1))
         sig = np.asarray(t["signal"], dtype=np.float64)
         if sig.ndim != 2 or sig.shape[1] < 2:
             raise ValueError("tissue signal must be Nx2 re,im")
         n = min(kspace.shape[0], sig.shape[0])
         s = (sig[:n, 0] + 1j * sig[:n, 1]).astype(np.complex64)
-        s = s * np.exp(-np.abs(tau[:n]) / t2d).astype(np.complex64)
         psf_tensors.append(s)
         tissue_names.append(name)
 
@@ -226,7 +223,7 @@ def compute_psf_json(grid_json=None):
             "psfRes": psf_res,
             "zoomXlimMm": xlim_mm,
             "xlimMm": xlim_mm,
-            "source": "trajex signal=True",
+            "source": "gateway psf (dominant-state trajex)",
             "panels": panels,
             "metrics": metrics,
         }

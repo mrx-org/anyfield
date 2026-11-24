@@ -218,7 +218,24 @@ function disposeKspaceCharts(host) {
 export function clearKspaceHostCache(host) {
     if (!host) return;
     host._kspaceCache = null;
+    host._kspaceDisplayCache = null;
     host._seqDispTimeRange = null;
+}
+
+/**
+ * Cache the kx–ky / ky–kz panels draw from. seq_check sets `_kspaceDisplayCache` (same
+ * shape, ADC points from the simulation) while `_kspaceCache` stays pypulseq's for Fig 4
+ * and the recon's ADC-time mapping.
+ */
+function kspacePanelCache(host) {
+    return host._kspaceDisplayCache || host._kspaceCache;
+}
+
+function revokeMplFallbackObjectUrl(host) {
+    if (host?._mplFallbackObjectUrl) {
+        URL.revokeObjectURL(host._mplFallbackObjectUrl);
+        host._mplFallbackObjectUrl = null;
+    }
 }
 
 export async function disposeSeqChartGpuHost(host) {
@@ -262,6 +279,7 @@ export async function disposeSeqChartGpuHost(host) {
     host._seqChartZoomPadFraction = 0;
     host._seqCaliper = null;
     host._seqCaliperXExtent = null;
+    revokeMplFallbackObjectUrl(host);
 }
 
 /**
@@ -446,16 +464,61 @@ export function ensureSeqCaliperStyles() {
 }
 
 /**
- * Normalize series objects from Python JSON for ChartGPU.create (camelCase, scatter sizes).
- * @param {unknown[]} seriesIn
+ * Float32 view over one series slice of the ChartGPU xy blob (4-byte aligned).
+ * @param {ArrayBuffer | ArrayBufferView | null | undefined} xyBytes
+ * @param {number} xyOff
+ * @param {number} xyLen
+ * @returns {Float32Array | null}
  */
-export function normalizeChartGpuSeries(seriesIn) {
+function chartGpuXyView(xyBytes, xyOff, xyLen) {
+    if (xyBytes == null || !Number.isFinite(xyOff) || !Number.isFinite(xyLen) || xyLen <= 0) {
+        return null;
+    }
+    let backing;
+    let baseOff = 0;
+    if (xyBytes instanceof ArrayBuffer) {
+        backing = xyBytes;
+    } else if (ArrayBuffer.isView(xyBytes)) {
+        backing = xyBytes.buffer;
+        baseOff = xyBytes.byteOffset;
+    } else {
+        return null;
+    }
+    const byteOffset = baseOff + xyOff;
+    if ((byteOffset & 3) !== 0 || (xyLen & 3) !== 0) return null;
+    if (byteOffset < 0 || byteOffset + xyLen > backing.byteLength) return null;
+    return new Float32Array(backing, byteOffset, xyLen / 4);
+}
+
+/**
+ * Normalize series objects from Python JSON for ChartGPU.create (camelCase, scatter sizes).
+ * Prefers ``xyOff``/``xyLen`` views over ``xyBytes``; then ``xyBase64``; then ``s.data``
+ * (k-space + PSF still ship nested lists / typed arrays).
+ * @param {unknown[]} seriesIn
+ * @param {ArrayBuffer | ArrayBufferView | null} [xyBytes]
+ */
+export function normalizeChartGpuSeries(seriesIn, xyBytes) {
     if (!Array.isArray(seriesIn)) return [];
     return seriesIn.map((s) => {
         if (!s || typeof s !== 'object') return { type: 'line', data: [] };
         const out = { type: s.type || 'line', data: [] };
         let raw = s.data || [];
-        if (typeof s.xyBase64 === 'string' && s.xyBase64.length > 0) {
+        if (Number.isFinite(s.xyOff) && Number.isFinite(s.xyLen) && s.xyLen > 0) {
+            const view = chartGpuXyView(xyBytes, s.xyOff, s.xyLen);
+            if (view) {
+                raw = view;
+            } else if (typeof s.xyBase64 === 'string' && s.xyBase64.length > 0) {
+                try {
+                    raw = chartGpuB64ToFloat32Interleaved(s.xyBase64);
+                } catch (e) {
+                    console.warn('ChartGPU xyBase64 decode failed:', e);
+                    raw = [];
+                }
+            } else {
+                console.warn('ChartGPU xyOff/xyLen view failed');
+                raw = [];
+            }
+        } else if (typeof s.xyBase64 === 'string' && s.xyBase64.length > 0) {
             try {
                 raw = chartGpuB64ToFloat32Interleaved(s.xyBase64);
             } catch (e) {
@@ -1462,7 +1525,7 @@ export async function renderKspaceYzChart(host, containerEl, ctx, tLo, tHi, payl
     host._kspaceYzAxisView = null;
     host._kspaceYzSeriesBase = null;
     containerEl.innerHTML = '';
-    const payload = payloadOverride ?? buildKspaceYzPayloadTime(host._kspaceCache, tLo, tHi, host);
+    const payload = payloadOverride ?? buildKspaceYzPayloadTime(kspacePanelCache(host), tLo, tHi, host);
     if (!payload.series.length) {
         containerEl.innerHTML =
             '<div class="seq-chartgpu-fallback">No ky–kz data in this time window.</div>';
@@ -1504,7 +1567,7 @@ export async function refreshKspaceForSeqWindow(host) {
     const win = getTimeWindowFromZoom(host);
     if (!win) return;
     const { tLo, tHi } = win;
-    const payload = buildKspacePayloadTime(host._kspaceCache, tLo, tHi, host);
+    const payload = buildKspacePayloadTime(kspacePanelCache(host), tLo, tHi, host);
     if (!payload?.series?.length) {
         host._lastKspacePayload = payload;
         if (host._kspaceChart && !host._kspaceChart.disposed) {
@@ -1530,7 +1593,7 @@ export async function refreshKspaceForSeqWindow(host) {
     if (host._kspaceChart && !host._kspaceChart.disposed) {
         applyPlaneChartView(host._kspaceChart, host._kspaceAxisView, host._kspaceSeriesBase, 'kx (1/m)', 'ky (1/m)');
     }
-    const yzPayload = buildKspaceYzPayloadTime(host._kspaceCache, tLo, tHi, host);
+    const yzPayload = buildKspaceYzPayloadTime(kspacePanelCache(host), tLo, tHi, host);
     host._kspaceYzSeriesBase = normalizeKspaceChartGpuSeries(yzPayload.series);
     host._lastKspaceYzPayload = yzPayload;
     if (!host._kspaceYzAxisView) ensureKspaceYzAxisView(host, yzPayload);
@@ -1617,7 +1680,7 @@ export async function setupSeqCheckKspacePanels(host, pyodide, kxyEl, kyzEl, opt
         host._seqChartGpuDevice && host._seqChartGpuAdapter
             ? { adapter: host._seqChartGpuAdapter, device: host._seqChartGpuDevice }
             : undefined;
-    const kPayload = buildKspacePayloadTime(host._kspaceCache, t0, t1, host);
+    const kPayload = buildKspacePayloadTime(kspacePanelCache(host), t0, t1, host);
     await renderKspaceChartGpu(host, kxyEl, ctx, kPayload);
     await renderKspaceYzChart(host, kyzEl, ctx, t0, t1);
     attachSeqZoomToKspaceSync(host, options);
@@ -1637,12 +1700,27 @@ export function extractSeqDispTimeRange(payload) {
     return null;
 }
 
-async function setupKspacePanels(host, plotRoot, pyodide, plotContainer, seqDispTimeRange) {
+function parseHarvestedKspaceJson(harvest) {
+    const raw = harvest?.kspaceJson;
+    if (raw == null) return null;
+    if (typeof raw === 'object') return raw;
+    try {
+        return JSON.parse(String(raw));
+    } catch {
+        return null;
+    }
+}
+
+async function setupKspacePanels(host, plotRoot, pyodide, plotContainer, seqDispTimeRange, harvest) {
     if (!isShowKspaceChecked(plotRoot)) return;
     if (!seqDispTimeRange) return;
     host._seqDispTimeRange = seqDispTimeRange;
 
+    const harvested = parseHarvestedKspaceJson(harvest);
     let cacheJson;
+    if (harvested) {
+        host._kspaceCache = harvested;
+    } else {
     try {
         cacheJson = await pyodide.runPythonAsync('import json; export_kspace_cache_json()');
     } catch (e) {
@@ -1650,6 +1728,7 @@ async function setupKspacePanels(host, plotRoot, pyodide, plotContainer, seqDisp
         return;
     }
     host._kspaceCache = JSON.parse(String(cacheJson));
+    }
     if (host._kspaceCache?.error) {
         const [ktr0, ktr1] = host._seqDispTimeRange || [0, 60];
         try {
@@ -1798,7 +1877,41 @@ function sweepMatplotlibIntoPlotTarget(plotContainer) {
 }
 
 /**
+ * @param {*} bytes
+ * @returns {Uint8Array}
+ */
+function coerceMplFallbackPngBytes(bytes) {
+    if (bytes instanceof ArrayBuffer) return new Uint8Array(bytes);
+    if (ArrayBuffer.isView(bytes)) {
+        return bytes instanceof Uint8Array ? bytes : new Uint8Array(bytes.buffer, bytes.byteOffset, bytes.byteLength);
+    }
+    return new Uint8Array(0);
+}
+
+/**
+ * Mount a static Agg PNG (worker-bridge fallback). Revokes any previous blob URL on `host`.
+ * @param {*} host
+ * @param {HTMLElement} containerEl
+ * @param {*} bytes
+ * @param {string} reason
+ * @param {string} plotSpeed
+ */
+function mountMplFallbackPng(host, containerEl, bytes, reason, plotSpeed) {
+    revokeMplFallbackObjectUrl(host);
+    const u8 = coerceMplFallbackPngBytes(bytes);
+    if (!u8.byteLength) {
+        throw new Error('matplotlib Agg fallback produced an empty PNG');
+    }
+    const blob = new Blob([u8], { type: 'image/png' });
+    const url = URL.createObjectURL(blob);
+    if (host) host._mplFallbackObjectUrl = url;
+    containerEl.innerHTML = `<div class="seq-mpl-fallback-wrap"><div class="seq-chartgpu-fallback">${reason}. Showing <strong>${plotSpeed}</strong> matplotlib plot.</div><img class="seq-mpl-fallback" alt="Sequence waveforms" src="${url}"></div>`;
+}
+
+/**
  * Re-plot with matplotlib after ChartGPU could not load (seq must already exist in Pyodide).
+ * Duck-types ``runPythonBytes`` (seq_check worker bridge): Agg PNG, no ``plt.show()``.
+ * Else main-thread Pyodide: ``plt.show()`` + ``document.pyodideMplTarget`` + DOM sweep.
  * @param {*} host
  * @param {HTMLElement | null} plotRoot
  * @param {*} pyodide
@@ -1841,18 +1954,51 @@ export async function renderMatplotlibSeqPlotFallback(
 
     plotContainer.innerHTML = `<div class="seq-chartgpu-fallback">${reason}. Showing <strong>${plotSpeed}</strong> matplotlib plot.</div>`;
 
+    const themePy = getSeqPlotMatplotlibThemePy(resolveSeqPlotWantsDark(host, plotRoot));
+    const seqPlotCall = `seq.plot(plot_now=False, plot_speed="${plotSpeed}", time_range=(${formatSeqPlotTimeForPython(t0)}, ${formatSeqPlotTimeForPython(t1)}))`;
+
+    // Worker bridge: WebAgg cannot import document; Agg + PNG bytes, same idea as seq_check's planned no-WebGPU path.
+    if (typeof pyodide.runPythonBytes === 'function') {
+        try {
+            const png = await pyodide.runPythonBytes(`
+import io
+import matplotlib as mpl
+mpl.use('Agg', force=True)
+import matplotlib.pyplot as plt
+plt.close('all')
+${themePy}
+if seq is not None:
+    ${seqPlotCall}
+    if not plt.get_fignums():
+        raise RuntimeError('seq.plot produced no matplotlib figure')
+    buf = io.BytesIO()
+    fig = plt.gcf()
+    fig.savefig(buf, format='png', dpi=140, bbox_inches='tight', facecolor=fig.get_facecolor())
+    plt.close('all')
+    buf.getvalue()
+else:
+    raise RuntimeError("No sequence in Pyodide (seq is None)")
+`);
+            mountMplFallbackPng(host, plotContainer, png, reason, plotSpeed);
+            notifyChartGpuFallback(host, plotRoot, `${reason} — using faster plot`);
+            return true;
+        } catch (e) {
+            console.error('Matplotlib fallback plot failed:', e);
+            revokeMplFallbackObjectUrl(host);
+            plotContainer.innerHTML = `<div class="seq-chartgpu-fallback">ChartGPU failed (${reason}). Matplotlib fallback also failed: ${e?.message || e}</div>`;
+            return false;
+        }
+    }
+
     const prevMpl = document.pyodideMplTarget;
     document.pyodideMplTarget = plotContainer;
-    window.pyodideMplTarget = plotContainer;
-
-    const themePy = getSeqPlotMatplotlibThemePy(resolveSeqPlotWantsDark(host, plotRoot));
     try {
         await pyodide.runPythonAsync(`
 import matplotlib.pyplot as plt
 plt.close('all')
 ${themePy}
 if seq is not None:
-    seq.plot(plot_now=False, plot_speed="${plotSpeed}", time_range=(${formatSeqPlotTimeForPython(t0)}, ${formatSeqPlotTimeForPython(t1)}))
+    ${seqPlotCall}
     plt.show()
 else:
     raise RuntimeError("No sequence in Pyodide (seq is None)")
@@ -1867,7 +2013,53 @@ else:
     } finally {
         if (prevMpl !== undefined) {
             document.pyodideMplTarget = prevMpl;
-            window.pyodideMplTarget = prevMpl;
+        }
+    }
+}
+
+/**
+ * Pull ChartGPU structure JSON + raw xy bytes from Python.
+ * Duck-types ``runPythonBytes`` (seq_check worker bridge); else main-thread Pyodide
+ * ``runPythonAsync`` + ``toJs()`` / ``destroy()``.
+ * @param {*} pyodide
+ * @returns {Promise<{ payload: object | null, xyBytes: Uint8Array }>}
+ */
+export async function fetchChartGpuPayload(pyodide) {
+    const jsonStr = await pyodide.runPythonAsync('get_chartgpu_payload_json()');
+    const xyBytes = await fetchChartGpuXyBytes(pyodide);
+    const payload = jsonStr === 'null' || jsonStr == null ? null : JSON.parse(jsonStr);
+    return { payload, xyBytes };
+}
+
+/**
+ * @param {*} pyodide
+ * @returns {Promise<Uint8Array>}
+ */
+async function fetchChartGpuXyBytes(pyodide) {
+    if (typeof pyodide.runPythonBytes === 'function') {
+        const bytes = await pyodide.runPythonBytes('get_chartgpu_payload_xy()');
+        if (bytes instanceof ArrayBuffer) return new Uint8Array(bytes);
+        if (ArrayBuffer.isView(bytes)) {
+            return bytes instanceof Uint8Array ? bytes : new Uint8Array(bytes.buffer, bytes.byteOffset, bytes.byteLength);
+        }
+        return new Uint8Array(0);
+    }
+    const py = await pyodide.runPythonAsync('get_chartgpu_payload_xy()');
+    if (py == null) return new Uint8Array(0);
+    try {
+        const js = typeof py.toJs === 'function' ? py.toJs() : py;
+        if (js instanceof ArrayBuffer) return new Uint8Array(js);
+        if (ArrayBuffer.isView(js)) {
+            return js instanceof Uint8Array ? js : new Uint8Array(js.buffer, js.byteOffset, js.byteLength);
+        }
+        return new Uint8Array(0);
+    } finally {
+        if (typeof py.destroy === 'function') {
+            try {
+                py.destroy();
+            } catch {
+                /* already destroyed */
+            }
         }
     }
 }
@@ -1879,8 +2071,10 @@ else:
  * @param {HTMLElement | null} plotRoot
  * @param {*} pyodide
  * @param {HTMLElement} plotContainer mount for #seq-chartgpu-stack
+ * @param {{ chartgpuJson?: object|string|null, chartgpuXy?: Uint8Array, kspaceJson?: object|string|null }} [harvest]
+ *   When the plot ran on the worker, pass harvested JSON+xy instead of getattr on main.
  */
-export async function renderSeqChartGpuAfterPlot(host, plotRoot, pyodide, plotContainer) {
+export async function renderSeqChartGpuAfterPlot(host, plotRoot, pyodide, plotContainer, harvest) {
     await disposeSeqChartGpuHost(host);
     const showKspace = isShowKspaceChecked(plotRoot);
     const wantsDark = resolveSeqPlotWantsDark(host, plotRoot);
@@ -1902,24 +2096,33 @@ export async function renderSeqChartGpuAfterPlot(host, plotRoot, pyodide, plotCo
         return;
     }
 
-    let jsonStr;
+    let payload;
+    let xyBytes;
     try {
-        jsonStr = await pyodide.runPythonAsync('get_chartgpu_payload_json()');
+        if (harvest && (harvest.chartgpuJson != null || harvest.chartgpuXy)) {
+            const json = harvest.chartgpuJson;
+            payload = json == null || json === 'null'
+                ? null
+                : (typeof json === 'string' ? JSON.parse(json) : json);
+            const xy = harvest.chartgpuXy;
+            xyBytes = xy instanceof Uint8Array
+                ? xy
+                : (xy instanceof ArrayBuffer ? new Uint8Array(xy) : new Uint8Array(0));
+        } else {
+            const fetched = await fetchChartGpuPayload(pyodide);
+            payload = fetched.payload;
+            xyBytes = fetched.xyBytes;
+        }
     } catch (e) {
+        if (e instanceof SyntaxError) {
+            plotContainer.innerHTML = '<div class="seq-chartgpu-fallback">Invalid ChartGPU JSON from Python.</div>';
+            return;
+        }
         console.error('ChartGPU payload fetch failed:', e);
         plotContainer.innerHTML =
             '<div class="seq-chartgpu-fallback">Could not read ChartGPU export from Python (is seq_plot_utils loaded?).</div>';
         return;
     }
-
-    let payload;
-    try {
-        payload = jsonStr === 'null' ? null : JSON.parse(jsonStr);
-    } catch (e) {
-        plotContainer.innerHTML = '<div class="seq-chartgpu-fallback">Invalid ChartGPU JSON from Python.</div>';
-        return;
-    }
-    jsonStr = null;
 
     if (!payload || !Array.isArray(payload.panels) || payload.panels.length === 0) {
         plotContainer.innerHTML =
@@ -2082,7 +2285,7 @@ export async function renderSeqChartGpuAfterPlot(host, plotRoot, pyodide, plotCo
     for (let i = 0; i < n; i++) {
         const panel = panels[i];
         const isBottom = i === n - 1;
-        let series = normalizeChartGpuSeries(panel.series);
+        let series = normalizeChartGpuSeries(panel.series, xyBytes);
         if (sharedXExtent) {
             const yAnchor = chartGpuYAnchorForExtentHelper(series);
             series = chartGpuWithSharedXExtentSeries(
@@ -2778,7 +2981,7 @@ export async function renderSeqChartGpuAfterPlot(host, plotRoot, pyodide, plotCo
             }
         }
     };
-    await setupKspacePanels(host, plotRoot, pyodide, plotContainer, seqDispTimeRange);
+    await setupKspacePanels(host, plotRoot, pyodide, plotContainer, seqDispTimeRange, harvest);
     await releaseChartgpuPythonPayload(pyodide);
     await releaseKspaceCache(pyodide);
     } catch (renderErr) {
@@ -2817,7 +3020,7 @@ export function buildSeqPlotExecuteFragments(opts) {
 
     const chartgpuClearPy =
         plotSpeed === 'chartgpu' && !silent
-            ? 'import __main__\nsetattr(__main__, \'_chartgpu_last_payload\', None)\nclear_kspace_cache()\n'
+            ? 'import __main__\nsetattr(__main__, \'_chartgpu_last_payload\', None)\nsetattr(__main__, \'_chartgpu_last_xy\', None)\nclear_kspace_cache()\n'
             : '';
     return { plotBlock, chartgpuClearPy };
 }

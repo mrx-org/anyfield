@@ -3,13 +3,12 @@
  * cannot break the scanner or leave a dead header button.
  */
 
+import { isProUser } from "../pro_mode.js";
+
 const MODULE_URL = "./paper_plot.js?v=54";
 
-function isProUser() {
-  if (typeof window !== "undefined" && window.pro) return true;
-  if (typeof window === "undefined" || !window.location?.search) return false;
-  return /^1|true|yes$/i.test(new URLSearchParams(window.location.search).get("pro") || "");
-}
+/** Lazily constructed on first launch; the module is only fetched on click. */
+let paperPlot = null;
 
 function bindLaunchButton() {
   const btn = document.getElementById("paper-plot-btn");
@@ -24,12 +23,12 @@ function bindLaunchButton() {
       e.stopPropagation();
       btn.disabled = true;
       try {
-        if (!window.paperPlot) {
+        if (!paperPlot) {
           const mod = await import(MODULE_URL);
-          window.paperPlot = new mod.PaperPlotModule();
-          window.paperPlot.init();
+          paperPlot = new mod.PaperPlotModule();
+          paperPlot.init();
         }
-        await window.paperPlot.toggle();
+        await paperPlot.toggle();
       } catch (err) {
         console.error("[PaperPlot] launch failed:", err);
         alert(`Paper Plot failed to open.\n\n${err?.message || err}\n\nSee browser console (F12) for details.`);

@@ -1,0 +1,24 @@
+# Dev/test-only dependencies for the Python modules that run inside Pyodide
+# (scan_zero/recon.py, data/resampling.py, data/execute_json.py, ...).
+# The app itself ships no Python requirements file (packages are installed at
+# runtime via micropip/uv, see pypulseq/sources.toml) -- this file is only for
+# running the pytest suite under tests/python/ on a normal CPython interpreter.
+numpy
+nibabel
+pynufft
+pytest>=7
+
+# pypulseq/seq_plot_utils.py imports matplotlib at module level. Only the "Agg"
+# backend is used (the interactive webagg one needs a browser DOM), and the tests
+# prefer asserting on the data going into a plot over the rendered output.
+#
+# Deliberately NOT listed: pypulseq. The repo's own pypulseq/ directory has no
+# __init__.py, so it resolves as a namespace package and pypulseq/*.py are
+# importable as submodules; a regular pypulseq package installed here would win
+# that lookup and break those imports. tests/python/test_seq_plot_utils.py stubs
+# the three pypulseq names it needs instead.
+matplotlib
+
+# e2e smoke tests (tests/e2e/) -- Python bindings, no Node/npm required.
+playwright
+pytest-playwright

@@ -1,7 +1,24 @@
-"""Pyodide helpers for seq_check_web: sim cache + windowed NUFFT recon (Fig 6)."""
+"""Pyodide helpers for seq_check_web: sim cache + windowed NUFFT recon (Fig 6).
 
-_DCF_ITERS = 20
-_DCF_EPS = 1e-6
+The reconstruction maths is **not** here. It used to be a second copy of
+`scan_zero/recon.py`'s Pipe-Menon DCF and adjoint NUFFT; both now come from
+`scan_zero/recon_kernels.py`, and the two functions below are thin adapters that
+map this subapp's arguments (a square matrix and a single FOV) onto that kernel.
+
+What remains genuinely this module's own is *selection*, not reconstruction: the
+sim cache, the ADC time-window helpers, and the JSON payload the JS side consumes.
+
+The old copy ended with `np.flip(..., axis=(0, 1))` and `scan_zero`'s did not, so
+the two disagreed on image orientation and, as a direct consequence of that flip
+on an even-length axis, on where a centred point source lands. The scan_zero
+convention is now the only one: unflipped, centre at ``n // 2``. **This visibly
+changes Fig 6** -- its images are mirrored in both axes relative to before.
+"""
+import numpy as np
+
+# The kernels live outside this directory. In the worker they are staged onto the
+# Pyodide VFS with their directory on sys.path, so this resolves by flat name.
+from recon_kernels import nufft_adjoint, omega_from_k
 
 # Module globals (Pyodide exec has no reliable __main__ for these helpers).
 _sim_cache_py = None
@@ -16,70 +33,41 @@ def _kspace_cache_dict():
         return None
 
 
-def _pipe_menon_dcf_pynufft(nufft_obj, n_samples, n_iter=_DCF_ITERS):
-    from pynufft import NUFFT
-
-    if n_samples < 1:
-        raise ValueError("empty trajectory")
-    y2k = nufft_obj._y2k_cpu
-    k2y = nufft_obj._k2y_cpu
-    w = np.ones(int(n_samples), dtype=np.complex64)
-    for _ in range(int(n_iter)):
-        gridded = y2k(w)
-        back = k2y(gridded)
-        w = w / np.maximum(np.abs(back), _DCF_EPS)
-    return np.abs(w).astype(np.float32)
-
-
 def recon_nufft_2d_adjoint(k_xy_1pm, signal_c64, n_pix, fov_m):
-    from pynufft import NUFFT
+    """Density-compensated 2-D adjoint onto a square ``n_pix`` grid.
 
+    Degenerate input returns zeros rather than raising, because the caller drives
+    this from a draggable time window that can legitimately select no samples.
+    """
     k_xy = np.asarray(k_xy_1pm, dtype=np.float64)
     sig = np.asarray(signal_c64, dtype=np.complex64).ravel()
     m = min(int(k_xy.shape[0]), int(sig.size))
     n_pix = int(n_pix)
     if m < 1 or n_pix < 1:
         return np.zeros((n_pix, n_pix), dtype=np.complex64)
-    k2 = k_xy[:m, :2]
-    sig = sig[:m]
     kmax = float(n_pix) / (2.0 * float(fov_m))
     om = np.stack(
         [
-            (k2[:, 0] / kmax) * np.pi,
-            (k2[:, 1] / kmax) * np.pi,
-            np.zeros(m, dtype=np.float64),
+            omega_from_k(k_xy[:m, 0], kmax),
+            omega_from_k(k_xy[:m, 1], kmax),
         ],
         axis=1,
     )
-    a = NUFFT()
-    nx = ny = n_pix
-    a.plan(om[:, :2], (nx, ny), (2 * nx, 2 * ny), (6, 6))
-    dcf = _pipe_menon_dcf_pynufft(a, m)
-    y = sig * dcf.astype(np.complex64, copy=False)
-    rec = np.asarray(a.adjoint(y), dtype=np.complex64).reshape(nx, ny)
-    return np.flip(rec, axis=(0, 1))
+    rec, _ = nufft_adjoint(om, sig[:m], (n_pix, n_pix), apply_dcf=True)
+    return rec
 
 
 def recon_nufft_1d_adjoint(k_axis_1pm, signal_c64, res, fov_m):
-    from pynufft import NUFFT
-
+    """Density-compensated 1-D adjoint onto ``res`` samples (the projection view)."""
     k1 = np.asarray(k_axis_1pm, dtype=np.float64).reshape(-1)
     sig = np.asarray(signal_c64, dtype=np.complex64).reshape(-1)
     m = min(k1.size, sig.size)
     r = int(res)
     if m < 1 or r < 1:
         return np.zeros(max(r, 1), dtype=np.complex64)
-    k1 = k1[:m]
-    sig = sig[:m]
     kmax = float(r) / (2.0 * float(fov_m))
-    om = (k1 / kmax) * np.pi
-    om2 = np.stack([om, np.zeros(m, dtype=np.float64)], axis=1)
-    a = NUFFT()
-    a.plan(om2, (r,), (2 * r,), (6,))
-    dcf = _pipe_menon_dcf_pynufft(a, m)
-    y = sig * dcf.astype(np.complex64, copy=False)
-    rec = np.asarray(a.adjoint(y), dtype=np.complex64).reshape(r)
-    return np.flip(rec, axis=(0,))
+    rec, _ = nufft_adjoint(omega_from_k(k1[:m], kmax), sig[:m], (r,), apply_dcf=True)
+    return rec
 
 
 def _fov_component_m(val):

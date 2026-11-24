@@ -1,14 +1,17 @@
 import { Niivue, NVMesh, NVImage, SLICE_TYPE, MULTIPLANAR_TYPE, DRAG_MODE, SHOW_RENDER } from "https://unpkg.com/@niivue/niivue@0.65.0/dist/index.js";
+import { AppContext } from "./app_context.js";
 import { eventHub } from "./event_hub.js";
+import { isProUser } from "./pro_mode.js";
 import { formatScanDisplayTitle } from "./scan_zero/scan_module.js";
 import { volumeIs4D, syncVolumeClimsToCurrent4DFrame, installFrameAwareContrastDrag, installFrameAwareBriConReset } from "./hist_panel/histogram-clim-panel.js";
-import { DEFAULT_CACHE_PHANTOM_ID, BIFTI_CACHE_ADMIN_BASE, fetchCachedPhantomIds, downloadPhantomTarGz, normalizeCacheId, splitCacheId, phantomFolderId } from "./scan_zero/bifti_cache.js";
+import { DEFAULT_CACHE_PHANTOM_ID, biftiCacheAdminBase, fetchCachedPhantomIds, downloadPhantomTarGz, normalizeCacheId, splitCacheId, phantomFolderId } from "./scan_zero/bifti_cache.js";
+import { PyWorkerHost } from "./py_worker_host.js";
 import { PtxPanel } from "./ptx/ptx_panel.js";
 
 /**
  * Base URL for the bundled default nifti_phantom (JSON + NIfTIs).
  * In-repo bundle: `data/subj04-3T-1mm-tra/` (BrainWeb subj04, true 1 mm iso).
- * Override via `NiivueModule({ defaultPhantomBaseUrl })` or `window.NV_DEFAULT_PHANTOM_BASE`.
+ * Override via `NiivueModule({ defaultPhantomBaseUrl })`.
  */
 export const DEFAULT_PHANTOM_REMOTE_BASE = "data/subj04-3T-1mm-tra/";
 
@@ -90,6 +93,8 @@ function phantomNiftiCatalogFromJson(jsonText) {
 
 export class NiivueModule {
   constructor(options = {}) {
+    /** Shared module registry; own empty one when hosted standalone (viewer.html). */
+    this.ctx = options.ctx ?? new AppContext();
     this.instanceId = Math.random().toString(36).substr(2, 5);
     this.canvasId = `gl-${Math.random().toString(36).substr(2, 9)}`;
     this.options = { ...options };
@@ -202,18 +207,16 @@ export class NiivueModule {
     this._resampleBusyCount = 0;
 
     /** Absolute `https://` (remote) or path relative to the page. Default: GitHub raw `DEFAULT_PHANTOM_REMOTE_BASE`. */
-    this.defaultPhantomBaseUrl =
-      options.defaultPhantomBaseUrl ??
-      (typeof window !== "undefined" && window.NV_DEFAULT_PHANTOM_BASE
-        ? String(window.NV_DEFAULT_PHANTOM_BASE)
-        : DEFAULT_PHANTOM_REMOTE_BASE);
+    this.defaultPhantomBaseUrl = options.defaultPhantomBaseUrl ?? DEFAULT_PHANTOM_REMOTE_BASE;
     this.FOV_RGBA255 = new Uint8Array([255, 220, 0, 255]);
     this.isInitialized = false;
     this.volumeGroups = [];
     this.jsonEditorCm = null;
     this.jsonTabCurrentName = null;
-    /** Set when default phantom fetch finishes before shared Pyodide is attached (bootstrap sync). */
-    this._pendingPhantomVfs = null;
+    /** filename → last-saved phantom JSON text. Lets the JSON tab stay sync without VFS reads. */
+    this._phantomJsonByName = new Map();
+    /** Bumped on every `switchActivePhantomConfig`; a stale generation must not apply. */
+    this._phantomConfigSwitchGen = 0;
     /** Phantom group ids explicitly expanded in the volume list (default: collapsed). */
     this.expandedGroups = new Set();
     this._initWaiters = [];
@@ -224,6 +227,25 @@ export class NiivueModule {
   waitForInit() {
     if (this.isInitialized) return Promise.resolve();
     return new Promise(resolve => this._initWaiters.push(resolve));
+  }
+
+  /**
+   * The page's one `/phantom` worker. Bootstrap already put it on `ctx`; standalone
+   * `initNiivueApp` / a late first use constructs the same host so there is one path.
+   */
+  _ensurePhantomWorkerHost() {
+    if (!this.ctx) this.ctx = new AppContext();
+    if (!this.ctx.pyWorker) this.ctx.pyWorker = new PyWorkerHost();
+    return this.ctx.pyWorker;
+  }
+
+  /**
+   * @param {'init' | 'ready'} [phase] `init` is loadPyodide only (extract / save).
+   *   `ready` waits for nibabel + execute_json (Execute).
+   */
+  _phantomWorker(phase = 'init') {
+    const host = this._ensurePhantomWorkerHost();
+    return phase === 'ready' ? host.ready() : host.whenInit();
   }
 
   /**
@@ -375,8 +397,8 @@ export class NiivueModule {
       }
       buttons.forEach(btn => {
         btn.onclick = () => {
-          if (window.viewManager && window.viewManager.currentMode !== 'planning') {
-            window.viewManager.setMode('planning');
+          if (this.ctx.viewManager && this.ctx.viewManager.currentMode !== 'planning') {
+            this.ctx.viewManager.setMode('planning');
           }
           const slotSidebar = this.containerControls.closest('#slot-sidebar');
           const labGrid = this.containerControls.closest('.lab-grid');
@@ -406,8 +428,8 @@ export class NiivueModule {
           const tab = btn.dataset.tab;
           this.containerControls.querySelector(`#tab-${tab}-${this.instanceId}`).classList.add('active');
           if (labGrid) labGrid.classList.toggle('ptx-sidebar', tab === 'ptx');
-          if (tab === 'ptx') window.ptxPanel?.onShow();
-          else window.ptxPanel?.onHide();
+          if (tab === 'ptx') this.ptxPanel?.onShow();
+          else this.ptxPanel?.onHide();
           if (tab === 'phantoms' && this.jsonEditorCm) this.jsonEditorCm.refresh();
         };
       });
@@ -419,7 +441,6 @@ export class NiivueModule {
       const ptxRoot = this.containerControls.querySelector(`#ptx-root-${this.instanceId}`);
       if (ptxRoot) {
         this.ptxPanel = new PtxPanel(this);
-        window.ptxPanel = this.ptxPanel;
         this.ptxPanel.mount(ptxRoot);
       }
     }
@@ -453,7 +474,7 @@ export class NiivueModule {
               <button type="button" id="json-save-as-${this.instanceId}" class="btn btn-secondary btn-sm" title="Save as new config in VFS">Save As</button>
               <button type="button" id="json-revert-${this.instanceId}" class="btn btn-secondary btn-sm" title="Reload current file (discard unsaved edits)">Revert</button>
               <span id="json-tab-status-${this.instanceId}" class="json-tab-status" style="flex: 1; min-width: 0;"></span>
-              ${typeof window !== 'undefined' && window.pro ? `<button type="button" id="json-execute-${this.instanceId}" class="btn btn-primary btn-sm" title="Execute JSON phantom config" style="margin-left: auto;">Execute</button>` : ''}
+              ${isProUser() ? `<button type="button" id="json-execute-${this.instanceId}" class="btn btn-primary btn-sm" title="Execute JSON phantom config" style="margin-left: auto;">Execute</button>` : ''}
             </div>
             <div id="json-editor-wrap-${this.instanceId}" class="json-editor-wrap" style="flex: 1; min-height: 120px; display: flex; flex-direction: column; overflow: hidden;">
               <textarea id="json-editor-${this.instanceId}" class="json-editor" placeholder="Add a folder with JSON + NIfTIs to see configs." style="flex: 1; min-height: 0; font-size: 11px;"></textarea>
@@ -495,7 +516,7 @@ export class NiivueModule {
             Ctrl+Middle: Zoom<br>
             Left/Right: 4D frame (when volume has 4D)
           </div>
-          ${typeof window !== 'undefined' && window.pro ? `<div id="debugInfo-${this.instanceId}" class="hint" style="font-family:monospace;font-size:10px;white-space:pre;line-height:1.4;margin-top:4px;color:#aaa;"></div>` : ''}
+          ${isProUser() ? `<div id="debugInfo-${this.instanceId}" class="hint" style="font-family:monospace;font-size:10px;white-space:pre;line-height:1.4;margin-top:4px;color:#aaa;"></div>` : ''}
         </div>
     `;
   }
@@ -589,7 +610,7 @@ export class NiivueModule {
     return names;
   }
 
-  _removePhantomGroup(group) {
+  async _removePhantomGroup(group) {
     if (!group) return;
     const jsonFn = this._groupJsonFileName(group);
     const ids = new Set([group.id]);
@@ -618,19 +639,25 @@ export class NiivueModule {
       }
     }
     const jsonStillUsed = jsonFn && this.volumeGroups.some((g) => this._volumeGroupMatchesJsonFile(g, jsonFn));
-    if (this.pyodide) {
-      for (const name of niftiNames) {
-        if (stillNeeded.has(name)) continue;
-        for (const p of [`/phantom/${name}`, `/phantom/averaged/${name}`]) {
-          try { this.pyodide.FS.unlink(p); } catch (_) {}
-        }
-      }
-      if (jsonFn && !jsonStillUsed) {
-        try { this.pyodide.FS.unlink(`/phantom/${jsonFn}`); } catch (_) {}
-      }
+    const unlinkPaths = [];
+    for (const name of niftiNames) {
+      if (stillNeeded.has(name)) continue;
+      unlinkPaths.push(`/phantom/${name}`, `/phantom/averaged/${name}`);
     }
-    if (jsonFn && !jsonStillUsed && this.jsonTabCurrentName === jsonFn) {
-      this.jsonTabCurrentName = null;
+    if (jsonFn && !jsonStillUsed) unlinkPaths.push(`/phantom/${jsonFn}`);
+    if (jsonFn && !jsonStillUsed) {
+      this._phantomJsonByName.delete(jsonFn);
+      if (this.jsonTabCurrentName === jsonFn) this.jsonTabCurrentName = null;
+    }
+    if (unlinkPaths.length) {
+      return this._unlinkPhantomVfs(unlinkPaths);
+    }
+  }
+
+  async _unlinkPhantomVfs(paths) {
+    const client = await this._phantomWorker('init');
+    for (const p of paths) {
+      await client.fsUnlink(p);
     }
   }
 
@@ -645,7 +672,7 @@ export class NiivueModule {
 
   /**
    * Latest JSON for SIM / execute: same file as the active phantom group, preferring
-   * editor (when that file is selected) then VFS (after Save) then in-memory cache.
+   * editor (when that file is selected) then the JS catalog (after Save) then in-memory cache.
    */
   getPhantomJsonContent(group) {
     const g = group ?? this.getActivePhantomGroup();
@@ -658,17 +685,13 @@ export class NiivueModule {
       if (String(fromEditor).trim()) return fromEditor;
     }
 
-    if (this.pyodide) {
-      try {
-        const vfs = this.pyodide.FS.readFile(`/phantom/${fn}`, { encoding: 'utf8' });
-        if (String(vfs).trim()) return vfs;
-      } catch (_) { /* no VFS copy yet */ }
-    }
+    const saved = this._savedPhantomJson(fn);
+    if (String(saved || "").trim()) return saved;
 
     return g.jsonContent != null ? String(g.jsonContent) : null;
   }
 
-  /** Return JSON text by filename, preferring editor (if selected) then VFS then in-memory groups. */
+  /** Return JSON text by filename, preferring editor (if selected) then the JS catalog then groups. */
   getJsonContentByFileName(jsonFileName) {
     const fn = jsonFileName != null ? String(jsonFileName).trim() : "";
     if (!fn) return null;
@@ -678,12 +701,8 @@ export class NiivueModule {
       if (String(fromEditor).trim()) return fromEditor;
     }
 
-    if (this.pyodide) {
-      try {
-        const vfs = this.pyodide.FS.readFile(`/phantom/${fn}`, { encoding: 'utf8' });
-        if (String(vfs).trim()) return vfs;
-      } catch (_) { /* no VFS copy */ }
-    }
+    const saved = this._savedPhantomJson(fn);
+    if (String(saved || "").trim()) return saved;
 
     const g = this.volumeGroups?.find((vg) => this._volumeGroupMatchesJsonFile(vg, fn) && vg.jsonContent != null);
     if (g) return String(g.jsonContent);
@@ -722,7 +741,7 @@ export class NiivueModule {
     }
   }
 
-  handleJsonSave() {
+  async handleJsonSave() {
     const raw = this.getJsonEditorValue();
     if (!raw.trim()) {
       this.setJsonTabStatus('Editor is empty.');
@@ -739,12 +758,8 @@ export class NiivueModule {
       this.setJsonTabStatus('No config selected. Click a filename in the list first.');
       return;
     }
-    if (!this.pyodide) {
-      this.setJsonTabStatus('Pyodide not ready.');
-      return;
-    }
     try {
-      this.pyodide.FS.writeFile(`/phantom/${name}`, raw);
+      await this._writePhantomJsonToVfs(name, raw);
       this._syncJsonContentToVolumeGroups(name, raw);
       this.setJsonTabStatus('Saved.');
     } catch (e) {
@@ -764,16 +779,12 @@ export class NiivueModule {
       this.setJsonTabStatus('Could not be saved, fix JSON.');
       return;
     }
-    if (!this.pyodide) {
-      this.setJsonTabStatus('Pyodide not ready.');
-      return;
-    }
     const base = (this.jsonTabCurrentName || 'config').replace(/\.json$/i, '');
     const suggested = `${base}_copy.json`;
-    this._showSaveAsPrompt(suggested, (fileName) => {
+    this._showSaveAsPrompt(suggested, async (fileName) => {
       if (!fileName) return;
       try {
-        this.pyodide.FS.writeFile(`/phantom/${fileName}`, raw);
+        await this._writePhantomJsonToVfs(fileName, raw);
         this._syncJsonContentToVolumeGroups(fileName, raw);
         this.updateJsonTab();
         this.setJsonTabStatus(`Saved as ${fileName}.`);
@@ -835,18 +846,19 @@ export class NiivueModule {
     input.select();
   }
 
-  handleJsonRevert() {
+  async handleJsonRevert() {
     const name = this.jsonTabCurrentName;
     if (!name) {
       this.setJsonTabStatus('No file selected.');
       return;
     }
-    if (!this.pyodide) {
-      this.setJsonTabStatus('Pyodide not ready.');
+    const content = this._savedPhantomJson(name);
+    if (content == null) {
+      this.setJsonTabStatus('Revert failed: no saved copy of this config.');
       return;
     }
     try {
-      const content = this.pyodide.FS.readFile(`/phantom/${name}`, { encoding: 'utf8' });
+      await this._writePhantomJsonToVfs(name, content);
       this.setJsonEditorValue(content);
       this._syncJsonContentToVolumeGroups(name, content);
       this.setJsonTabStatus('Reverted to saved version.');
@@ -855,18 +867,37 @@ export class NiivueModule {
     }
   }
 
+  /**
+   * Catalog the phantom JSON and, unless `writeVfs` is false, write `/phantom/<name>`.
+   * Execute skips the VFS write: `executePhantom` already writes `jsonBody` there.
+   * Save / Save-as / Revert keep the default so the file lands before the next read.
+   */
+  async _writePhantomJsonToVfs(name, jsonBody, { writeVfs = true } = {}) {
+    if (writeVfs) {
+      const client = await this._phantomWorker('init');
+      await client.fsWrite(`/phantom/${name}`, jsonBody);
+    }
+    this._rememberPhantomJson(name, jsonBody);
+  }
+
+  /**
+   * Compute half of Execute: data in, data out — no DOM, no status messages, no viewer,
+   * no volumeGroups. Worker writes `/phantom/<name>` and returns averaged-map copies.
+   * @returns {Promise<Array<{name: string, path: string, bytes: Uint8Array}>>} averaged maps, in output order
+   */
+  async _executePhantomToVolumeData(name, jsonBody) {
+    const client = await this._phantomWorker('ready');
+    const result = await client.executePhantom({ jsonName: name, jsonBody });
+    return result.files || [];
+  }
+
   async handleJsonExecute(jsonName) {
     const name = jsonName ?? this.jsonTabCurrentName;
     if (!name) { this.setJsonTabStatus('No JSON selected.'); return; }
-    if (!this.pyodide) { this.setJsonTabStatus('Pyodide not ready.'); return; }
-    try {
-      this.pyodide.FS.mkdirTree('/phantom');
-      this.pyodide.FS.mkdirTree('/phantom/averaged');
-    } catch (_) {}
-    // Sync JSON to VFS (Execute reads /phantom/<name>); editor may be empty while volumeGroups still hold text
+    // Catalog + volumeGroups; executePhantom writes /phantom/<name>. Editor may be empty while groups hold text.
     let jsonBody = this.getJsonEditorValue();
     if (!String(jsonBody).trim()) {
-      const g = this.volumeGroups.find((vg) => vg.jsonFileName === name && vg.jsonContent != null);
+      const g = this.volumeGroups.find((vg) => this._volumeGroupMatchesJsonFile(vg, name) && vg.jsonContent != null);
       if (g) jsonBody = String(g.jsonContent);
     }
     if (!String(jsonBody).trim()) {
@@ -874,7 +905,7 @@ export class NiivueModule {
       return;
     }
     try {
-      this.pyodide.FS.writeFile(`/phantom/${name}`, jsonBody);
+      await this._writePhantomJsonToVfs(name, jsonBody, { writeVfs: false });
       this._syncJsonContentToVolumeGroups(name, jsonBody);
     } catch (e) {
       this.setJsonTabStatus(`Could not write JSON to VFS: ${e.message}`);
@@ -884,29 +915,18 @@ export class NiivueModule {
     try {
       const baseName = name.replace(/\.json$/i, '');
       // Remove any previous executed/averaged group for this json
-      const prevGroups = this.volumeGroups.filter(g => g.jsonFileName === name && (g.jsonName?.endsWith("_executed") || g.jsonName?.endsWith("_averaged")));
+      const prevGroups = this.volumeGroups.filter(g => this._volumeGroupMatchesJsonFile(g, name) && (g.jsonName?.endsWith("_executed") || g.jsonName?.endsWith("_averaged")));
       for (const g of prevGroups) {
         g.volumes.forEach(v => { try { this.nv.removeVolume(v); } catch (_) {} });
       }
-      this.volumeGroups = this.volumeGroups.filter(g => !(g.jsonFileName === name && (g.jsonName?.endsWith("_executed") || g.jsonName?.endsWith("_averaged"))));
+      this.volumeGroups = this.volumeGroups.filter(g => !(this._volumeGroupMatchesJsonFile(g, name) && (g.jsonName?.endsWith("_executed") || g.jsonName?.endsWith("_averaged"))));
 
-      const outPaths = await this.enqueuePyodideTask(
-        `json-exec-${name}`,
-        "json-execute",
-        async () => {
-          await this._ensureNibabelReady();
-          const result = await this.pyodide.runPythonAsync(
-            `execute_phantom(${JSON.stringify(name)}, phantom_dir='/phantom', out_dir=None, averaged_dir='/phantom/averaged', write_executed=False, write_averaged=True, density_nan_threshold=0.01)`
-          );
-          return result.toJs ? result.toJs() : Array.from(result);
-        },
-      );
+      const executed = await this._executePhantomToVolumeData(name, jsonBody);
 
       const groupId = "g-exec-" + Math.random().toString(36).substr(2, 5);
       const groupVolumes = [];
       let i = 0;
-      for (const path of outPaths) {
-        const bytes = this.pyodide.FS.readFile(path);
+      for (const { path, bytes } of executed) {
         const url = URL.createObjectURL(new Blob([bytes]));
         const volName = path.split('/').pop();
         const added = await this.nv.addVolumesFromUrl([{
@@ -1293,8 +1313,8 @@ export class NiivueModule {
             // Two fingers = FOV rotation; clear single-finger state so leftover finger doesn't start drag
             this.touchPendingFovDrag = false;
             e.preventDefault();
-            if (window.viewManager && window.viewManager.currentMode !== 'planning') {
-                window.viewManager.setMode('planning');
+            if (this.ctx.viewManager && this.ctx.viewManager.currentMode !== 'planning') {
+                this.ctx.viewManager.setMode('planning');
             }
             this.savedDragMode = this.nv.opts.dragMode;
             this.nv.opts.dragMode = DRAG_MODE.callbackOnly;
@@ -1450,13 +1470,32 @@ export class NiivueModule {
 
   /** Toggle maximize this viewer (hide the other viewer) */
   toggleMaximize() {
-    eventHub.emit('toggleViewerMaximize', { containerId: this.containerViewer?.id });
+    this.ctx.viewManager?.toggleViewerMaximize(this.containerViewer?.id);
   }
 
+  /**
+   * Bring `this.pyodide` up, and make sure it is the page's *only* main-thread interpreter.
+   *
+   * `options.pyodidePromise` is the seam that guarantees that. Whoever starts Pyodide for
+   * the page hands the promise over at construction, and this awaits it rather than
+   * building one of its own. Without it there is a live race: anything that awaits
+   * `initPyodide()` before the page has assigned `this.pyodide` hits the `loadPyodide()`
+   * fallback below and builds a second, private interpreter. The page's later assignment
+   * then silently orphans it.
+   *
+   * `/phantom` does not live here — extract / Save / Execute use `ctx.pyWorker`. This
+   * interpreter stays for seq / resample. The `loadPyodide()` fallback stays for
+   * standalone `viewer.html`, which goes through `initNiivueApp()` and has no page-level
+   * runtime to share.
+   */
   async initPyodide() {
     if (this._initPyodidePromise) return this._initPyodidePromise;
     this._initPyodidePromise = (async () => {
     try {
+      if (!this.pyodide && this.options.pyodidePromise) {
+        if (this.pyodideStatus) this.pyodideStatus.textContent = "Python (Pyodide): waiting for shared core...";
+        this.pyodide = await this.options.pyodidePromise;
+      }
       if (!this.pyodide) {
         if (typeof loadPyodide === 'undefined') {
           console.warn("loadPyodide not found. Python resampling will not be available.");
@@ -1652,24 +1691,6 @@ export class NiivueModule {
     return this._nibabelReadyPromise;
   }
 
-  async populatePyodideVFS(niftiFiles, jsonFiles) {
-    await this.initPyodide();
-    this.pyodide.runPython(`
-import os, shutil
-if os.path.exists('/phantom'): shutil.rmtree('/phantom')
-os.makedirs('/phantom')
-os.makedirs('/phantom/averaged', exist_ok=True)
-`);
-    for (const f of niftiFiles) {
-      const bytes = new Uint8Array(await f.arrayBuffer());
-      this.pyodide.FS.writeFile(`/phantom/${f.name}`, bytes);
-    }
-    for (const f of jsonFiles) {
-      const text = await f.text();
-      this.pyodide.FS.writeFile(`/phantom/${f.name}`, text);
-    }
-  }
-
   setupEventListeners() {
     if (this.btnAddFolder) {
       this.btnAddFolder.addEventListener("click", () => this.showCachePhantomDialog());
@@ -1736,8 +1757,6 @@ os.makedirs('/phantom/averaged', exist_ok=True)
       this.updateJsonTab();
     };
 
-    // Listen for FOV updates coming from the sequence explorer (seq → Niivue, dimensions only)
-    eventHub.on('sequence_fov_dims', (data) => this.applySequenceFovDimensions(data));
   }
 
   // --- Logic methods (unmodified from original) ---
@@ -1868,8 +1887,8 @@ os.makedirs('/phantom/averaged', exist_ok=True)
   }
 
   handleMouseDown(e) {
-         if (window.viewManager && window.viewManager.currentMode !== 'planning') {
-            window.viewManager.setMode('planning');
+         if (this.ctx.viewManager && this.ctx.viewManager.currentMode !== 'planning') {
+            this.ctx.viewManager.setMode('planning');
          }
 
          // Ctrl + Middle Mouse Drag: Zoom
@@ -2003,8 +2022,8 @@ os.makedirs('/phantom/averaged', exist_ok=True)
   }
 
   handleWheel(e) {
-          if (window.viewManager && window.viewManager.currentMode !== 'planning') {
-              window.viewManager.setMode('planning');
+          if (this.ctx.viewManager && this.ctx.viewManager.currentMode !== 'planning') {
+              this.ctx.viewManager.setMode('planning');
           }
 
           if (e.ctrlKey) {
@@ -3267,8 +3286,8 @@ os.makedirs('/phantom/averaged', exist_ok=True)
       if (isSelected) row.classList.add('selected');
       if (isCompare) row.classList.add('compare-selected');
       let protocolTooltip = "";
-      if (isScan && typeof window !== "undefined" && window.scanModule?.getProtocolTooltipForVolume) {
-        protocolTooltip = window.scanModule.getProtocolTooltipForVolume(vol) || "";
+      if (isScan && this.ctx.scan?.getProtocolTooltipForVolume) {
+        protocolTooltip = this.ctx.scan.getProtocolTooltipForVolume(vol) || "";
         if (protocolTooltip) row.classList.add("has-protocol-tooltip");
       }
 
@@ -3298,8 +3317,8 @@ os.makedirs('/phantom/averaged', exist_ok=True)
       let titleText = vol.name || `Vol ${originalIndex + 1}`;
       let metaText = "Imported Phantom";
       if (isScan) {
-        titleText = window.scanModule?.getScanDisplayTitle(vol)
-          ?? formatScanDisplayTitle(vol.name);
+        titleText = this.ctx.scan?.getScanDisplayTitle(vol)
+          ?? formatScanDisplayTitle(vol.name, null, this.ctx.explorer);
         metaText = "";
       } else if (shortTitle) {
         if (vol._phantomLabel) {
@@ -3388,8 +3407,8 @@ os.makedirs('/phantom/averaged', exist_ok=True)
             return;
           }
           if (!isScan) return;
-          if (window.viewManager?.currentMode !== 'planning') {
-            window.viewManager.setMode('planning');
+          if (this.ctx.viewManager?.currentMode !== 'planning') {
+            this.ctx.viewManager?.setMode('planning');
           }
           this.selectedVolume = this.selectedVolume === vol ? null : vol;
           this.updateVolumeList();
@@ -3445,9 +3464,9 @@ os.makedirs('/phantom/averaged', exist_ok=True)
       const rm = document.createElement("button");
       rm.innerHTML = "<i class=\"bi bi-x-lg\" aria-hidden=\"true\"></i>";
       rm.className = "btn volume-row-btn";
-      rm.onclick = (e) => {
+      rm.onclick = async (e) => {
         e.stopPropagation();
-        this._removePhantomGroup(group);
+        await this._removePhantomGroup(group);
         this.updateVolumeList();
         this.updatePreviewFromSelection();
       };
@@ -3499,12 +3518,37 @@ os.makedirs('/phantom/averaged', exist_ok=True)
     }
 
     this.updateJsonTab();
-    if (typeof window !== "undefined") window.mainHist?.scheduleRefresh?.();
+    this.ctx.mainHist?.scheduleRefresh?.();
     this.refreshCrosshairIntensityOverlay();
-    if (typeof window !== "undefined") window.ptxPanel?.notifyVolumes?.();
+    this.ptxPanel?.notifyVolumes?.();
   }
 
-  /** JSON text still in memory on volume groups when /phantom was never filled (default bundle). */
+  /** Last-saved phantom JSON for `name`, or null. Catalog first; volume-groups if it never landed. */
+  _savedPhantomJson(name) {
+    const fn = name != null ? String(name).trim() : "";
+    if (!fn) return null;
+    if (this._phantomJsonByName.has(fn)) return this._phantomJsonByName.get(fn);
+    return this._jsonConfigsFromVolumeGroups().get(fn) ?? null;
+  }
+
+  /** Keep the JS catalog aligned with a successful worker `/phantom` write. */
+  _rememberPhantomJson(name, text) {
+    if (!name || text == null) return;
+    this._phantomJsonByName.set(String(name), String(text));
+  }
+
+  /**
+   * Replace the JS catalog from extract `File`s (Niivue never reads VFS).
+   */
+  async _replacePhantomJsonCatalog(jsonFiles) {
+    this._phantomJsonByName.clear();
+    for (const f of jsonFiles || []) {
+      if (!f?.name) continue;
+      this._rememberPhantomJson(f.name, await f.text());
+    }
+  }
+
+  /** JSON text still in memory on volume groups when the catalog was never filled (default bundle). */
   _jsonConfigsFromVolumeGroups() {
     const map = new Map();
     for (const g of this.volumeGroups) {
@@ -3521,12 +3565,7 @@ os.makedirs('/phantom/averaged', exist_ok=True)
     const sel = root.querySelector(`#json-config-select-${this.instanceId}`);
     if (!sel) return;
 
-    let jsonNames = [];
-    if (this.pyodide) {
-      try {
-        jsonNames = this.pyodide.FS.readdir("/phantom").filter((f) => f.endsWith(".json"));
-      } catch (_) {}
-    }
+    let jsonNames = [...this._phantomJsonByName.keys()];
     const fromGroups = jsonNames.length === 0 ? this._jsonConfigsFromVolumeGroups() : null;
 
     if (jsonNames.length === 0 && fromGroups?.size) {
@@ -3554,31 +3593,32 @@ os.makedirs('/phantom/averaged', exist_ok=True)
     this.jsonTabCurrentName = pick;
     const content = fromGroups
       ? fromGroups.get(pick)
-      : this.pyodide.FS.readFile(`/phantom/${pick}`, { encoding: "utf8" });
+      : this._phantomJsonByName.get(pick);
     this.setJsonEditorValue(content ?? "");
 
     sel.onchange = () => this.switchActivePhantomConfig(sel.value);
   }
 
   updatePreviewFromSelection() {
-    if (window.ptxPanel?.ownsPreview) return;
-    if (!window.scanPreview) return;
-    
+    if (this.ptxPanel?.ownsPreview) return;
+    const scanPreview = this.ctx.scanPreview;
+    if (!scanPreview) return;
+
     // Show the selected scan in preview (regardless of checked/visibility state)
     if (this.selectedVolume && this.selectedVolume.sourceUrl) {
-      window.scanPreview.loadSingleScan(this.selectedVolume.sourceUrl, this.selectedVolume.name);
+      scanPreview.loadSingleScan(this.selectedVolume.sourceUrl, this.selectedVolume.name);
     } else {
       // No selection, clear preview
-      window.scanPreview.loadSingleScan(null, null);
+      scanPreview.loadSingleScan(null, null);
     }
   }
 
   /** Lazy compare pane C: Ctrl+click list or Ctrl+VIEW SCAN */
   async loadCompareFromVolume(vol) {
-    if (!vol || !window.scanCompare) return;
+    if (!vol || !this.ctx.scanCompare) return;
     const url = vol.sourceUrl || vol.url;
     if (!url) return;
-    await window.scanCompare.loadFromVolume(vol);
+    await this.ctx.scanCompare.loadFromVolume(vol);
   }
 
   /**
@@ -3621,22 +3661,12 @@ os.makedirs('/phantom/averaged', exist_ok=True)
     const eq = (a, b) => String(a).toLowerCase() === String(b).toLowerCase();
     const defaultJsonName = jsonFiles.find((f) => eq(f.name, `${folderName}.json`))?.name
       ?? (config ? null : jsonFile.name);
-    if (this.pyodide) {
-      await this.populatePyodideVFS(niftiFiles, jsonFiles);
-      this._pendingPhantomVfs = null;
-    } else {
-      this._pendingPhantomVfs = { jsonFile, jsonFiles, niftiFiles };
-    }
-    try {
-      await this.loadMultiPhantomFromFiles(jsonFile, niftiFiles, {
-        biftiRegistryId: scanId,
-        folderId,
-        configFiles: { folderId, jsonFiles, niftiFiles, defaultJsonName },
-      });
-    } catch (e) {
-      this._pendingPhantomVfs = null;
-      throw e;
-    }
+    await this._replacePhantomJsonCatalog(jsonFiles);
+    await this.loadMultiPhantomFromFiles(jsonFile, niftiFiles, {
+      biftiRegistryId: scanId,
+      folderId,
+      configFiles: { folderId, jsonFiles, niftiFiles, defaultJsonName },
+    });
     this.jsonTabCurrentName = jsonFile.name;
     this.updateJsonTab();
   }
@@ -3678,15 +3708,12 @@ os.makedirs('/phantom/averaged', exist_ok=True)
    * locally. NIfTIs are shared across configs, so volumes are not re-fetched.
    */
   switchActivePhantomConfig(jsonFileName) {
+    const gen = ++this._phantomConfigSwitchGen;
     const fn = String(jsonFileName || "").trim();
     if (!fn) return;
-    // Read the target config from VFS / in-memory groups — not via the editor, which still
-    // holds the previously-selected config's text at this point.
-    let text = null;
-    if (this.pyodide) {
-      try { text = this.pyodide.FS.readFile(`/phantom/${fn}`, { encoding: "utf8" }); } catch (_) { /* no VFS copy */ }
-    }
-    if (text == null) text = this._jsonConfigsFromVolumeGroups().get(fn) ?? null;
+    // Catalog / groups — not the editor, which still holds the previous selection.
+    const text = this._savedPhantomJson(fn);
+    if (gen !== this._phantomConfigSwitchGen) return;
     this.jsonTabCurrentName = fn;
     this.setJsonEditorValue(text ?? "");
     const g = this.getActivePhantomGroup();
@@ -3704,62 +3731,29 @@ os.makedirs('/phantom/averaged', exist_ok=True)
   }
 
   /**
-   * Extract a phantom `.tar.gz` (browser-fetched bytes) into JSON + NIfTI `File`s via Pyodide.
-   * Download must use JS `fetch` — Pyodide urllib cannot open https URLs in the browser.
+   * Extract a phantom `.tar.gz` onto the worker `/phantom` VFS and return JSON + NIfTI
+   * `File`s for Niivue. Download stays JS `fetch` — Pyodide urllib cannot open https.
    * @param {Uint8Array} tarBytes
    * @param {string} id — scan-ready id (for error messages)
    */
   async _extractPhantomTarGz(tarBytes, id) {
-    await this.initPyodide();
-    this.pyodide.globals.set("_bifti_tar_bytes", tarBytes);
-    let membersPy;
+    const client = await this._phantomWorker('init');
+    let result;
     try {
-      membersPy = await this.pyodide.runPythonAsync(`
-import io, gzip, tarfile
-_raw = _bifti_tar_bytes.to_py() if hasattr(_bifti_tar_bytes, 'to_py') else _bifti_tar_bytes
-_raw = bytes(_raw)
-try:
-    _buf = gzip.decompress(_raw)
-except OSError:
-    _buf = _raw
-_out = []
-with tarfile.open(fileobj=io.BytesIO(_buf), mode='r:*') as tf:
-    for m in tf.getmembers():
-        if not m.isfile():
-            continue
-        name = m.name
-        base = name.split('/')[-1]
-        if not base or base.startswith('.') or '__MACOSX' in name:
-            continue
-        low = base.lower()
-        if low.endswith('.json') or low.endswith('.nii') or low.endswith('.nii.gz'):
-            data = tf.extractfile(m).read()
-            depth = name.count('/')
-            _out.append((base, low.endswith('.json'), depth, data))
-_out
-`);
+      result = await client.extractAndPopulatePhantom({ tarBytes });
     } catch (e) {
       const msg = typeof this.formatPyodideError === "function" ? this.formatPyodideError(e) : (e?.message || String(e));
       throw new Error(`Phantom "${id}": ${msg}`);
     }
-    const members = (membersPy && membersPy.toJs) ? membersPy.toJs() : membersPy;
-    if (membersPy?.destroy) membersPy.destroy();
-
-    const jsonEntries = [];
-    const niftiFiles = [];
-    for (const entry of members) {
-      const [base, isJson, depth, data] = entry;
-      const bytes = data instanceof Uint8Array ? data : new Uint8Array(data);
-      const file = new File([bytes], base, { type: "application/octet-stream" });
-      if (isJson) jsonEntries.push({ file, depth });
-      else niftiFiles.push(file);
-    }
-    if (jsonEntries.length === 0) {
+    const toFile = ({ name, bytes }) => {
+      const buf = bytes instanceof Uint8Array ? bytes : new Uint8Array(bytes || []);
+      return new File([buf], name, { type: "application/octet-stream" });
+    };
+    const jsonFiles = (result.jsonFiles || []).map(toFile);
+    const niftiFiles = (result.niftiFiles || []).map(toFile);
+    if (jsonFiles.length === 0) {
       throw new Error(`Phantom "${id}": no JSON found in archive`);
     }
-    // A cached folder may carry several JSON configs sharing the same NIfTIs (shallowest first).
-    jsonEntries.sort((a, b) => a.depth - b.depth);
-    const jsonFiles = jsonEntries.map((e) => e.file);
     return { jsonFiles, jsonFile: jsonFiles[0], niftiFiles };
   }
 
@@ -3789,7 +3783,7 @@ _out
       const footer = document.createElement("div");
       footer.style.cssText = "display:flex;justify-content:space-between;align-items:center;gap:8px;";
       const adminLink = document.createElement("a");
-      adminLink.href = BIFTI_CACHE_ADMIN_BASE;
+      adminLink.href = biftiCacheAdminBase();
       adminLink.target = "_blank";
       adminLink.rel = "noopener noreferrer";
       adminLink.textContent = "Add phantoms on cache admin ↗";
@@ -3838,7 +3832,7 @@ _out
         list.innerHTML = "";
         refresh.disabled = true;
         status.textContent = "Fetching phantom list…";
-        fetchCachedPhantomIds()
+        fetchCachedPhantomIds(this.ctx.scan?.getSelectedSimBackendId?.())
         .then((ids) => {
           if (!overlay.isConnected) return;
           if (!ids.length) {
@@ -4059,7 +4053,7 @@ _out
       
       this.updatePreviewFromSelection();
       this.triggerHighlight();
-      if (typeof window !== "undefined") window.mainHist?.scheduleRefresh?.();
+      this.ctx.mainHist?.scheduleRefresh?.();
     } catch (e) {
       console.error(e);
     }
@@ -4171,9 +4165,15 @@ const PREVIEW_PANE_SYNC_OPTS = {
 
 let _previewPeerSyncGuard = false;
 
-function getPreviewPeerNv(sourceNv) {
-  const preview = window.scanPreview?.nv;
-  const compare = window.scanCompare?.module?.nv;
+/**
+ * The preview pane pair (B) and (C) and their shared histogram live in the app
+ * context, so every function in this section takes it explicitly. They are plain
+ * functions rather than methods because they are hooks installed onto Niivue
+ * instances, and they already share the module-level re-entry guard below.
+ */
+function getPreviewPeerNv(sourceNv, ctx) {
+  const preview = ctx?.scanPreview?.nv;
+  const compare = ctx?.scanCompare?.module?.nv;
   if (!preview || !compare || !sourceNv) return null;
   if (sourceNv === preview) return compare;
   if (sourceNv === compare) return preview;
@@ -4181,12 +4181,12 @@ function getPreviewPeerNv(sourceNv) {
 }
 
 /** Refresh preview/compare histogram UI after layout resize; keep existing cal_min/cal_max. */
-export function syncPreviewViewerClims() {
-  window.jointHist?.refresh?.();
+export function syncPreviewViewerClims(ctx) {
+  ctx?.jointHist?.refresh?.();
 }
 
 /** Step 4D frame on preview B and synced compare C (Niivue default needs cursor-in-bounds). */
-function stepPreviewPanesFrame4D(sourceNv, delta) {
+function stepPreviewPanesFrame4D(sourceNv, delta, ctx) {
   if (!sourceNv?.volumes?.length) return false;
   const srcVol = sourceNv.volumes[0];
   if (!volumeIs4D(srcVol)) return false;
@@ -4199,7 +4199,7 @@ function stepPreviewPanesFrame4D(sourceNv, delta) {
   const next = (cur + delta + nFr) % nFr;
 
   const targets = [sourceNv];
-  const peer = getPreviewPeerNv(sourceNv);
+  const peer = getPreviewPeerNv(sourceNv, ctx);
   if (peer?.volumes?.length) targets.push(peer);
 
   _previewPeerSyncGuard = true;
@@ -4221,7 +4221,7 @@ function stepPreviewPanesFrame4D(sourceNv, delta) {
       nv.drawScene?.();
       refreshCrosshairIntensityForNv(nv);
     }
-    window.jointHist?.refresh?.();
+    ctx?.jointHist?.refresh?.();
   } finally {
     _previewPeerSyncGuard = false;
   }
@@ -4229,9 +4229,9 @@ function stepPreviewPanesFrame4D(sourceNv, delta) {
 }
 
 /** Push slice layout, clims, and scene sync from sourceNv → peer (both directions via broadcastTo). */
-export function pushPreviewStateFrom(sourceNv) {
+export function pushPreviewStateFrom(sourceNv, ctx) {
   if (_previewPeerSyncGuard || !sourceNv) return;
-  const peer = getPreviewPeerNv(sourceNv);
+  const peer = getPreviewPeerNv(sourceNv, ctx);
   if (!peer) return;
   _previewPeerSyncGuard = true;
   try {
@@ -4255,7 +4255,7 @@ export function pushPreviewStateFrom(sourceNv) {
     peer.opts.crosshairWidth = w;
     peer.setCrosshairWidth(w);
     peer.drawScene();
-    if (typeof window !== "undefined") window.jointHist?.refresh?.();
+    ctx?.jointHist?.refresh?.();
   } finally {
     _previewPeerSyncGuard = false;
   }
@@ -4280,7 +4280,7 @@ export function unlinkScanPreviewPanes(previewNv, compareNv) {
   }
 }
 
-export function installPreviewSyncHooks(nv) {
+export function installPreviewSyncHooks(nv, ctx) {
   if (!nv || nv._previewSyncHooksInstalled) return;
   nv._previewSyncHooksInstalled = true;
   installFrameAwareContrastDrag(nv);
@@ -4288,7 +4288,7 @@ export function installPreviewSyncHooks(nv) {
   const prevLoc = nv.onLocationChange;
   nv.onLocationChange = (data) => {
     if (typeof prevLoc === 'function') prevLoc(data);
-    if (_previewPeerSyncGuard || !getPreviewPeerNv(nv)) return;
+    if (_previewPeerSyncGuard || !getPreviewPeerNv(nv, ctx)) return;
     _previewPeerSyncGuard = true;
     try {
       if (typeof nv.sync === 'function') nv.sync();
@@ -4299,17 +4299,17 @@ export function installPreviewSyncHooks(nv) {
   const prevMouseUp = nv.onMouseUp;
   nv.onMouseUp = (...args) => {
     if (typeof prevMouseUp === "function") prevMouseUp(...args);
-    if (!_previewPeerSyncGuard && getPreviewPeerNv(nv)) pushPreviewStateFrom(nv);
-    if (!window.jointHist?.panel?.isApplyingFromPanel?.()) {
-      window.jointHist?.syncFromVolumes?.();
+    if (!_previewPeerSyncGuard && getPreviewPeerNv(nv, ctx)) pushPreviewStateFrom(nv, ctx);
+    if (!ctx?.jointHist?.panel?.isApplyingFromPanel?.()) {
+      ctx?.jointHist?.syncFromVolumes?.();
     }
   };
   const prevIntensity = nv.onIntensityChange;
   nv.onIntensityChange = (...args) => {
     if (typeof prevIntensity === "function") prevIntensity(...args);
-    if (!_previewPeerSyncGuard && getPreviewPeerNv(nv)) pushPreviewStateFrom(nv);
-    if (!window.jointHist?.panel?.isApplyingFromPanel?.()) {
-      window.jointHist?.syncFromVolumes?.();
+    if (!_previewPeerSyncGuard && getPreviewPeerNv(nv, ctx)) pushPreviewStateFrom(nv, ctx);
+    if (!ctx?.jointHist?.panel?.isApplyingFromPanel?.()) {
+      ctx?.jointHist?.syncFromVolumes?.();
     }
   };
   const prevFrameChange = nv.onFrameChange;
@@ -4319,20 +4319,20 @@ export function installPreviewSyncHooks(nv) {
     if (!vol || changedVol !== vol || !volumeIs4D(vol)) return;
     const fi = Number.isFinite(frameIdx) ? frameIdx : (vol.frame4D ?? 0);
     syncVolumeClimsToCurrent4DFrame(vol, nv, fi);
-    if (!window.jointHist?.panel?.isApplyingFromPanel?.()) {
-      window.jointHist?.refresh?.();
+    if (!ctx?.jointHist?.panel?.isApplyingFromPanel?.()) {
+      ctx?.jointHist?.refresh?.();
     }
   };
 }
 
 /** After B or C loads a volume: re-sync clims + slice/crosshair (B view is default after C load). */
-export function syncPreviewPanesAfterLoad(loadedRole) {
-  const previewNv = window.scanPreview?.nv;
-  const compareNv = window.scanCompare?.module?.nv;
+export function syncPreviewPanesAfterLoad(loadedRole, ctx) {
+  const previewNv = ctx?.scanPreview?.nv;
+  const compareNv = ctx?.scanCompare?.module?.nv;
   if (!previewNv || !compareNv) return;
   const sourceNv = loadedRole === 'compare' ? previewNv : previewNv;
-  pushPreviewStateFrom(sourceNv);
-  if (typeof window !== "undefined") window.jointHist?.refresh?.();
+  pushPreviewStateFrom(sourceNv, ctx);
+  ctx?.jointHist?.refresh?.();
 }
 
 /**
@@ -4341,6 +4341,8 @@ export function syncPreviewPanesAfterLoad(loadedRole) {
  */
 export class ScanPreviewModule {
   constructor(options = {}) {
+    /** Shared module registry; own empty one when hosted standalone. */
+    this.ctx = options.ctx ?? new AppContext();
     this.role = options.role || 'preview';
     this.labelDefault = options.labelDefault || (this.role === 'compare' ? 'Compare' : 'Scan Preview');
     this.hintText = options.hint ?? (this.role === 'compare' ? '' : '←/→ 4D frame');
@@ -4425,7 +4427,7 @@ export class ScanPreviewModule {
   _applyPreviewCrosshairStyle() {
     if (!this.nv) return;
     this.nv.opts.crosshairColor = [0.2, 0.8, 0.2, 0.5];
-    const show = window.nvModule?.showCrosshair?.checked !== false;
+    const show = this.ctx.nv?.showCrosshair?.checked !== false;
     const w = show ? PREVIEW_CROSSHAIR_WIDTH : 0;
     this.nv.opts.crosshairWidth = w;
     this.nv.setCrosshairWidth(w);
@@ -4445,8 +4447,8 @@ export class ScanPreviewModule {
       this.nv.onLocationChange = (data) => this.updateCrosshairIntensity(data);
 
       eventHub.on('viewOptionsChange', (opts) => this.applyViewOptions(opts));
-      installPreviewSyncHooks(this.nv);
-      window.jointHist?.installPreviewHooks?.();
+      installPreviewSyncHooks(this.nv, this.ctx);
+      this.ctx.jointHist?.installPreviewHooks?.();
       this.canvas.addEventListener("keydown", (e) => this._onPreviewViewKey(e), true);
 
       // Capture phase: block Niivue dblclick → resetBriCon (robust frame-0 window).
@@ -4454,7 +4456,7 @@ export class ScanPreviewModule {
         if (this.role === 'compare' && (e.ctrlKey || e.metaKey)) {
           e.preventDefault();
           e.stopImmediatePropagation();
-          window.scanCompare?.deactivate?.();
+          this.ctx.scanCompare?.deactivate?.();
           return;
         }
         e.preventDefault();
@@ -4499,8 +4501,8 @@ export class ScanPreviewModule {
     }
     nv.setSliceType(next);
     nv.drawScene();
-    if (window.scanCompare?.isReady) {
-      pushPreviewStateFrom(nv);
+    if (this.ctx.scanCompare?.isReady) {
+      pushPreviewStateFrom(nv, this.ctx);
     }
   }
 
@@ -4508,7 +4510,7 @@ export class ScanPreviewModule {
     if (e.repeat || e.ctrlKey || e.altKey || e.metaKey) return;
     if (e.code === "ArrowLeft" || e.code === "ArrowRight") {
       const delta = e.code === "ArrowRight" ? 1 : -1;
-      if (stepPreviewPanesFrame4D(this.nv, delta)) {
+      if (stepPreviewPanesFrame4D(this.nv, delta, this.ctx)) {
         e.preventDefault();
         e.stopImmediatePropagation();
       }
@@ -4521,7 +4523,7 @@ export class ScanPreviewModule {
 
   /** Toggle maximize this viewer (hide the other viewer) */
   toggleMaximize() {
-    eventHub.emit('toggleViewerMaximize', { containerId: this.container?.id });
+    this.ctx.viewManager?.toggleViewerMaximize(this.container?.id);
   }
 
   triggerHighlight() {
@@ -4576,10 +4578,10 @@ export class ScanPreviewModule {
       this.triggerHighlight();
       
       console.log("ScanPreviewModule loaded:", name);
-      if (!opts.skipPeerSync && window.scanCompare?.isReady) {
-        setTimeout(() => syncPreviewPanesAfterLoad(this.role), 0);
+      if (!opts.skipPeerSync && this.ctx.scanCompare?.isReady) {
+        setTimeout(() => syncPreviewPanesAfterLoad(this.role, this.ctx), 0);
       } else if (!opts.skipPeerSync) {
-        window.jointHist?.refresh?.();
+        this.ctx.jointHist?.refresh?.();
       }
     } catch (e) {
       console.error("ScanPreviewModule load failed:", e);
@@ -4644,10 +4646,8 @@ export class ScanPreviewModule {
 
   /** e.g. `scan_1_gre_seq.nii.gz` → `1. gre_seq` (matches SCANS volume list) */
   _shortScanLabel(name) {
-    const job = typeof window !== 'undefined' && window.scanModule?.getJobForVolume
-      ? window.scanModule.getJobForVolume({ name })
-      : null;
-    return formatScanDisplayTitle(name, job);
+    const job = this.ctx.scan?.getJobForVolume?.({ name }) ?? null;
+    return formatScanDisplayTitle(name, job, this.ctx.explorer);
   }
 }
 
@@ -4666,7 +4666,9 @@ export class ComparePane {
     container.appendChild(el);
   }
 
-  constructor() {
+  constructor(ctx = null) {
+    /** Shared module registry; own empty one when hosted standalone. */
+    this.ctx = ctx ?? new AppContext();
     this.module = null;
     this._initPromise = null;
     this.isActive = false;
@@ -4689,31 +4691,32 @@ export class ComparePane {
 
   async _doInit() {
     try {
-      await window.scanPreview?.waitForInit?.();
-      if (window.viewManager?.activateCompareColumn) {
-        window.viewManager.activateCompareColumn();
+      await this.ctx.scanPreview?.waitForInit?.();
+      if (this.ctx.viewManager?.activateCompareColumn) {
+        this.ctx.viewManager.activateCompareColumn();
       }
       this.module = new ScanPreviewModule({
+        ctx: this.ctx,
         role: 'compare',
         labelDefault: 'Compare',
         hint: 'Ctrl+dbl-click close',
       });
       this.module.render('nv-compare-container');
       await this.module.waitForInit();
-      window.jointHist?.installPreviewHooks?.();
-      const previewNv = window.scanPreview?.nv;
+      this.ctx.jointHist?.installPreviewHooks?.();
+      const previewNv = this.ctx.scanPreview?.nv;
       const compareNv = this.module.nv;
       if (previewNv && compareNv) {
         linkScanPreviewPanes(previewNv, compareNv);
-        installPreviewSyncHooks(previewNv);
-        installPreviewSyncHooks(compareNv);
-        pushPreviewStateFrom(previewNv);
+        installPreviewSyncHooks(previewNv, this.ctx);
+        installPreviewSyncHooks(compareNv, this.ctx);
+        pushPreviewStateFrom(previewNv, this.ctx);
       }
       setTimeout(() => {
         this.module?.nv?.resizeListener?.();
-        window.viewManager?.applyViewerLayout?.();
-        if (previewNv && compareNv) pushPreviewStateFrom(previewNv);
-        window.jointHist?.refresh?.();
+        this.ctx.viewManager?.applyViewerLayout?.();
+        if (previewNv && compareNv) pushPreviewStateFrom(previewNv, this.ctx);
+        this.ctx.jointHist?.refresh?.();
       }, 80);
       this.isActive = true;
       return this.module;
@@ -4727,30 +4730,30 @@ export class ComparePane {
   async loadFromVolume(vol) {
     if (!vol) return;
     let url = vol.sourceUrl || vol.url;
-    if (!url && window.nvModule?.nv?.mediaUrlMap) {
-      url = window.nvModule.nv.mediaUrlMap.get(vol);
+    if (!url && this.ctx.nv?.nv?.mediaUrlMap) {
+      url = this.ctx.nv.nv.mediaUrlMap.get(vol);
     }
     if (!url) {
       console.warn('ComparePane: volume has no URL — load it on the main viewer first');
       return;
     }
-    if (window.viewManager?.currentMode !== 'planning') {
-      window.viewManager?.setMode('planning');
+    if (this.ctx.viewManager?.currentMode !== 'planning') {
+      this.ctx.viewManager?.setMode('planning');
     }
     await this.ensureInitialized();
     await this.module.loadSingleScan(url, vol.name);
-    if (window.nvModule) {
-      window.nvModule.compareVolume = vol;
-      window.nvModule.updateVolumeList?.();
+    if (this.ctx.nv) {
+      this.ctx.nv.compareVolume = vol;
+      this.ctx.nv.updateVolumeList?.();
     }
   }
 
   async loadFromJob(job) {
-    if (!job?.niftiUrl || !window.nvModule) return;
-    if (window.viewManager?.currentMode !== 'planning') {
-      window.viewManager?.setMode('planning');
+    if (!job?.niftiUrl || !this.ctx.nv) return;
+    if (this.ctx.viewManager?.currentMode !== 'planning') {
+      this.ctx.viewManager?.setMode('planning');
     }
-    const nvMod = window.nvModule;
+    const nvMod = this.ctx.nv;
     const targetName = job.baseName + '.nii.gz';
     let idx = nvMod.nv.volumes.findIndex((v) => v.name === targetName);
     if (idx === -1) {
@@ -4763,7 +4766,7 @@ export class ComparePane {
 
   /** Tear down compare Niivue (C) and hide the pane until next Ctrl+load. */
   deactivate() {
-    const previewNv = window.scanPreview?.nv;
+    const previewNv = this.ctx.scanPreview?.nv;
     const compareNv = this.module?.nv;
 
     if (previewNv && compareNv) {
@@ -4789,23 +4792,24 @@ export class ComparePane {
     this._initPromise = null;
     this.isActive = false;
 
-    if (window.nvModule) {
-      window.nvModule.compareVolume = null;
-      if (typeof window.nvModule.updateVolumeList === 'function') {
-        window.nvModule.updateVolumeList();
+    if (this.ctx.nv) {
+      this.ctx.nv.compareVolume = null;
+      if (typeof this.ctx.nv.updateVolumeList === 'function') {
+        this.ctx.nv.updateVolumeList();
       }
     }
 
-    if (window.viewManager?.deactivateCompareColumn) {
-      window.viewManager.deactivateCompareColumn();
+    if (this.ctx.viewManager?.deactivateCompareColumn) {
+      this.ctx.viewManager.deactivateCompareColumn();
     }
-    window.jointHist?.refresh?.();
+    this.ctx.jointHist?.refresh?.();
   }
 }
 
 // For backward compatibility or standalone use
 export async function initNiivueApp(containerId, options = {}) {
   const module = new NiivueModule({ showFovDefault: false, ...options });
+  if (!module.ctx.pyWorker) module.ctx.pyWorker = new PyWorkerHost();
   module.renderFull(containerId);
   // Do not await initPyodide here, it can run in background
   module.initPyodide();

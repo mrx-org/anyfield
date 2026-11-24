@@ -21,7 +21,10 @@
     <script type="module">
       import { initNiivueApp } from './niivue_app.js';
 
-      // URL flag: ?pro=1 enables pro/debug behavior (same as index.html). Modules can check window.pro
+      // URL flag: ?pro=1 enables pro/debug behavior (same as app_bootstrap.js). Modules read
+      // it via pro_mode.js. The regex matches more than it looks like it does --
+      // `(^1) | (true) | (yes$)` -- and is kept identical to the other two copies on
+      // purpose; see insights/SPEC_no_field.md.
       const urlParams = new URLSearchParams(window.location.search);
       window.pro = /^1|true|yes$/i.test(urlParams.get('pro') || '');
 

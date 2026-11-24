@@ -3,14 +3,17 @@
  * A modular widget for exploring sequences/protocols organized by file
  * 
  * Usage:
- *   const explorer = new SequenceExplorer('container-id', {
+ *   const explorer = new SequenceExplorer(null, {
  *     onlySeqPrefix: false,
  *     sources: [...],
- *     onSequenceSelect: (sequence) => { ... }
  *   });
+ *   explorer.renderTree(el); explorer.renderParams(el); await explorer.renderPlot(el);
  */
 
+import { AppContext } from "../app_context.js";
 import { eventHub } from "../event_hub.js";
+import { goToFooterCard } from "../footer_cards.js";
+import { isProUser } from "../pro_mode.js";
 import { formatSimBackendLabel, resolveSimBackendId, SIM_BACKENDS } from "../scan_zero/sim_backends.js";
 import {
     SEQ_DEFAULT_PLOT_SPEED,
@@ -23,6 +26,11 @@ import {
     readSeqPlotTimeFromInputs,
     renderSeqChartGpuAfterPlot as mountChartGpuSequencePlot,
 } from "./seq_plot.js";
+
+/** seq_check_web reads `localStorage[SEQ_HANDOFF_PREFIX + id]` for `?seqId=<id>`. */
+const SEQ_HANDOFF_PREFIX = 'seq_handoff:';
+/** Handoffs older than this are dropped on the next "seq check" click (localStorage is ~5 MB). */
+const SEQ_HANDOFF_TTL_MS = 60 * 60 * 1000;
 
 function bindCodeEditorSelectAll(editor, rootEl) {
     const selectAll = () => {
@@ -78,70 +86,10 @@ const SEQ_TEMPLATES = {
                 <input type="text" id="seq-plot-time-stop" class="seq-plot-time-input" value="inf" inputmode="decimal" aria-label="time range stop" />
             </span>`;
     },
-    showConsoleCheckbox() {
-        return `<label style="display: flex; align-items: center; cursor: pointer; font-size: 0.875rem; color: var(--text); margin-left: auto;">
-                <input type="checkbox" id="seq-show-console-checkbox" style="margin-right: 0.5rem; cursor: pointer; width: 1rem; height: 1rem;">
-                <span>show console</span>
-            </label>`;
-    },
     errorDisplay() {
         return `<div id="seq-error-display" class="seq-error-message" style="display: none;" role="alert">
                 <div class="seq-error-text"></div>
                 <button type="button" class="seq-error-dismiss" title="Dismiss" aria-label="Dismiss error"><i class="bi bi-x-lg" aria-hidden="true"></i></button>
-            </div>`;
-    },
-    mainLayout(showConsoleHtml) {
-        return `<div id="seq-plot-output" class="seq-plot-container">
-                <div id="seq-mpl-actual-target" class="mpl-figure-container">
-                </div>
-            </div>
-            <div class="seq-explorer-panes">
-                <div class="seq-explorer-left-pane">
-                    <div id="seq-explorer-section">
-                        <div class="seq-explorer-controls" style="margin-bottom: 0.5rem; display: flex; justify-content: flex-end;">
-                            ${showConsoleHtml}
-                        </div>
-                        <div id="seq-tree" class="seq-explorer-tree"></div>
-                    </div>
-                </div>
-                <div class="seq-explorer-right-pane">
-                    <div id="seq-params-section">
-                        ${SEQ_TEMPLATES.protocolHeader({ popSeq: true })}
-                        <div style="display: flex; align-items: center; justify-content: space-between; margin-bottom: 0.75rem; padding-top: 0.5rem; border-top: 1px solid var(--border);">
-                            ${SEQ_TEMPLATES.plotOptionCheckbox({ id: 'seq-dark-plot-checkbox', label: 'Dark plot' })}
-                            ${SEQ_TEMPLATES.plotOptionCheckbox({
-                                id: 'seq-show-kspace-checkbox',
-                                label: 'Show k-space',
-                                labelId: 'seq-show-kspace-label',
-                                title: 'ChartGPU only: kx–ky and ky–kz follow waveform time zoom',
-                            })}
-                            ${SEQ_TEMPLATES.plotTimeRangeControls()}
-                            <select id="seq-plot-speed-selector" style="padding: 0.25rem; background: rgba(255, 255, 255, 0.08); border: 1px solid var(--border); border-radius: 4px; color: var(--text); font-size: 0.75rem; cursor: pointer;">
-                                <option value="full">Full plot</option>
-                                <option value="fast">Fast plot</option>
-                                <option value="faster">Faster plot</option>
-                                <option value="chartgpu" selected>ChartGPU</option>
-                            </select>
-                        </div>
-                        ${SEQ_TEMPLATES.errorDisplay()}
-                        <div id="seq-params-controls"></div>
-                    </div>
-                </div>
-            </div>
-            <div id="seq-console-section" class="console-section">
-                <h2 class="section-title">
-                    <svg fill="none" stroke="currentColor" viewBox="0 0 24 24" style="width: 1rem; height: 1rem; display: inline-block; vertical-align: middle; margin-right: 0.4rem;"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M8 9l3 3-3 3m5 0h3M5 20h14a2 2 0 002-2V6a2 2 0 00-2-2H5a2 2 0 00-2 2v12a2 2 0 002 2z"></path></svg>
-                    Console Output
-                </h2>
-                <div id="seq-console-output" class="console"></div>
-                <div id="seq-package-versions" class="versions">
-                    <span><strong>Pyodide:</strong> <span id="seq-pyodide-version">loading...</span></span>
-                    <span><strong>NumPy:</strong> <span id="seq-numpy-version">loading...</span></span>
-                    <span><strong>Matplotlib:</strong> <span id="seq-matplotlib-version">loading...</span></span>
-                    <span><strong>PyPulseq:</strong> <span id="seq-pypulseq-version">loading...</span></span>
-                    <span><strong>mrseq:</strong> <span id="seq-mrseq-version">loading...</span></span>
-                    <span><strong>ISMRMRD:</strong> <span id="seq-ismrmrd-version">loading...</span></span>
-                </div>
             </div>`;
     },
     mobileRunButtons() {
@@ -156,7 +104,7 @@ const SEQ_TEMPLATES = {
                 </div>`;
     },
     /** Protocol panel header: title + actions on one row; path + name on the line below. */
-    protocolHeader({ btnClass = false, popSeq = false, mobileRun = false } = {}) {
+    protocolHeader({ btnClass = false, mobileRun = false } = {}) {
         const btn = (id, label, primary = false) => btnClass
             ? `<button id="${id}" class="btn btn-secondary btn-md${primary ? ' seq-btn-primary' : ''}">${label}</button>`
             : `<button id="${id}" style="padding: 0.4rem 0.32rem; background: ${primary ? 'var(--accent)' : 'rgba(255, 255, 255, 0.08)'}; color: ${primary ? 'white' : 'var(--text, #ddd)'}; border: ${primary ? 'none' : '1px solid var(--border, #333)'}; border-radius: 4px; cursor: pointer; font-size: ${primary ? '0.875rem' : '0.75rem'}; font-weight: 500;">${label}</button>`;
@@ -171,8 +119,8 @@ const SEQ_TEMPLATES = {
                         <div class="seq-params-header-btns">
                             ${btn('seq-get-fov-btn', '↖ set FOV')}
                             ${btn('seq-edit-btn', 'edit code')}
+                            ${isProUser() ? btn('seq-check-btn', 'seq check') : ''}
                             ${btn('seq-execute-btn', 'plot seq', true)}
-                            ${popSeq ? btn('seq-pop-btn', 'pop seq') : ''}
                         </div>
                         ${mobileRun ? SEQ_TEMPLATES.mobileRunButtons() : ''}
                     </div>`;
@@ -241,28 +189,20 @@ export async function patchSequencePlotFromCode(pyodide, plotUtilsCode) {
     await pyodide.runPythonAsync('patch_pypulseq()');
 }
 
-/** Fetch seq_plot_utils.py and patch pypulseq.Sequence.plot (blocks main thread while Python runs). */
-export async function patchSequencePlot(pyodide, resolvePath) {
-    const url = typeof resolvePath === 'function'
-        ? resolvePath('seq_plot_utils.py')
-        : 'pypulseq/seq_plot_utils.py';
-    const response = await fetch(`${url}?${Date.now()}`);
-    if (!response.ok) throw new Error(`Could not load seq_plot_utils.py: ${response.status}`);
-    const plotUtilsCode = await response.text();
-    await patchSequencePlotFromCode(pyodide, plotUtilsCode);
-}
-
 export class SequenceExplorer {
     /** Default plot speed (must match `SEQ_DEFAULT_PLOT_SPEED` and template `selected` option). */
     static DEFAULT_PLOT_SPEED = SEQ_DEFAULT_PLOT_SPEED;
 
     constructor(containerId, config = {}) {
+        /** Shared module registry; own empty one when hosted outside the app bootstrap. */
+        this.ctx = config.ctx ?? new AppContext();
         this.container = typeof containerId === 'string' 
             ? document.getElementById(containerId) 
             : containerId;
         
-        // If containerId is provided but not found, throw error.
-        // If containerId is null, we assume modular rendering via renderTree/Params/Plot.
+        // Rendering is always modular now, via renderTree/renderParams/renderPlot; a
+        // container is only a fallback root for lookups. A named-but-absent one is still
+        // a caller error worth reporting rather than resolving to null.
         if (containerId !== null && !this.container) {
             throw new Error(`Container not found: ${containerId}`);
         }
@@ -271,7 +211,6 @@ export class SequenceExplorer {
         this.treeTarget = null;
         this.paramsTarget = null;
         this.plotTarget = null;
-        this.consoleTarget = null;
         
         // Determine base path from the module URL
         const moduleUrl = import.meta.url;
@@ -282,11 +221,9 @@ export class SequenceExplorer {
             basePath: config.basePath !== undefined ? config.basePath : defaultBasePath,
             onlySeqPrefix: config.onlySeqPrefix !== undefined ? config.onlySeqPrefix : true,
             sources: config.sources || [],
-            onSequenceSelect: config.onSequenceSelect || null,
             onFunctionStart: config.onFunctionStart || null,
             onFunctionExecute: config.onFunctionExecute || null,
             pyodide: config.pyodide || null,
-            showRefresh: config.showRefresh !== undefined ? config.showRefresh : true,
             showFilter: config.showFilter !== undefined ? config.showFilter : true,
             ...config
         };
@@ -306,15 +243,16 @@ export class SequenceExplorer {
         this._seqChartGpuRemoveDeviceListeners = null;
         /** Full Python traceback from the last failed executeFunction (silent scan prep reads this). */
         this._lastExecutionError = null;
-        /** Scan prep is already inside the Pyodide queue; the next executeFunction must not re-enqueue. */
-        this._inlineNextExecute = false;
+        /** Last worker `executeAndHarvest` result (seqBytes / FOV / ChartGPU / k-space). */
+        this._lastHarvest = null;
+        /** Queued dual-writes of .py (and package inits) onto the worker VFS. */
+        this._workerVfsChain = Promise.resolve();
+        /** Queued extra micropip installs on the worker (mrseq, …). */
+        this._workerInstallChain = Promise.resolve();
+        /** Package names already queued/installed on the worker. */
+        this._workerQueuedPackages = new Set();
         /** Visible plot seq is queued or running; ignore extra clicks. */
         this._plotSeqQueued = false;
-        
-        // Initialize UI
-        if (containerId) {
-            this.render();
-        }
         
         // Load sequences if sources are provided
         if (this.config.sources.length > 0) {
@@ -358,6 +296,10 @@ export class SequenceExplorer {
         if (getFovBtn) {
             getFovBtn.addEventListener('click', () => this.getFovFromSequence());
         }
+        const seqCheckBtn = this.paramsTarget.querySelector('#seq-check-btn');
+        if (seqCheckBtn) {
+            seqCheckBtn.addEventListener('click', () => this.openSeqCheck(seqCheckBtn));
+        }
 
         this.updateShareButtonVisibility();
         this._bindMobileScanButtons(this.paramsTarget);
@@ -369,10 +311,10 @@ export class SequenceExplorer {
         const scan = root.querySelector('#seq-mobile-scan');
         const scanCompare = root.querySelector('#seq-mobile-scan-compare');
         const settings = root.querySelector('#seq-mobile-scan-settings');
-        if (crop) crop.addEventListener('click', () => window.scanModule?.startCrop?.());
-        if (scan) scan.addEventListener('click', () => window.scanModule?.startScan?.());
-        if (scanCompare) scanCompare.addEventListener('click', () => window.scanModule?.startScanCompare?.());
-        if (settings) settings.addEventListener('click', () => window.scanModule?.openSimSettingsDialog?.());
+        if (crop) crop.addEventListener('click', () => this.ctx.scan?.startCrop?.());
+        if (scan) scan.addEventListener('click', () => this.ctx.scan?.startScan?.());
+        if (scanCompare) scanCompare.addEventListener('click', () => this.ctx.scan?.startScanCompare?.());
+        if (settings) settings.addEventListener('click', () => this.ctx.scan?.openSimSettingsDialog?.());
     }
 
     async renderPlot(target) {
@@ -400,27 +342,9 @@ export class SequenceExplorer {
             } else {
                 input.value = value;
             }
-            // Trigger input event to ensure any internal state is updated
-            input.dispatchEvent(new Event('input'));
-            this._emitProtocolParamsChanged();
         }
     }
 
-    _emitProtocolParamsChanged() {
-        if (!this.selectedSequence) return;
-        eventHub.emit('protocolParamsChanged', {
-            fileName: this.selectedSequence.fileName,
-            functionName: this.selectedSequence.functionName,
-        });
-    }
-
-    _bindProtocolParamInput(input) {
-        if (!input) return;
-        const handler = () => this._emitProtocolParamsChanged();
-        input.addEventListener('input', handler);
-        input.addEventListener('change', handler);
-    }
-    
     resolvePath(path) {
         // If it's a full URL or absolute path, return it as is
         if (path.includes('://') || path.startsWith('/')) {
@@ -434,6 +358,98 @@ export class SequenceExplorer {
     vfsPath(fileName) {
         const p = String(fileName || '').replace(/\\/g, '/').replace(/^\/+/, '');
         return p ? `/${p}` : '/';
+    }
+
+    /**
+     * Queue writes onto the worker VFS after `whenInit()` (stdlib only — does not
+     * wait for pynufft / pypulseq). `executeFunction` flushes this before RPC.
+     * @param {Array<{ path: string, data: string|Uint8Array }>} files
+     */
+    _enqueueWorkerFsWrites(files) {
+        const host = this.ctx?.pyWorker;
+        if (!host || !files?.length) return;
+        this._workerVfsChain = this._workerVfsChain.then(async () => {
+            const client = await host.whenInit();
+            for (const { path, data } of files) {
+                await client.fsWrite(path, data);
+            }
+        }).catch((e) => {
+            console.warn('[seq] worker VFS write failed:', e);
+        });
+    }
+
+    async _flushWorkerVfs() {
+        await this._workerVfsChain;
+    }
+
+    /**
+     * Empty `__init__.py` for each parent dir plus the file itself, matching
+     * `mirrorLocalPythonModuleToPyodide`.
+     * @param {string} filePath
+     * @param {string} code
+     * @returns {Array<{ path: string, data: string }>}
+     */
+    _packageTreeWrites(filePath, code) {
+        const parts = String(filePath || '').replace(/^\/+/, '').split('/').filter(Boolean);
+        if (!parts.length) return [];
+        const writes = [];
+        let curr = '';
+        for (const d of parts.slice(0, -1)) {
+            curr += `/${d}`;
+            writes.push({ path: `${curr}/__init__.py`, data: '' });
+        }
+        writes.push({ path: `/${parts.join('/')}`, data: code ?? '' });
+        return writes;
+    }
+
+    /**
+     * Extra packages (mrseq, …) go on the worker so a user-selected script does
+     * not ImportError only there. Warm-up already has numpy / matplotlib / pypulseq.
+     * @param {Array<string|{name:string,deps?:boolean}>} pkgs
+     */
+    _queueWorkerExtraInstalls(pkgs) {
+        const host = this.ctx?.pyWorker;
+        if (!host || !pkgs?.length) return;
+        const warm = new Set(['numpy', 'matplotlib', 'scipy', 'nibabel', 'pynufft', 'pypulseq', 'micropip']);
+        const extras = [];
+        for (const pkg of pkgs) {
+            const spec = typeof pkg === 'string' ? pkg : (pkg.name || '');
+            const name = String(spec).split(/[>=<!~]/)[0].trim();
+            if (!name || warm.has(name) || this._workerQueuedPackages.has(name)) continue;
+            this._workerQueuedPackages.add(name);
+            extras.push(typeof pkg === 'object' && pkg.deps === false
+                ? { name: spec, deps: false }
+                : { name: spec });
+        }
+        if (!extras.length) return;
+        this._workerInstallChain = this._workerInstallChain.then(async () => {
+            const client = await host.ready();
+            await client.installPackages({ micropip: extras });
+        }).catch((e) => {
+            console.warn('[seq] worker extra package install failed:', e);
+        });
+    }
+
+    async _awaitWorkerInstalls() {
+        await this._workerInstallChain;
+    }
+
+    /**
+     * Apply Pulseq FOV (already m→mm, padded to 3) from a harvest.
+     * @param {number[]|null|undefined} fovMm
+     * @returns {{ fovXmm: number, fovYmm: number, fovZmm: number }|null}
+     */
+    _applyFovMmFromHarvest(fovMm) {
+        if (!Array.isArray(fovMm) || fovMm.length < 2) return null;
+        const fovXmm = Number(fovMm[0]) || 0;
+        const fovYmm = Number(fovMm[1]) || 0;
+        const fovZmm = Number((fovMm.length >= 3 ? fovMm[2] : fovMm[1])) || 0;
+        this.ctx.nv?.applySequenceFovDimensions({
+            fov_x_mm: fovXmm,
+            fov_y_mm: fovYmm,
+            fov_z_mm: fovZmm,
+        });
+        return { fovXmm, fovYmm, fovZmm };
     }
 
     isUserArtifactPath(path) {
@@ -650,8 +666,8 @@ json.dumps(code)
      * Reads the live viewer/scan modules; skips missing fields; null when nothing is available.
      */
     collectSimulationShareMeta() {
-        const nvMod = window.nvModule;
-        const scanModule = window.scanModule;
+        const nvMod = this.ctx.nv;
+        const scanModule = this.ctx.scan;
         const meta = {};
         try {
             const phantom = typeof scanModule?.getActiveBiftiId === 'function'
@@ -728,13 +744,13 @@ json.dumps(code)
      */
     async applySimulationStateFromMeta(sim, { loadPhantom = true } = {}) {
         if (!sim || typeof sim !== 'object') return;
-        const nvMod = window.nvModule;
-        const scanModule = window.scanModule;
+        const nvMod = this.ctx.nv;
+        const scanModule = this.ctx.scan;
         if (sim.backend && typeof scanModule?.setSelectedSimBackendId === 'function') {
             const spec = SIM_BACKENDS[resolveSimBackendId(sim.backend, '')];
             if (!spec) {
                 console.warn('[share] ignoring unknown shared backend', sim.backend);
-            } else if (spec.proOnly && !window.pro) {
+            } else if (spec.proOnly && !isProUser()) {
                 console.warn('[share] shared backend is pro-only; keeping current backend', sim.backend);
             } else {
                 try {
@@ -1185,57 +1201,6 @@ os.path.exists(${JSON.stringify(vfs)})
         }
     }
     
-    render() {
-        this.container.innerHTML = SEQ_TEMPLATES.mainLayout(SEQ_TEMPLATES.showConsoleCheckbox());
-        const executeBtn = this.container.querySelector('#seq-execute-btn');
-        if (executeBtn) {
-            executeBtn.addEventListener('click', () => {
-                this.executeFunction();
-            });
-        }
-        const getFovBtn = this.container.querySelector('#seq-get-fov-btn');
-        if (getFovBtn) {
-            getFovBtn.addEventListener('click', () => {
-                this.getFovFromSequence();
-            });
-        }
-        
-        const popBtn = this.container.querySelector('#seq-pop-btn');
-        if (popBtn) {
-            popBtn.addEventListener('click', () => {
-                this.executeFunctionInPopup();
-            });
-        }
-
-        this.syncPlotSpeedKspaceCheckbox(this.container);
-        const plotSpeedSel = this.container.querySelector('#seq-plot-speed-selector');
-        if (plotSpeedSel) {
-            plotSpeedSel.addEventListener('change', () => this.syncPlotSpeedKspaceCheckbox(this.container));
-        }
-        
-        // Show console checkbox event listener
-        const showConsoleCheckbox = this.container.querySelector('#seq-show-console-checkbox');
-        if (showConsoleCheckbox) {
-            showConsoleCheckbox.addEventListener('change', (e) => {
-                const consoleSection = this.container.querySelector('#seq-console-section');
-                if (consoleSection) {
-                    if (e.target.checked) {
-                        consoleSection.classList.add('visible');
-                    } else {
-                        consoleSection.classList.remove('visible');
-                    }
-                }
-            });
-        }
-        
-        // Store function parameters
-        this.functionParams = [];
-        
-        // Initialize plotting infrastructure
-        this.initPlottingInfrastructure();
-        this._bindErrorDisplay(this.container);
-    }
-    
     initPlottingInfrastructure() {
         const root = this.plotTarget || this.container;
         // Set up MutationObserver to catch matplotlib figures
@@ -1299,19 +1264,6 @@ plt.rcParams['font.size'] = 8`;
         }
     }
     
-    async installOptimizedPlotFunction() {
-        if (!this.config.pyodide) {
-            console.warn('Pyodide not available, cannot install optimized plot function');
-            return;
-        }
-        try {
-            await patchSequencePlot(this.config.pyodide, (p) => this.resolvePath(p));
-        } catch (error) {
-            console.error('Error installing optimized plot function:', error);
-            throw error;
-        }
-    }
-
     /**
      * Tear down ChartGPU charts and shared WebGPU device (see seq_plot.js).
      */
@@ -1326,8 +1278,8 @@ plt.rcParams['font.size'] = 8`;
     /**
      * Load ChartGPU stacked panels after Python seq.plot(..., plot_speed='chartgpu').
      */
-    async renderSeqChartGpuAfterPlot(plotRoot, pyodide, plotContainer) {
-        return mountChartGpuSequencePlot(this, plotRoot, pyodide, plotContainer);
+    async renderSeqChartGpuAfterPlot(plotRoot, pyodide, plotContainer, harvest) {
+        return mountChartGpuSequencePlot(this, plotRoot, pyodide, plotContainer, harvest);
     }
 
     /** Clears Pyodide ChartGPU payload cache (`seq_plot.js`). */
@@ -1335,29 +1287,6 @@ plt.rcParams['font.size'] = 8`;
         return releaseChartgpuPythonPayload(pyodide);
     }
 
-    
-    renderConsole(target) {
-        this.consoleTarget = typeof target === 'string' ? document.getElementById(target) : target;
-        if (!this.consoleTarget) throw new Error(`Console target not found: ${target}`);
-        
-        this.consoleTarget.innerHTML = `
-            <div id="seq-console-section" class="console-section visible">
-                <h2 class="section-title">
-                    <svg fill="none" stroke="currentColor" viewBox="0 0 24 24" style="width: 1rem; height: 1rem; display: inline-block; vertical-align: middle; margin-right: 0.4rem;"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M8 9l3 3-3 3m5 0h3M5 20h14a2 2 0 002-2V6a2 2 0 00-2-2H5a2 2 0 00-2 2v12a2 2 0 002 2z"></path></svg>
-                    Console Output
-                </h2>
-                <div id="seq-console-output" class="console"></div>
-                <div id="seq-package-versions" class="versions">
-                    <span><strong>Pyodide:</strong> <span id="seq-pyodide-version">loading...</span></span>
-                    <span><strong>NumPy:</strong> <span id="seq-numpy-version">loading...</span></span>
-                    <span><strong>Matplotlib:</strong> <span id="seq-matplotlib-version">loading...</span></span>
-                    <span><strong>PyPulseq:</strong> <span id="seq-pypulseq-version">loading...</span></span>
-                    <span><strong>mrseq:</strong> <span id="seq-mrseq-version">loading...</span></span>
-                    <span><strong>ISMRMRD:</strong> <span id="seq-ismrmrd-version">loading...</span></span>
-                </div>
-            </div>
-        `;
-    }
 
     /**
      * Show a modal explaining that filenames must not start with "number_" (e.g. 1_, 8_)
@@ -1441,17 +1370,6 @@ plt.rcParams['font.size'] = 8`;
     }
     
     log(msg, type = 'info') {
-        const root = this.consoleTarget || this.container;
-        const consoleEl = root ? root.querySelector('#seq-console-output') : null;
-        
-        const timestamp = new Date().toLocaleTimeString([], { hour12: false, hour: '2-digit', minute: '2-digit', second: '2-digit' });
-        const colorClass = type === 'error' ? 'error' : (type === 'warn' ? 'warn' : 'info');
-        
-        if (consoleEl) {
-            consoleEl.innerHTML += `<div style="margin-bottom: 0.25rem;"><span class="timestamp">[${timestamp}]</span> <span class="${colorClass}">${msg}</span></div>`;
-            consoleEl.scrollTop = consoleEl.scrollHeight;
-        }
-        
         console.log(`[${type}] ${msg}`);
     }
     
@@ -1651,27 +1569,10 @@ plt.rcParams['font.size'] = 8`;
         return vfsPath;
     }
 
-    /**
-     * Return installed PyPulseq version if known.
-     * Falls back to app-pinned version when the versions panel is not ready yet.
-     * @returns {string}
-     */
-    getInstalledPyPulseqVersion() {
-        const fallbackVersion = '1.5.0.post1';
-        const root = this.consoleTarget || this.container || document;
-        const versionEl = root ? root.querySelector('#seq-pypulseq-version') : null;
-        const version = versionEl?.textContent?.trim();
-        const normalize = (v) => String(v).replace(/\.post\d+$/i, '');
-        if (!version || version === 'loading...' || version === 'unknown') {
-            return normalize(fallbackVersion);
-        }
-        return normalize(version);
-    }
-
     /** Full local PyPulseq label for UI notes (e.g. ``1.5.0post1``). */
     getLocalPyPulseqVersionLabel() {
         const fallbackVersion = '1.5.0.post1';
-        const root = this.consoleTarget || this.container || document;
+        const root = this.container || document;
         const versionEl = root ? root.querySelector('#seq-pypulseq-version') : null;
         let version = versionEl?.textContent?.trim();
         if (!version || version === 'loading...' || version === 'unknown') {
@@ -2238,10 +2139,7 @@ result
         const displayName = src?.displayName || '';
         this.selectedSequence = { fileName, functionName, displayName, ...func, source: fileData.source };
         this.updateSequenceNameDisplay();
-        if (this.config.onSequenceSelect) {
-            this.config.onSequenceSelect(this.selectedSequence);
-        }
-        eventHub.emit('sequenceSelected', this.selectedSequence);
+        this.ctx.scan?.onSequenceSelected(this.selectedSequence);
         try {
             await this.loadFunctionParameters(this.selectedSequence);
         } catch (e) {
@@ -2457,6 +2355,7 @@ import micropip
         
         if (toInstall.length === 0) {
             console.log('All dependencies already installed');
+            this._queueWorkerExtraInstalls(dependencies);
             return;
         }
         
@@ -2523,6 +2422,7 @@ await micropip.install('${pkgSpec}', deps=False)
             }
             
             this.showStatus(`Installed ${pkgNames.length} package(s)`, 'success');
+            this._queueWorkerExtraInstalls(toInstall);
         } catch (error) {
             console.error('Error installing dependencies:', error);
             this.showStatus(`Error installing dependencies: ${error.message}`, 'error');
@@ -2613,6 +2513,7 @@ else:
         const parentDir = dirs.length ? `/${dirs.join('/')}` : '/';
         py.push(`with open(os.path.join(${JSON.stringify(parentDir)}, ${JSON.stringify(fileBase)}), 'w', encoding='utf-8') as f:\n    f.write(${JSON.stringify(code)})`);
         await this.config.pyodide.runPythonAsync(py.join('\n'));
+        this._enqueueWorkerFsWrites(this._packageTreeWrites(normPath, code));
     }
 
     async mirrorRelativeLocalImports(filePath, code, visited, depth = 0) {
@@ -2664,6 +2565,10 @@ if not os.path.exists(init_path):
 with open(${JSON.stringify(vfsPath)}, 'w', encoding='utf-8') as f:
     f.write(${JSON.stringify(code)})
 `);
+            this._enqueueWorkerFsWrites([
+                { path: '/remote_modules/__init__.py', data: '' },
+                { path: vfsPath, data: code },
+            ]);
         }
         const moduleName = fileName.replace(/\.py$/i, '').replace(/\.ipynb$/i, '');
         const fullModulePath = `remote_modules.${moduleName}`;
@@ -2753,6 +2658,10 @@ if not os.path.exists(init_path):
 with open(${JSON.stringify(vfsPath)}, 'w', encoding='utf-8') as f:
     f.write(${JSON.stringify(code)})
 `);
+            this._enqueueWorkerFsWrites([
+                { path: '/remote_modules/__init__.py', data: '' },
+                { path: vfsPath, data: code },
+            ]);
         }
         const moduleName = fileName.replace(/\.py$/i, '').replace(/\.ipynb$/i, '');
         const fullModulePath = `remote_modules.${moduleName}`;
@@ -2877,6 +2786,11 @@ for _mod, _code in _code_map.items():
     }
 json.dumps(_results)
 `);
+                this._enqueueWorkerFsWrites([
+                    { path: `/${modulePackageName}/__init__.py`, data: '' },
+                    { path: `${moduleScriptsDir}/__init__.py`, data: '' },
+                    ...entries.map(({ vfsPath, code }) => ({ path: vfsPath, data: code })),
+                ]);
                 const allParsed = JSON.parse(batchResult);
                 const folderDeps = [];
                 for (const { file, code, fullModulePath } of entries) {
@@ -3391,9 +3305,7 @@ json.dumps(functions)
                 const fileName = item.dataset.file;
                 const functionName = item.dataset.function;
                 void this.selectSequenceByFileAndFunction(fileName, functionName);
-                if (typeof window.goToFooterCard === 'function') {
-                    window.goToFooterCard(1);
-                }
+                goToFooterCard(1);
             });
         });
     }
@@ -3411,16 +3323,12 @@ json.dumps(functions)
         const paramsControls = root.querySelector('#seq-params-controls');
         const executeBtn = root.querySelector('#seq-execute-btn');
         const editBtn = root.querySelector('#seq-edit-btn');
-        const popBtn = root.querySelector('#seq-pop-btn');
         
         if (!paramsSection || !paramsControls || !executeBtn) return;
         
-        // Enable/disable edit and pop buttons based on selection
+        // Enable/disable the edit button based on selection
         if (editBtn) {
             editBtn.disabled = !sequence;
-        }
-        if (popBtn) {
-            popBtn.disabled = !sequence;
         }
         
         // Show loading state
@@ -3923,7 +3831,6 @@ json.dumps(_result)
                                 const vfsPath = await this.writeUploadedSeqToVfs(file);
                                 if (vfsPath) {
                                     input.value = vfsPath;
-                                    this._emitProtocolParamsChanged();
                                 }
                             } catch (writeErr) {
                                 console.error('Failed to write uploaded file to VFS:', writeErr);
@@ -4032,8 +3939,6 @@ json.dumps(_result)
                 input.title = 'No description available';
             }
 
-            this._bindProtocolParamInput(input);
-            
             row.appendChild(inputCell);
             
             // Type tag cell
@@ -4053,41 +3958,92 @@ json.dumps(_result)
     }
     
     /**
-     * Run the selected sequence. User-facing calls wait on the shared Pyodide queue so they
-     * do not overlap seq.write / recon. Scan prep sets `_inlineNextExecute` and runs inside
-     * the task it already holds.
+     * Run the selected sequence. A visible plot seq waits on the main-thread Pyodide queue so
+     * it does not overlap crop / resample there. Silent runs (scan prep, Get FOV) execute on
+     * the worker and go straight through: scan prep calls this from inside its own `sim-seq`
+     * task, so queueing it would deadlock the drain.
      */
     async executeFunction(silent = false, protocolName = null) {
-        if (this._inlineNextExecute) {
-            this._inlineNextExecute = false;
+        const nv = this.ctx?.nv;
+        if (silent || !nv?.enqueuePyodideTask) {
             return this._executeFunctionNow(silent, protocolName);
         }
-        if (!silent && this._plotSeqQueued) return;
-        const nv = window.nvModule;
-        if (nv?.enqueuePyodideTask) {
-            const executeBtn = !silent
-                ? (this.paramsTarget || this.container)?.querySelector('#seq-execute-btn')
-                : null;
-            if (!silent) this._plotSeqQueued = true;
+        if (this._plotSeqQueued) return;
+        const executeBtn = (this.paramsTarget || this.container)?.querySelector('#seq-execute-btn');
+        this._plotSeqQueued = true;
+        if (executeBtn) {
+            executeBtn.disabled = true;
+            executeBtn.textContent = 'Plotting...';
+        }
+        try {
+            return await nv.enqueuePyodideTask(
+                `plotseq_${Date.now()}`,
+                'plot-seq',
+                () => this._executeFunctionNow(silent, protocolName),
+            );
+        } finally {
+            this._plotSeqQueued = false;
             if (executeBtn) {
-                executeBtn.disabled = true;
-                executeBtn.textContent = 'Plotting...';
-            }
-            try {
-                return await nv.enqueuePyodideTask(
-                    `plotseq_${Date.now()}`,
-                    silent ? 'seq-exec' : 'plot-seq',
-                    () => this._executeFunctionNow(silent, protocolName),
-                );
-            } finally {
-                if (!silent) this._plotSeqQueued = false;
-                if (executeBtn) {
-                    executeBtn.disabled = false;
-                    executeBtn.textContent = 'plot seq';
-                }
+                executeBtn.disabled = false;
+                executeBtn.textContent = 'plot seq';
             }
         }
-        return this._executeFunctionNow(silent, protocolName);
+    }
+
+    /**
+     * Pro: build the current protocol's .seq and open it in seq_check_web in a new tab,
+     * via seq_check's `?seqId=` + `localStorage["seq_handoff:<id>"]` handoff (same origin).
+     */
+    async openSeqCheck(btn = null) {
+        // Opened before any await: a window.open after an await is no longer tied to the
+        // click, and popup blockers stop it.
+        const win = window.open('', '_blank');
+        const label = btn?.textContent;
+        if (btn) {
+            btn.disabled = true;
+            btn.textContent = 'Building...';
+        }
+        try {
+            const nv = this.ctx?.nv;
+            const run = () => this._executeFunctionNow(true);
+            if (nv?.enqueuePyodideTask) {
+                await nv.enqueuePyodideTask(`seqcheck_${Date.now()}`, 'seq-check', run);
+            } else {
+                await run();
+            }
+            if (this._lastExecutionError) throw new Error(this._lastExecutionError);
+            const raw = this._lastHarvest?.seqBytes;
+            const seqBytes = raw instanceof Uint8Array ? raw : (raw instanceof ArrayBuffer ? new Uint8Array(raw) : null);
+            const seqText = seqBytes ? new TextDecoder('utf-8').decode(seqBytes) : '';
+            if (!seqText.trim()) throw new Error('The protocol produced no .seq file.');
+
+            const now = Date.now();
+            try {
+                for (let i = localStorage.length - 1; i >= 0; i--) {
+                    const key = localStorage.key(i);
+                    const stamp = key?.startsWith(SEQ_HANDOFF_PREFIX)
+                        ? parseInt(key.slice(SEQ_HANDOFF_PREFIX.length).split('-')[0], 36)
+                        : NaN;
+                    if (stamp < now - SEQ_HANDOFF_TTL_MS) localStorage.removeItem(key);
+                }
+            } catch (_) { /* storage blocked: the setItem below reports it */ }
+            const id = `${now.toString(36)}-${Math.random().toString(36).slice(2, 8)}`;
+            localStorage.setItem(`${SEQ_HANDOFF_PREFIX}${id}`, JSON.stringify({ seqText }));
+
+            const url = new URL('./seq_check_web/', import.meta.url);
+            url.searchParams.set('seqId', id);
+            if (win) win.location.href = url.href;
+            else window.open(url.href, '_blank');
+        } catch (e) {
+            win?.close();
+            console.error('[seq check]', e);
+            alert(`seq check failed: ${e?.message || e}`);
+        } finally {
+            if (btn) {
+                btn.disabled = false;
+                btn.textContent = label;
+            }
+        }
     }
 
     async _executeFunctionNow(silent = false, protocolName = null) {
@@ -4124,6 +4080,7 @@ json.dumps(_result)
         
         // Clear any previous error display
         this._lastExecutionError = null;
+        this._lastHarvest = null;
         this.clearErrorDisplay(paramsRoot);
         
         try {
@@ -4161,7 +4118,6 @@ json.dumps(_result)
             // Set matplotlib target (visible plot seq only)
             if (plotContainer && !silent) {
                 document.pyodideMplTarget = plotContainer;
-                window.pyodideMplTarget = plotContainer;
             }
             
             // Get plot speed (ChartGPU → faster when WebGPU unavailable, e.g. mobile)
@@ -4220,8 +4176,6 @@ json.dumps(_result)
                 await this.installDependencies(execDeps);
             }
             
-            await this.ensureSourceManager();
-
             if (fileName && this.isUserArtifactPath(fileName)) {
                 await this.ensureSequenceFileInVfs(fileName);
             }
@@ -4232,24 +4186,64 @@ json.dumps(_result)
                 throw new Error('Sequence has no module path; cannot execute.');
             }
             const modulePath = source.fullModulePath || source.module || source.path;
-            const script = this.buildExecuteScript({
-                modulePath,
-                functionName,
-                argsDict,
-                silent,
-                themeCode,
-                plotSpeed,
-                debug: false,
-                showKspace,
-                timeRange,
-            });
-            const result = await pyodide.runPythonAsync(script);
+            const useWorker = silent || plotSpeed === 'chartgpu';
+            let resultObj;
 
-            // Parse result (SourceManager returns JSON string)
-            const resultObj = JSON.parse(result);
+            if (useWorker) {
+                const host = this.ctx?.pyWorker;
+                if (!host) {
+                    throw new Error('Sequence execute needs ctx.pyWorker');
+                }
+                const client = await host.ready();
+                await this._flushWorkerVfs();
+                await this._awaitWorkerInstalls();
 
-            if (plotSpeed === 'chartgpu' && !silent && plotContainer) {
-                await this.renderSeqChartGpuAfterPlot(plotRoot, pyodide, plotContainer);
+                let sourceSeqPath = null;
+                if (functionName === 'seq_pulseq_interpreter') {
+                    const input = paramsRoot.querySelector('#seq-param-seq_file');
+                    if (input?.value?.trim()) sourceSeqPath = input.value.trim();
+                    if (sourceSeqPath) {
+                        try {
+                            const seqFile = pyodide.FS.readFile(sourceSeqPath);
+                            await client.fsWrite(sourceSeqPath, seqFile);
+                        } catch (e) {
+                            console.warn('[seq] could not copy interpreter .seq to worker:', e);
+                        }
+                    }
+                }
+
+                const harvest = await client.executeAndHarvest({
+                    modulePath,
+                    functionName,
+                    argsDict,
+                    silent,
+                    plotSpeed,
+                    showKspace,
+                    timeRange,
+                    theme: plotRoot.querySelector('#seq-dark-plot-checkbox')?.checked === false ? 'light' : 'dark',
+                    sourceSeqPath,
+                });
+                this._lastHarvest = harvest;
+                resultObj = harvest.result || { result: 'SUCCESS', message: 'Function executed successfully' };
+
+                if (plotSpeed === 'chartgpu' && !silent && plotContainer) {
+                    await this.renderSeqChartGpuAfterPlot(plotRoot, client.getBridge(), plotContainer, harvest);
+                }
+            } else {
+                await this.ensureSourceManager();
+                const script = this.buildExecuteScript({
+                    modulePath,
+                    functionName,
+                    argsDict,
+                    silent,
+                    themeCode,
+                    plotSpeed,
+                    debug: false,
+                    showKspace,
+                    timeRange,
+                });
+                const result = await pyodide.runPythonAsync(script);
+                resultObj = JSON.parse(result);
             }
 
             // Final sweep for any matplotlib figures that might have been created outside our container
@@ -4278,77 +4272,10 @@ json.dumps(_result)
             }
             this._lastExecutionError = null;
 
-            // SIM prep: silent execute with protocolName — push Pulseq seq.definitions FOV (m → mm) to Niivue.
-            // Scan pipeline runs this *before* generateFovMaskNifti() so mask voxel size × matrix matches seq FOV.
+            // SIM prep: silent execute with protocolName — push harvested FOV (m → mm) to Niivue.
             if (silent && protocolName != null) {
                 try {
-                    const fovScript = `
-import json
-import __main__
-from seq_source_manager import SourceManager
-
-seq = getattr(SourceManager, '_last_sequence', None)
-if seq is None and hasattr(__main__, 'seq'):
-    seq = __main__.seq
-
-fov_vals = None
-if seq is not None:
-    defs = getattr(getattr(seq, 'definitions', None), 'keys', lambda: [])()
-    for k in defs:
-        try:
-            key_str = str(k)
-        except Exception:
-            continue
-        if key_str.lower() == 'fov':
-            try:
-                _val = seq.get_definition(k)
-            except Exception:
-                _val = None
-            if _val is not None:
-                fov_vals = _val
-                break
-
-out = None
-if fov_vals is not None:
-    try:
-        vals = list(fov_vals)
-    except TypeError:
-        vals = [fov_vals]
-
-    if len(vals) == 1:
-        vals = [vals[0], vals[0], vals[0]]
-    elif len(vals) == 2:
-        vals = [vals[0], vals[1], vals[1]]
-    elif len(vals) >= 3:
-        vals = [vals[0], vals[1], vals[2]]
-
-    try:
-        out = [float(v) * 1000.0 for v in vals]
-    except Exception:
-        out = None
-
-json.dumps(out)
-`.trim();
-
-                    const fovResult = await pyodide.runPythonAsync(fovScript);
-                    let fovMm = null;
-                    try {
-                        fovMm = JSON.parse(fovResult);
-                    } catch (e) {
-                        console.error('Failed to parse FOV JSON from Python (scan path):', e, fovResult);
-                    }
-
-                    if (Array.isArray(fovMm) && fovMm.length >= 2) {
-                        const fovXmm = Number(fovMm[0]) || 0;
-                        const fovYmm = Number(fovMm[1]) || 0;
-                        const fovZmm = Number((fovMm.length >= 3 ? fovMm[2] : fovMm[1])) || 0;
-
-                        eventHub.emit('sequence_fov_dims', {
-                            fov_x_mm: fovXmm,
-                            fov_y_mm: fovYmm,
-                            fov_z_mm: fovZmm
-                        });
-                    }
+                    this._applyFovMmFromHarvest(this._lastHarvest?.fovMm);
                 } catch (e) {
                     console.error('Error emitting FOV after scan execution:', e);
                 }
@@ -4394,338 +4321,19 @@ json.dumps(out)
         }
 
         try {
-            const pyodide = this.config.pyodide;
-
-            // 1) Run the sequence once in silent mode using the same path as "plot seq"
             await this.executeFunction(true);
+            if (this._lastExecutionError) return;
 
-            // 2) After execution, read FOV from the last sequence object
-            const script = `
-import json
-import __main__
-from seq_source_manager import SourceManager
-
-seq = getattr(SourceManager, '_last_sequence', None)
-if seq is None and hasattr(__main__, 'seq'):
-    seq = __main__.seq
-
-fov_vals = None
-if seq is not None:
-    # Prefer seq.definitions keys if available, match case-insensitively on 'fov'
-    defs = getattr(getattr(seq, 'definitions', None), 'keys', lambda: [])()
-    for k in defs:
-        try:
-            key_str = str(k)
-        except Exception:
-            continue
-        if key_str.lower() == 'fov':
-            try:
-                _val = seq.get_definition(k)
-            except Exception:
-                _val = None
-            if _val is not None:
-                fov_vals = _val
-                break
-
-out = None
-if fov_vals is not None:
-    try:
-        vals = list(fov_vals)
-    except TypeError:
-        vals = [fov_vals]
-
-    if len(vals) == 1:
-        vals = [vals[0], vals[0], vals[0]]
-    elif len(vals) == 2:
-        vals = [vals[0], vals[1], vals[1]]
-    elif len(vals) >= 3:
-        vals = [vals[0], vals[1], vals[2]]
-
-    try:
-        out = [float(v) * 1000.0 for v in vals]
-    except Exception:
-        out = None
-
-json.dumps(out)
-`.trim();
-
-            const result = await pyodide.runPythonAsync(script);
-            let fovMm = null;
-            try {
-                fovMm = JSON.parse(result);
-            } catch (e) {
-                console.error('Failed to parse FOV JSON from Python:', e, result);
-            }
-
-            if (!Array.isArray(fovMm) || fovMm.length < 2) {
+            const applied = this._applyFovMmFromHarvest(this._lastHarvest?.fovMm);
+            if (!applied) {
                 this.showStatus('No FOV definition found in sequence.', 'warn');
                 return;
             }
 
-            const fovXmm = Number(fovMm[0]) || 0;
-            const fovYmm = Number(fovMm[1]) || 0;
-            const fovZmm = Number((fovMm.length >= 3 ? fovMm[2] : fovMm[1])) || 0;
-
-            eventHub.emit('sequence_fov_dims', {
-                fov_x_mm: fovXmm,
-                fov_y_mm: fovYmm,
-                fov_z_mm: fovZmm
-            });
-
-            this.showStatus(`FOV from sequence: ${fovXmm.toFixed(1)} x ${fovYmm.toFixed(1)} x ${fovZmm.toFixed(1)} mm`, 'info');
+            this.showStatus(`FOV from sequence: ${applied.fovXmm.toFixed(1)} x ${applied.fovYmm.toFixed(1)} x ${applied.fovZmm.toFixed(1)} mm`, 'info');
         } catch (error) {
             console.error('Error getting FOV from sequence:', error);
             this.showStatus(`Error getting FOV: ${error.message || error}`, 'error');
-        }
-    }
-    
-    async executeFunctionInPopup() {
-        if (!this.selectedSequence || !this.config.pyodide) {
-            console.warn('No function selected or Pyodide not available');
-            return;
-        }
-        if (this._plotStackReady) {
-            await this._plotStackReady;
-        }
-
-        const paramsRoot = this.paramsTarget || this.container;
-        const plotRoot = this.plotTarget || this.container;
-        
-        const { fileName, functionName, source } = this.selectedSequence;
-        
-        // Create modal similar to editor modal
-        const modal = document.createElement('div');
-        modal.className = 'seq-editor-modal';
-        modal.style.cssText = `
-            position: fixed;
-            top: 0;
-            left: 0;
-            width: 100%;
-            height: 100%;
-            background: rgba(0, 0, 0, 0.7);
-            z-index: 10000;
-            display: flex;
-            justify-content: center;
-            align-items: center;
-        `;
-        
-        const modalContent = document.createElement('div');
-        modalContent.className = 'seq-editor-container';
-        modalContent.style.cssText = `
-            background: var(--panel, #111a33);
-            border-radius: 10px;
-            width: 90%;
-            max-width: 1200px;
-            height: 85%;
-            display: flex;
-            flex-direction: column;
-            box-shadow: 0 10px 25px rgba(0, 0, 0, 0.5);
-            border: 1px solid var(--border, rgba(255, 255, 255, 0.12));
-        `;
-        
-        const header = document.createElement('div');
-        header.className = 'seq-editor-header';
-        header.style.cssText = `
-            padding: 1rem;
-            background: var(--panel, #111a33);
-            color: var(--text, #e8ecff);
-            border-radius: 10px 10px 0 0;
-            border-bottom: 1px solid var(--border, rgba(255, 255, 255, 0.12));
-            display: flex;
-            justify-content: space-between;
-            align-items: center;
-        `;
-        
-        const title = document.createElement('h2');
-        title.textContent = `Sequence Plot: ${fileName}:${functionName}`;
-        title.style.cssText = 'margin: 0; font-size: 1.1rem;';
-        header.appendChild(title);
-        
-        const closeBtn = document.createElement('button');
-        closeBtn.className = 'btn btn-secondary btn-md';
-        closeBtn.textContent = 'Close';
-        closeBtn.onclick = async () => {
-            await this.disposeSeqChartGpu();
-            // Clean up matplotlib target
-            const plotOutput = plotRoot ? plotRoot.querySelector('#seq-plot-output') : null;
-            if (plotOutput) {
-                document.pyodideMplTarget = plotOutput;
-                window.pyodideMplTarget = plotOutput;
-            }
-            modal.remove();
-        };
-        header.appendChild(closeBtn);
-        
-        const plotContainer = document.createElement('div');
-        plotContainer.id = 'seq-popup-plot-container';
-        plotContainer.style.cssText = `
-            flex: 1;
-            overflow: auto;
-            padding: 1rem;
-            background: var(--bg, #0b1020);
-        `;
-        
-        // Create matplotlib target container (same structure as regular plot output)
-        const mplTarget = document.createElement('div');
-        mplTarget.id = 'seq-popup-mpl-target';
-        mplTarget.className = 'mpl-figure-container';
-        mplTarget.style.cssText = `
-            display: flex;
-            flex-direction: column;
-            gap: 0.5rem;
-            width: 100%;
-            min-height: 0;
-            padding: 0.25rem;
-        `;
-        plotContainer.appendChild(mplTarget);
-        
-        modalContent.appendChild(header);
-        modalContent.appendChild(plotContainer);
-        modal.appendChild(modalContent);
-        document.body.appendChild(modal);
-        
-        // Close modal when clicking outside
-        modal.addEventListener('click', async (e) => {
-            if (e.target === modal) {
-                await this.disposeSeqChartGpu();
-                const plotOutput = plotRoot ? plotRoot.querySelector('#seq-plot-output') : null;
-                if (plotOutput) {
-                    document.pyodideMplTarget = plotOutput;
-                    window.pyodideMplTarget = plotOutput;
-                }
-                modal.remove();
-            }
-        });
-        
-        // Set matplotlib target to modal container
-        document.pyodideMplTarget = mplTarget;
-        window.pyodideMplTarget = mplTarget;
-        
-        try {
-            const pyodide = this.config.pyodide;
-            const argsDict = {};
-            const plotOptsRoot = this.getSeqPlotOptionsRoot();
-            const plotSpeedSelector = plotOptsRoot?.querySelector('#seq-plot-speed-selector');
-            const plotSpeedRequested = plotSpeedSelector?.value || SEQ_DEFAULT_PLOT_SPEED;
-            const resolvedPlot = resolveSeqPlotSpeed(plotSpeedRequested);
-            let plotSpeed = resolvedPlot.plotSpeed;
-            if (resolvedPlot.skippedChartGpu) {
-                if (plotSpeedSelector) plotSpeedSelector.value = plotSpeed;
-                this.syncPlotSpeedKspaceCheckbox(plotOptsRoot);
-                this.showStatus(`${resolvedPlot.reason} — using faster plot`, 'info');
-            }
-            const showKspace =
-                plotSpeed === 'chartgpu' &&
-                !!plotOptsRoot?.querySelector('#seq-show-kspace-checkbox')?.checked;
-            const timeRange = this.getSeqPlotTimeRange(plotOptsRoot);
-            const darkPlotCheckbox = plotRoot ? plotRoot.querySelector('#seq-dark-plot-checkbox') : null;
-            const darkPlot = darkPlotCheckbox?.checked ?? true;
-            
-            // Get theme code
-            const themeCode = darkPlot ? `
-plt.rcParams.update({
-    'figure.figsize': [10, 4.0],
-    'font.size': 8,
-    'figure.facecolor': '#111a33',
-    'axes.facecolor': '#111a33',
-    'axes.edgecolor': (1.0, 1.0, 1.0, 0.12),
-    'axes.labelcolor': '#e8ecff',
-    'text.color': '#e8ecff',
-    'xtick.color': '#a9b3da',
-    'ytick.color': '#a9b3da',
-    'grid.color': (1.0, 1.0, 1.0, 0.12),
-    'figure.edgecolor': '#111a33',
-    'savefig.facecolor': '#111a33',
-    'savefig.edgecolor': '#111a33'
-})` : `
-plt.rcdefaults()
-plt.rcParams['figure.figsize'] = [10, 4.0]
-plt.rcParams['font.size'] = 8`;
-            
-            // Build args dict from parameters
-            const paramsControls = paramsRoot ? paramsRoot.querySelector('#seq-params-controls') : null;
-            if (paramsControls && this.functionParams) {
-                this.functionParams.forEach(param => {
-                    const input = paramsControls.querySelector(`#seq-param-${param.name}`);
-                    if (!input) return;
-                    
-                    let valExpr;
-                    if (param.type === 'bool') {
-                        valExpr = input.checked ? 'True' : 'False';
-                    } else {
-                        const inputValue = input.value.trim();
-                        if (inputValue === '') {
-                            return; // Skip empty values, use default
-                        }
-                        
-                        if (param.type === 'int' || param.type === 'float') {
-                            valExpr = inputValue;
-                        } else                         if (param.type === 'list' || param.type === 'ndarray') {
-                            valExpr = `np.array(${inputValue})`;
-                        } else if (param.type === 'str' || param.type === 'file' || param.type === 'url') {
-                            valExpr = `"${inputValue.replace(/\\/g, '\\\\').replace(/"/g, '\\"')}"`;
-                        } else {
-                            valExpr = inputValue;
-                        }
-                    }
-                    argsDict[param.name] = valExpr;
-                });
-            }
-            
-            const sourceType = this.resolveSourceType(source);
-            const useModulePath = source.fullModulePath || (sourceType === 'pyodide_module' ? (source.module || source.path) : null);
-            if (!useModulePath) {
-                throw new Error('Sequence has no module path; cannot execute.');
-            }
-            const modulePath = source.fullModulePath || source.module || source.path;
-            const script = this.buildExecuteScript({
-                modulePath,
-                functionName,
-                argsDict,
-                silent: false,
-                themeCode,
-                plotSpeed,
-                debug: true,
-                showKspace,
-                timeRange,
-            });
-            const result = await pyodide.runPythonAsync(script);
-
-            if (plotSpeed === 'chartgpu') {
-                mplTarget.innerHTML = '';
-                await this.renderSeqChartGpuAfterPlot(plotRoot, pyodide, mplTarget);
-            }
-
-            // Final sweep for any matplotlib figures
-            setTimeout(() => {
-                document.querySelectorAll('div.ui-dialog, div[id^="matplotlib_"], div:has(> canvas)').forEach(el => {
-                    if (!mplTarget.contains(el) && el !== mplTarget) {
-                        mplTarget.appendChild(el);
-                    }
-                });
-            }, 800);
-
-        } catch (error) {
-            console.error('Error executing function in popup:', error);
-            await this.disposeSeqChartGpu();
-            let errorMsg = error.message || String(error);
-            const assertMatch = errorMsg.match(/AssertionError(?:: ([^\n]+))?/);
-            const valueErrorMatch = errorMsg.match(/ValueError: ([^\n]+)/);
-            const runtimeMatch = errorMsg.match(/RuntimeError: Error executing function '[^']+': ([^\n]+)/);
-            if (valueErrorMatch) {
-                errorMsg = valueErrorMatch[1];
-            } else if (runtimeMatch) {
-                errorMsg = runtimeMatch[1];
-            } else if (assertMatch && assertMatch[1]) {
-                errorMsg = assertMatch[1];
-            } else if (assertMatch) {
-                errorMsg = 'Timing or parameter constraint not satisfied (AssertionError). Check TE, TR, and readout bandwidth.';
-            }
-            
-            const errorDiv = document.createElement('div');
-            errorDiv.style.cssText = 'padding: 1rem; background: rgba(239, 68, 68, 0.15); border: 1px solid rgba(239, 68, 68, 0.5); border-radius: 4px; color: #ef4444; margin: 1rem;';
-            errorDiv.textContent = `Error: ${errorMsg}`;
-            plotContainer.appendChild(errorDiv);
         }
     }
     
@@ -4742,10 +4350,7 @@ plt.rcParams['font.size'] = 8`;
         this.sequences = {};
         this.selectedSequence = null;
         this.updateSequenceNameDisplay();
-        
-        // Notify other modules via eventHub
-        eventHub.emit('sequenceSelected', null);
-        
+        this.ctx.scan?.onSequenceSelected(null);
         this.renderTree();
     }
     
@@ -5000,11 +4605,6 @@ exec(${JSON.stringify(sourceManagerCode)}, seq_source_manager.__dict__)
 `);
     }
     
-    async loadDefaultSources() {
-        const configCode = await this.getDefaultSourcesConfig();
-        await this.loadSourcesFromConfig(configCode);
-    }
-
     async loadSourcesFromConfig(configCode) {
         if (!this.config.pyodide) {
             throw new Error('Pyodide not available');
@@ -6145,10 +5745,7 @@ def ${safeFunctionName}(
                             source: newSource
                         };
                         this.updateSequenceNameDisplay();
-                        
-                        // Notify other modules via eventHub
-                        eventHub.emit('sequenceSelected', this.selectedSequence);
-                        
+                        this.ctx.scan?.onSequenceSelected(this.selectedSequence);
                         await this.loadFunctionParameters(this.selectedSequence);
                     }
                     
@@ -6593,13 +6190,4 @@ if hasattr(sys.modules['__main__'], '_user_edited_files'):
         
         this.showStatus('File deleted', 'success');
     }
-}
-
-// Export for module systems and global window
-if (typeof module !== 'undefined' && module.exports) {
-    module.exports = { SequenceExplorer };
-}
-// Make available globally for script tag usage
-if (typeof window !== 'undefined') {
-    window.SequenceExplorer = SequenceExplorer;
 }

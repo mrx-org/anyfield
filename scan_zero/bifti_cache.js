@@ -27,23 +27,25 @@ import {
 /** Fixed default phantom id — loaded on startup and by the "Default phantom" button. */
 export const DEFAULT_CACHE_PHANTOM_ID = "brainweb-20-v2/subj04-3T-1mm-tra";
 
-/** Cache admin (download + upload UI). Override via `window.ANYFIELD_BIFTI_CACHE_ADMIN_URL`. */
-export const BIFTI_CACHE_ADMIN_BASE =
-  (typeof window !== "undefined" && window.ANYFIELD_BIFTI_CACHE_ADMIN_URL
-    ? String(window.ANYFIELD_BIFTI_CACHE_ADMIN_URL)
-    : "https://mzaiss--bifti-cache-admin.modal.run").replace(/\/$/, "");
+const BIFTI_CACHE_ADMIN_DEFAULT = "https://mzaiss--bifti-cache-admin.modal.run";
 
-/** Sim gateway (phantom list + HTTP sim jobs). Override via `window.ANYFIELD_HTTP_SIM_URL`. */
-export function simGatewayBase() {
-  const backendId = typeof window !== "undefined"
-    ? window.scanModule?.getSelectedSimBackendId?.()
-    : null;
-  const spec = backendId ? SIM_BACKENDS[backendId] : null;
-  const storedId = !spec && typeof window !== "undefined"
-    ? readStoredSimBackendId()
-    : null;
-  const storedSpec = storedId ? SIM_BACKENDS[storedId] : null;
-  return resolveHttpSimBaseUrl(spec?.httpBaseUrl || storedSpec?.httpBaseUrl || TOOL_MR0SIM_HTTP_MODAL);
+/**
+ * Cache admin (download + upload UI). Override via `window.ANYFIELD_BIFTI_CACHE_ADMIN_URL`.
+ * Read lazily so the override can be set after this module is evaluated.
+ */
+export function biftiCacheAdminBase() {
+  const override = typeof window !== "undefined" ? window.ANYFIELD_BIFTI_CACHE_ADMIN_URL : null;
+  return String(override || BIFTI_CACHE_ADMIN_DEFAULT).replace(/\/$/, "");
+}
+
+/**
+ * Sim gateway (phantom list + HTTP sim jobs) of `backendId`, else of the stored backend
+ * choice. Override via `window.ANYFIELD_HTTP_SIM_URL`.
+ * @param {string|null} [backendId] — e.g. `ctx.scan.getSelectedSimBackendId()`
+ */
+export function simGatewayBase(backendId = null) {
+  const spec = (backendId && SIM_BACKENDS[backendId]) || SIM_BACKENDS[readStoredSimBackendId()];
+  return resolveHttpSimBaseUrl(spec?.httpBaseUrl || TOOL_MR0SIM_HTTP_MODAL);
 }
 
 /** Normalize id: strip leading/trailing slashes. */
@@ -79,9 +81,9 @@ export function phantomConfigStem(id) {
   return splitCacheId(id).config;
 }
 
-/** `GET {simGateway}/v1/cache` → scan-ready phantom ids. */
-export async function fetchCachedPhantomIds() {
-  const url = `${simGatewayBase()}/v1/cache`;
+/** `GET {simGateway}/v1/cache` → scan-ready phantom ids, on `backendId`'s gateway. */
+export async function fetchCachedPhantomIds(backendId = null) {
+  const url = `${simGatewayBase(backendId)}/v1/cache`;
   const res = await fetch(url);
   if (!res.ok) {
     throw new Error(`Cache list failed (${res.status} ${res.statusText})`);
@@ -97,11 +99,8 @@ export async function fetchCachedPhantomIds() {
  */
 export function cacheDownloadUrl(id) {
   const { collection, name } = splitCacheId(id);
-  return `${BIFTI_CACHE_ADMIN_BASE}/v1/phantoms/${collection}/${name}/download`;
+  return `${biftiCacheAdminBase()}/v1/phantoms/${collection}/${name}/download`;
 }
-
-/** Alias for clarity at call sites. */
-export const phantomDownloadUrl = cacheDownloadUrl;
 
 /**
  * Download phantom archive bytes via browser `fetch` (HTTPS).
@@ -115,7 +114,7 @@ export async function downloadPhantomTarGz(id) {
   const res = await fetch(url);
   if (res.status === 404) {
     throw new Error(
-      `Phantom "${cid}" is not on the cache (404). Add it via the cache admin (${BIFTI_CACHE_ADMIN_BASE}) first.`,
+      `Phantom "${cid}" is not on the cache (404). Add it via the cache admin (${biftiCacheAdminBase()}) first.`,
     );
   }
   if (!res.ok) {

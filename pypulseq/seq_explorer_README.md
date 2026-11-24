@@ -12,7 +12,6 @@ A modular, flexible widget for exploring sequences/protocols organized by file, 
 
 ## Files
 
-- `seq_explorer.html` - Standalone test page
 - `seq_explorer.js` - Main widget class (modular, reusable)
 - `seq_explorer.css` - Widget styles
 
@@ -37,11 +36,14 @@ A modular, flexible widget for exploring sequences/protocols organized by file, 
     </style>
 </head>
 <body>
-    <div id="my-explorer"></div>
-    
-    <script src="seq_explorer.js"></script>
-    <script>
-        const explorer = new SequenceExplorer('my-explorer', {
+    <div id="my-tree"></div>
+    <div id="my-params"></div>
+    <div id="my-plot"></div>
+
+    <script type="module">
+        import { SequenceExplorer } from './seq_explorer.js';
+
+        const explorer = new SequenceExplorer(null, {
             onlySeqPrefix: false,
             sources: [
                 {
@@ -49,11 +51,11 @@ A modular, flexible widget for exploring sequences/protocols organized by file, 
                     type: 'folder',
                     path: 'https://github.com/mrx-org/anyfield/tree/main/pypulseq/anyseq'
                 }
-            ],
-            onSequenceSelect: (sequence) => {
-                console.log('Selected:', sequence);
-            }
+            ]
         });
+        explorer.renderTree('my-tree');
+        explorer.renderParams('my-params');
+        await explorer.renderPlot('my-plot');
     </script>
 </body>
 </html>
@@ -65,9 +67,7 @@ A modular, flexible widget for exploring sequences/protocols organized by file, 
 {
     onlySeqPrefix: false,        // Filter for functions starting with 'seq_'
     sources: [...],              // Array of source configurations
-    onSequenceSelect: (seq) => {}, // Callback when sequence is selected
     pyodide: pyodideInstance,    // Optional: Pyodide instance for better parsing and dependency installation
-    showRefresh: true,           // Show refresh button
     showFilter: true             // Show filter checkbox
 }
 ```
@@ -203,11 +203,7 @@ const explorer = new SequenceExplorer('explorer', {
             dependencies: ['pypulseq==1.4.2.post2'],
             micropip_no_deps: ['pypulseq']
         }
-    ],
-    onSequenceSelect: (sequence) => {
-        console.log(`Selected: ${sequence.functionName} from ${sequence.fileName}`);
-        // Load and execute the sequence...
-    }
+    ]
 });
 ```
 
@@ -228,7 +224,11 @@ The widget uses CSS variables for theming. Ensure these are defined:
 
 ## Testing
 
-Open `seq_explorer.html` in a browser to test the widget. The page includes example initialization code that you can modify.
+The only host in this repo is the main app: serve the repo root and open `index.html`,
+which builds the widget in `app_bootstrap.js` via `renderTree` / `renderParams` /
+`renderPlot`, exactly as shown above. `tests/e2e/` drives that same page. Passing a
+container id to the constructor no longer renders anything: it only supplies a fallback
+root for element lookups, so the modular calls are the whole API.
 
 ## Notes
 

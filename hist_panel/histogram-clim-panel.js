@@ -1094,8 +1094,10 @@ export function installClimHistSyncHooks(nv, syncFn, opts = {}) {
 }
 
 export class MainHistogramController {
-  constructor(nvModule) {
+  constructor(nvModule, ctx = null) {
     this.nvModule = nvModule;
+    /** Shared module registry; may be null when hosted standalone. */
+    this.ctx = ctx;
     this.panel = null;
     this._boundVolume = null;
     this._raf = null;
@@ -1198,7 +1200,16 @@ export class MainHistogramController {
 }
 
 export class PreviewJointHistogramController {
-  constructor() {
+  /**
+   * @param scanPreview {ScanPreviewModule} pane A source.
+   * @param scanCompare {ComparePane} pane B source; its `.module` appears only once activated,
+   *   so it is always dereferenced lazily.
+   */
+  constructor(scanPreview, scanCompare, ctx = null) {
+    this.scanPreview = scanPreview ?? null;
+    this.scanCompare = scanCompare ?? null;
+    /** Shared module registry; may be null when hosted standalone. */
+    this.ctx = ctx;
     this.panel = null;
     this.ui = createClimHistPanelElement("preview-joint");
   }
@@ -1225,12 +1236,12 @@ export class PreviewJointHistogramController {
     if (this.panel) return;
     this.panel = attachDualNiivueHistogramPanel({
       getSourceA: () => {
-        const mod = window.scanPreview;
+        const mod = this.scanPreview;
         const vol = mod?.nv?.volumes?.[0];
         return vol?.img ? { vol, nv: mod.nv, label: mod.currentScanName || "Preview" } : null;
       },
       getSourceB: () => {
-        const cmp = window.scanCompare;
+        const cmp = this.scanCompare;
         if (!cmp?.isReady) return null;
         const vol = cmp.module?.nv?.volumes?.[0];
         return vol?.img ? { vol, nv: cmp.module.nv, label: cmp.module?.currentScanName || "Compare" } : null;
@@ -1242,8 +1253,7 @@ export class PreviewJointHistogramController {
   }
 
   installPreviewHooks() {
-    for (const key of ["scanPreview", "scanCompare"]) {
-      const mod = key === "scanPreview" ? window.scanPreview : window.scanCompare?.module;
+    for (const mod of [this.scanPreview, this.scanCompare?.module]) {
       const nv = mod?.nv;
       if (!nv) continue;
       installClimHistSyncHooks(nv, () => this.panel?.syncClimFromVolumes?.(), {

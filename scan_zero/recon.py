@@ -25,6 +25,10 @@ For non-Cartesian trajectories, density compensation is applied before the
 adjoint NUFFT using a short Pipe-Menon style fixed-point iteration on PyNUFFT's
 interpolation / gridding operators. This stays general across radial / spiral
 style trajectories while remaining Pyodide-friendly.
+
+``inputs_from_npz`` / ``run_sim_recon_from_npz`` decode the remote gateway's result
+``.npz`` here rather than on the main thread, so the payload crosses into the worker
+as compact bytes instead of as nested JS arrays.
 """
 from __future__ import annotations
 
@@ -33,15 +37,35 @@ from typing import Any, Sequence, Union
 
 import nibabel as nib
 import numpy as np
-from pynufft import NUFFT
+
+try:
+    from .recon_kernels import (
+        DCF_EPS as _DCF_EPS,
+        DCF_ITERS as _DCF_ITERS,
+        nufft_adjoint,
+        omega_from_k,
+        pipe_menon_dcf as _compute_pipe_menon_dcf,
+    )
+except ImportError:
+    # This module is loaded two different ways. Tests import it as
+    # ``scan_zero.recon``, where the relative import is correct. In the browser it
+    # is fetched as text and exec'd into a bare namespace with no package context
+    # at all (``loadPyModules`` in anyfield_py_worker.js, driven by the warm-up spec
+    # in py_worker_host.js), where a relative import cannot resolve; that loader puts
+    # the module's own directory on sys.path so the flat name works instead.
+    from recon_kernels import (  # type: ignore[no-redef]
+        DCF_EPS as _DCF_EPS,
+        DCF_ITERS as _DCF_ITERS,
+        nufft_adjoint,
+        omega_from_k,
+        pipe_menon_dcf as _compute_pipe_menon_dcf,
+    )
 
 # Default output path in Pyodide FS (caller may change later if needed)
 DEFAULT_OUT_PATH = "/tmp/__sim_pipeline_reco.nii"
 
 # Match MRpro ``grid_detection_tolerance`` on dimensionless index ``k * FOV``.
 _GRID_TOL = 1e-3
-_DCF_ITERS = 20
-_DCF_EPS = 1e-6
 
 
 def _log_recon(msg: str) -> None:
@@ -265,24 +289,6 @@ def _save_image_mag_phase_nifti(
     return out_path
 
 
-def _compute_pipe_menon_dcf(a: NUFFT, n_samples: int, n_iter: int = _DCF_ITERS) -> np.ndarray:
-    """Fixed-point Pipe-Menon DCF using PyNUFFT interpolation operators."""
-    if n_samples < 1:
-        raise ValueError("Cannot compute DCF for empty trajectory.")
-    try:
-        y2k = a._y2k_cpu
-        k2y = a._k2y_cpu
-    except AttributeError as exc:
-        raise RuntimeError("PyNUFFT interpolation operators unavailable for DCF.") from exc
-
-    w = np.ones(int(n_samples), dtype=np.complex64)
-    for _ in range(int(n_iter)):
-        gridded = y2k(w)
-        back = k2y(gridded)
-        w = w / np.maximum(np.abs(back), _DCF_EPS)
-    return np.abs(w).astype(np.float32)
-
-
 def _recon_cartesian_ifft(
     signal_1d: np.ndarray,
     tr: np.ndarray,
@@ -395,42 +401,35 @@ def _recon_full_nufft(
     omega_scale_z: float,
     apply_dcf: bool = False,
 ) -> tuple[np.ndarray, np.ndarray | None]:
-    """PyNUFFT adjoint using a 2D plan for singleton-z and 3D otherwise."""
+    """PyNUFFT adjoint using a 2D plan for singleton-z and 3D otherwise.
+
+    Only the k-to-omega mapping and the choice of plan shape are decided here; the
+    transform itself is ``recon_kernels.nufft_adjoint``.
+    """
     kxy = tr[:, :2]
     kz_col = tr[:, 2].astype(np.float64) if tr.shape[1] >= 3 else None
-    oz = np.zeros(kxy.shape[0], dtype=np.float64)
-    if kz_col is not None and omega_scale_z > 1e-30:
-        oz = (kz_col / omega_scale_z) * np.pi
-    om2 = np.stack(
+    n = min(signal_1d.size, tr.shape[0])
+    om = np.column_stack(
         [
-            (kxy[:, 0] / omega_scale_x) * np.pi,
-            (kxy[:, 1] / omega_scale_y) * np.pi,
-        ],
-        axis=-1,
+            omega_from_k(kxy[:, 0], omega_scale_x),
+            omega_from_k(kxy[:, 1], omega_scale_y),
+            omega_from_k(kz_col, omega_scale_z)
+            if kz_col is not None
+            else np.zeros(kxy.shape[0], dtype=np.float64),
+        ]
     )
-    om = np.column_stack([om2[:, 0], om2[:, 1], oz])
-    n = min(signal_1d.size, om.shape[0])
-    signal_n = signal_1d[:n].astype(np.complex64, copy=False)
-    om_n = om[:n]
-    a = NUFFT()
+    # A singleton z axis only justifies a 2D plan when nothing is actually sampled
+    # off-centre in z; otherwise those samples would be silently projected onto z=0.
     use_2d_plan = int(nz) == 1 and (
         kz_col is None or not np.any(np.abs(kz_col[:n]) > 1e-18)
     )
     if use_2d_plan:
-        a.plan(om_n[:, :2], (nx, ny), (2 * nx, 2 * ny), (6, 6))
-    else:
-        kz_plan = max(2 * nz, 4)
-        a.plan(om_n, (nx, ny, nz), (2 * nx, 2 * ny, kz_plan), (4, 4, 4))
-    dcf: np.ndarray | None = None
-    if apply_dcf:
-        dcf = _compute_pipe_menon_dcf(a, n)
-        signal_n = signal_n * dcf.astype(np.complex64, copy=False)
-    reco = a.adjoint(signal_n)
-    if use_2d_plan:
-        reco = np.asarray(reco).reshape(nx, ny, 1)
-    else:
-        reco = np.asarray(reco).reshape(nx, ny, nz)
-    return reco.astype(np.complex64), dcf
+        reco, dcf = nufft_adjoint(
+            om[:, :2], signal_1d, (nx, ny), apply_dcf=apply_dcf
+        )
+        return reco.reshape(nx, ny, 1), dcf
+    reco, dcf = nufft_adjoint(om, signal_1d, (nx, ny, nz), apply_dcf=apply_dcf)
+    return reco, dcf
 
 
 def _to_py_list(x: Any) -> Any:
@@ -439,8 +438,97 @@ def _to_py_list(x: Any) -> Any:
     return x
 
 
+def _to_complex_signal(signal: Union[Sequence[Sequence[float]], Any]) -> np.ndarray:
+    """1-D complex64 samples from either ``[real, imag]`` pairs or a complex array.
+
+    Two callers with two genuinely different inputs. The local tool pipeline's signal
+    arrives as JSON numbers, so it can only be a pair-list; ``inputs_from_npz`` has
+    already decoded a real complex array and expanding it back into pairs just to
+    re-parse them would cost a Python-level loop over every sample.
+    """
+    raw = _to_py_list(signal)
+    if isinstance(raw, np.ndarray) and np.iscomplexobj(raw):
+        return raw.astype(np.complex64, copy=False).ravel()
+    return np.array(
+        [complex(float(r), float(i)) for r, i in raw],
+        dtype=np.complex64,
+    ).ravel()
+
+
+def _has_samples(traj: Any) -> bool:
+    """Whether a trajectory argument holds anything, for lists *and* numpy arrays.
+
+    ``if traj`` raises ``ValueError`` on any array with more than one element, so the
+    plain falsy check the list callers rely on cannot be used on the ``(N, 3)`` array
+    ``inputs_from_npz`` returns.
+    """
+    if isinstance(traj, np.ndarray):
+        return traj.size > 0
+    return bool(traj) and len(traj) > 0
+
+
+def inputs_from_npz(npz_bytes: Union[bytes, Any]) -> tuple[np.ndarray, np.ndarray]:
+    """Decode a gateway result ``.npz`` into ``(signal, traj)`` for ``run_sim_recon``.
+
+    The remote HTTP transport's result is an ``.npz`` holding ``signal`` (complex) and
+    ``ktraj``. Decoding it here rather than on the main thread is the whole point: the
+    compact bytes cross the worker boundary once, instead of being expanded into tens of
+    thousands of small JS arrays first.
+
+    Parameters
+    ----------
+    npz_bytes
+        Raw ``.npz`` bytes. Pyodide hands the JS ``ArrayBuffer`` over as a proxy, so a
+        ``to_py()``-able object and a list of byte values are both accepted.
+
+    Returns
+    -------
+    tuple
+        ``signal`` as 1-D complex64, ``traj`` as float32 ``(N, 3)`` — the shapes
+        ``run_sim_recon`` wants, so no further conversion happens at the call site.
+
+    Raises
+    ------
+    ValueError
+        If ``ktraj`` is not a 2-D array, or if either array decodes to nothing. An empty
+        payload means the simulation produced no k-space and the recon downstream would
+        only fail more obscurely.
+    """
+    buf = _to_py_list(npz_bytes)
+    if isinstance(buf, (list, tuple)):
+        buf = bytes(buf)
+    with np.load(io.BytesIO(buf)) as data:
+        signal = np.asarray(data["signal"]).ravel().astype(np.complex64)
+        ktraj = np.asarray(data["ktraj"], dtype=np.float32)
+
+    # A gateway that writes k-space as (3, N) is transposed to (N, 3). The `!= 3` guard
+    # keeps a genuinely (3, 3) array alone -- three samples of three columns each is
+    # already the row-per-sample layout, and transposing it would silently swap axes.
+    if ktraj.ndim == 2 and ktraj.shape[0] == 3 and ktraj.shape[1] != 3:
+        ktraj = ktraj.T
+    if ktraj.ndim != 2:
+        raise ValueError(
+            "Result NPZ 'ktraj' must be 2-D (samples x axes), got shape %r"
+            % (tuple(ktraj.shape),)
+        )
+
+    # Zero-fill missing ky/kz rather than passing a 1- or 2-column trajectory through:
+    # a 2-D acquisition has no kz column at all and the recon reads three.
+    traj = np.zeros((int(ktraj.shape[0]), 3), dtype=np.float32)
+    n_col = min(3, int(ktraj.shape[1]))
+    if n_col:
+        traj[:, :n_col] = ktraj[:, :n_col]
+
+    # Trajectory first, then signal, matching the order the JS decode reported them in.
+    if traj.shape[0] == 0:
+        raise ValueError("Result NPZ has no trajectory: 'ktraj' decoded to 0 samples.")
+    if signal.size == 0:
+        raise ValueError("Result NPZ has no signal: 'signal' decoded to 0 samples.")
+    return signal, traj
+
+
 def run_sim_recon(
-    signal_pairs: Sequence[Sequence[float]],
+    signal_pairs: Union[Sequence[Sequence[float]], Any],
     traj_points: Union[Sequence[Sequence[float]], Any],
     ref_bytes: Union[bytes, Any],
     out_path: str = DEFAULT_OUT_PATH,
@@ -453,9 +541,11 @@ def run_sim_recon(
     Parameters
     ----------
     signal_pairs
-        List of [real, imag] per sample (from tool sim).
+        List of [real, imag] per sample (from tool sim), or an already-decoded complex
+        array (from ``inputs_from_npz``).
     traj_points
-        Array-like (N, 2+) with kx, ky in 1/m; optional column for kz.
+        Array-like (N, 2+) with kx, ky in 1/m; optional column for kz. A numpy array is
+        accepted as well as a nested list.
     ref_bytes
         Raw bytes of binary FOV mask NIfTI (reference geometry).
     out_path
@@ -471,7 +561,6 @@ def run_sim_recon(
     str
         Path written (same as ``out_path``).
     """
-    raw = _to_py_list(signal_pairs)
     traj = _to_py_list(traj_points)
     rb = _to_py_list(ref_bytes)
     if isinstance(rb, (bytes, bytearray, memoryview)):
@@ -482,10 +571,7 @@ def run_sim_recon(
         # Pyodide / buffer edge cases
         ref_bytes = bytes(rb)
 
-    signal = np.array(
-        [complex(float(r), float(i)) for r, i in raw],
-        dtype=np.complex64,
-    ).ravel()
+    signal = _to_complex_signal(signal_pairs)
 
     ref_fh = nib.FileHolder(fileobj=io.BytesIO(ref_bytes))
     ref_img = nib.Nifti1Image.from_file_map({"header": ref_fh, "image": ref_fh})
@@ -526,7 +612,7 @@ def run_sim_recon(
     nz_use = max(int(nz_ref), 1)
 
     tr_np: np.ndarray | None = None
-    if traj and len(traj) > 0:
+    if _has_samples(traj):
         t0 = np.asarray(traj, dtype=np.float64)
         if t0.ndim == 2 and t0.shape[1] >= 2:
             tr_np = t0
@@ -677,18 +763,16 @@ def run_sim_recon(
             kzg = np.zeros_like(kxg, dtype=np.float64)
             om = np.stack([kxg.ravel(), kyg.ravel(), kzg.ravel()], axis=-1)
 
-        n = min(signal.size, om.shape[0])
-        signal_n = signal[:n].astype(np.complex64, copy=False)
-        om_n = om[:n]
-
-        a = NUFFT()
+        # No density compensation on this path, unlike the trajectory-driven branch
+        # above. On a synthetic grid the weights come out uniform anyway (the grid is
+        # uniformly dense by construction), so the difference is a global scale
+        # factor rather than a change of image -- see test_recon.py's
+        # test_synthetic_omega_fallback_applies_no_density_compensation.
         if use_2d_plan:
-            a.plan(om_n[:, :2], (nx, ny), (2 * nx, 2 * ny), (6, 6))
-            reco = np.asarray(a.adjoint(signal_n)).reshape(nx, ny, 1)
+            reco, _ = nufft_adjoint(om[:, :2], signal, (nx, ny))
+            reco = reco.reshape(nx, ny, 1)
         else:
-            kz_plan = max(2 * nz_use, 4)
-            a.plan(om_n, (nx, ny, nz_use), (2 * nx, 2 * ny, kz_plan), (4, 4, 4))
-            reco = np.asarray(a.adjoint(signal_n)).reshape(nx, ny, nz_use)
+            reco, _ = nufft_adjoint(om, signal, (nx, ny, nz_use))
         _fallback_note = (
             "pynufft fallback synthetic ω / zero-kxy trajectory"
             if axis_ok is not None
@@ -700,3 +784,27 @@ def run_sim_recon(
         )
     _log_recon("[recon] output: 4D NIfTI frame 0 = |img|, frame 1 = angle(img) [rad]")
     return _save_image_mag_phase_nifti(reco, ref_img, out_path, dx_mm, dy_mm, dz_mm)
+
+
+def run_sim_recon_from_npz(
+    npz_bytes: Union[bytes, Any],
+    ref_bytes: Union[bytes, Any],
+    *,
+    out_path: str = DEFAULT_OUT_PATH,
+    output_mode: str = "image",
+    matrix: Sequence[int] | None = None,
+) -> str:
+    """``run_sim_recon`` for the HTTP transport, taking the result ``.npz`` undecoded.
+
+    Exists so the compact bytes are the only thing that crosses into the worker. Every
+    parameter other than ``npz_bytes`` means what it does in ``run_sim_recon``.
+    """
+    signal, traj = inputs_from_npz(npz_bytes)
+    return run_sim_recon(
+        signal,
+        traj,
+        ref_bytes,
+        out_path=out_path,
+        output_mode=output_mode,
+        matrix=matrix,
+    )

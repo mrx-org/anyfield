@@ -33,6 +33,7 @@ import {
   setSvgRootSize,
   updatePanelChrome,
 } from "./paper_plot_figure.js?v=3";
+import { getAppContext } from "../app_context.js";
 import { PaperPanel } from "./paper_plot_panel.js?v=3";
 import { PaperPlotSync, capturePanelAtNativeResolution } from "./paper_plot_sync.js?v=3";
 import {
@@ -441,7 +442,7 @@ export class PaperPlotModule {
       nums.push(n);
     };
 
-    const nv = window.nvModule?.nv;
+    const nv = getAppContext()?.nv?.nv;
     if (nv?.volumes?.length) {
       for (const v of nv.volumes) {
         const m = String(v?.name ?? "").match(/^scan_(\d+)/i);
@@ -449,7 +450,7 @@ export class PaperPlotModule {
       }
     }
 
-    const queue = window.scanModule?.queue ?? [];
+    const queue = getAppContext()?.scan?.queue ?? [];
     for (const j of queue) {
       if (j.status === "done") add(j.scanNumber);
     }
@@ -776,7 +777,7 @@ export class PaperPlotModule {
   refreshScanRail() {
     if (!this.railList) return;
     const items = [];
-    const nv = window.nvModule?.nv;
+    const nv = getAppContext()?.nv?.nv;
     if (nv?.volumes?.length) {
       for (const v of nv.volumes) {
         const name = String(v?.name ?? "");
@@ -790,7 +791,7 @@ export class PaperPlotModule {
     items.sort((a, b) => b.num - a.num);
 
     if (!items.length) {
-      const queue = window.scanModule?.queue ?? [];
+      const queue = getAppContext()?.scan?.queue ?? [];
       for (const j of queue) {
         if (j.status !== "done") continue;
         items.push({

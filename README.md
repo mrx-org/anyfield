@@ -1,12 +1,12 @@
 # Anyfield MRI scanner
 
-*v3.0.2 — [release notes](release_notes.md)*
+*v4.0.0 — [release notes](release_notes.md)*
 
 *Plan and run Pulseq MRI sequences in a virtual scanner environment.*
 
 **[Open the scanner](https://mrx-org.github.io/anyfield/)** — runs in the browser, no install.
 
-**[Open seq_check](https://mrx-org.github.io/anyfield/pypulseq/seq_check)** — runs in the browser, no install.
+**[Open seq_check](https://mrx-org.github.io/anyfield/pypulseq/seq_check_web)** — runs in the browser, no install.
 
 
 ---

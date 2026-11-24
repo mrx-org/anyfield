@@ -371,8 +371,8 @@ export class PtxPanel {
     this.active = false;
     this.ownsPreview = false;
     this._pendingShow = null;
-    if (this.weOpenedCompare && window.scanCompare?.deactivate) {
-      window.scanCompare.deactivate();
+    if (this.weOpenedCompare && this.nvMod?.ctx?.scanCompare?.deactivate) {
+      this.nvMod.ctx.scanCompare.deactivate();
       this.weOpenedCompare = false;
     }
     this.nvMod?.updatePreviewFromSelection?.();
@@ -509,14 +509,15 @@ export class PtxPanel {
   }
 
   async _showPair(job) {
-    const preview = window.scanPreview;
-    const compare = window.scanCompare;
+    const ctx = this.nvMod?.ctx;
+    const preview = ctx?.scanPreview;
+    const compare = ctx?.scanCompare;
     if (!preview?.loadNiftiBytes || !compare?.ensureInitialized) {
       this.setStatus("Viewers are not ready yet.");
       return;
     }
-    if (window.viewManager && window.viewManager.currentMode !== "planning") {
-      window.viewManager.setMode("planning");
+    if (ctx.viewManager && ctx.viewManager.currentMode !== "planning") {
+      ctx.viewManager.setMode("planning");
     }
     const wasActive = !!compare.isActive;
     await compare.ensureInitialized();

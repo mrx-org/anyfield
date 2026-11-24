@@ -2,6 +2,7 @@
  * Scan / diff expression parsing and volume resolution for paper plot panels.
  */
 import { NVImage } from "https://unpkg.com/@niivue/niivue@0.65.0/dist/index.js";
+import { getAppContext } from "../app_context.js";
 import { getNVox3D, voxelBufferForDisplayedLayer } from "./paper_plot_figure.js?v=3";
 
 /** @typedef {{ type: 'scan', scanNum: number, phase: boolean }} ScanParsed */
@@ -51,7 +52,7 @@ export function parsePanelExpr(raw) {
  * @returns {{ vol: object | null, url: string | null, name: string }}
  */
 export function resolveScanSource(scanNum) {
-  const nv = window.nvModule?.nv;
+  const nv = getAppContext()?.nv?.nv;
   if (nv?.volumes?.length) {
     for (const v of nv.volumes) {
       const m = String(v?.name ?? "").match(/^scan_(\d+)/i);
@@ -65,7 +66,7 @@ export function resolveScanSource(scanNum) {
     }
   }
 
-  const queue = window.scanModule?.queue ?? [];
+  const queue = getAppContext()?.scan?.queue ?? [];
   const job = queue.find((j) => j.status === "done" && j.scanNumber === scanNum);
   if (job?.niftiUrl) {
     const name = `${job.baseName || "scan_" + scanNum}.nii.gz`;
@@ -320,7 +321,7 @@ export function formatPanelLabel(index) {
 }
 
 export function findVolumeByScanNumber(scanNum) {
-  const nv = window.nvModule?.nv;
+  const nv = getAppContext()?.nv?.nv;
   if (!nv?.volumes?.length) return null;
   for (const v of nv.volumes) {
     const m = String(v?.name ?? "").match(/^scan_(\d+)/i);
@@ -330,11 +331,12 @@ export function findVolumeByScanNumber(scanNum) {
 }
 
 export function getProtocolTooltipForScanNumber(scanNum) {
-  if (typeof window !== 'undefined' && window.scanModule?.getProtocolTooltipForScanNumber) {
-    return window.scanModule.getProtocolTooltipForScanNumber(scanNum) || "";
+  const ctx = getAppContext();
+  if (ctx?.scan?.getProtocolTooltipForScanNumber) {
+    return ctx.scan.getProtocolTooltipForScanNumber(scanNum) || "";
   }
-  if (typeof window !== 'undefined' && window.seqExplorer?.getProtocolTooltipForScanNumber) {
-    return window.seqExplorer.getProtocolTooltipForScanNumber(scanNum) || "";
+  if (ctx?.explorer?.getProtocolTooltipForScanNumber) {
+    return ctx.explorer.getProtocolTooltipForScanNumber(scanNum) || "";
   }
   return "";
 }

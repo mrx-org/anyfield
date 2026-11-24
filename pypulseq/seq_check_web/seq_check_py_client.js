@@ -7,6 +7,7 @@ let nextId = 1;
 /**
  * @typedef {object} SeqCheckPyBridge
  * @property {(code: string) => Promise<unknown>} runPythonAsync
+ * @property {(code: string) => Promise<Uint8Array>} runPythonBytes
  * @property {{ set: (key: string, value: unknown) => void }} globals
  * @property {{ writeFile: (path: string, data: string) => void, readFile: (path: string) => Promise<Uint8Array> }} FS
  */
@@ -51,6 +52,7 @@ export class SeqCheckPyClient {
             const client = this;
             this._bridge = {
                 runPythonAsync: (code) => client.runPython(code),
+                runPythonBytes: (code) => client.runPythonBytes(code),
                 globals: {
                     set: (key, value) => {
                         void client._enqueue('globalsSet', { key, value }, client._gen);
@@ -93,13 +95,18 @@ export class SeqCheckPyClient {
     }
 
     /**
+     * @param {string} code
+     * @returns {Promise<Uint8Array>}
+     */
+    async runPythonBytes(code) {
+        const bytes = await this._enqueue('runPython', { code }, this._gen, true);
+        return bytes instanceof Uint8Array ? bytes : new Uint8Array(bytes || []);
+    }
+
+    /**
      * @param {string} key
      * @param {unknown} value
      */
-    globalsSet(key, value) {
-        return this._globalsSet(key, value);
-    }
-
     async globalsSet(key, value) {
         await this._enqueue('globalsSet', { key, value }, this._gen);
     }

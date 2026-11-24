@@ -1,4 +1,7 @@
+import { AppContext } from '../app_context.js';
 import { eventHub } from '../event_hub.js';
+import { isCompactLayout } from '../footer_cards.js';
+import { isProUser } from '../pro_mode.js';
 import { SequenceExplorer } from '../pypulseq/seq_explorer.js';
 import { phantomFolderId } from './bifti_cache.js';
 import {
@@ -17,32 +20,6 @@ import {
     httpSimPruneFieldsHtml,
     simBackendRadioMatrixHtml,
 } from './sim_backends.js';
-
-/** toolapi-wasm WebSocket URLs (same path `/tool`, different host). */
-export const TOOL_CONSEQ = 'wss://tool-conseq.fly.dev/tool';
-export const TOOL_TRAJEX = 'wss://tool-trajex.fly.dev/tool';
-export const TOOL_RAPISIM = 'wss://tool-rapisim.fly.dev/tool';
-export const TOOL_MR0SIM = 'wss://tool-mr0sim.fly.dev/tool';
-export const TOOL_MR0SIM_T4 = 'wss://mzaiss--tool-mr0sim-modal-serve-t4.modal.run/tool';
-/** Modal HTTP gateway (tool-mr0sim-modal_http); worker chosen per job (`cpu` / `t4` / `a10g` / `a100`). */
-export const TOOL_MR0SIM_HTTP_MODAL =
-    'https://mzaiss--tool-mr0sim-modal-http-gateway.modal.run';
-/** PDGv2 HTTP gateway — same `/v1` contract as `TOOL_MR0SIM_HTTP_MODAL`. */
-export const TOOL_PDGV2_HTTP = 'https://mzaiss--pdgv2-gateway.modal.run';
-/** Local dev only — set `window.ANYFIELD_HTTP_SIM_URL` to this to use local server. */
-export const TOOL_MR0SIM_HTTP = 'http://127.0.0.1:8080';
-
-export {
-    DEFAULT_SIM_BACKEND_ID,
-    SIM_BACKENDS,
-    SIM_BACKEND_OPTIONS,
-    formatSimBackendLabel,
-    resolveHttpSimBaseUrl,
-} from './sim_backends.js';
-
-const TOOL_FLY_HOSTS = [TOOL_CONSEQ, TOOL_TRAJEX, TOOL_RAPISIM, TOOL_MR0SIM].map(
-    (url) => new URL(url).hostname,
-);
 
 const PIPELINE_STAGES = ['prep', 'conseq', 'trajex', 'sim', 'recon'];
 /** User-facing queue caption for pipelineStage 0–4 (local / fallback). */
@@ -141,9 +118,6 @@ function parseMr0SimProgressMessage(msg) {
     return null;
 }
 
-/** Max concurrent toolapi WebSocket calls (global across queued SCAN jobs). */
-const MAX_CONCURRENT_TOOL_WS = 2;
-
 /** HTTP (Modal) job reaper tuning — poll many in-flight jobs at once, retry transient failures. */
 const HTTP_POLL_MS = 2000;
 /** Consecutive poll failures tolerated before an in-flight HTTP job is marked failed. */
@@ -161,6 +135,23 @@ const HTTP_RETRY_STATUSES = new Set([429, 500, 502, 503, 504]);
 export const RECON_METHOD = 'anyfield-pynufft';
 
 /**
+ * The recon call `_reconstructJob` runs on the worker, reading the `sim_npz_bytes` /
+ * `sim_ref_bytes` / `sim_output_mode` / `sim_matrix` / `sim_reco_out_path` globals.
+ */
+const RECON_PY_FROM_NPZ = `
+_matrix = sim_matrix.to_py() if hasattr(sim_matrix, 'to_py') else sim_matrix
+_matrix = list(_matrix) if _matrix else None
+_out = sim_reco_out_path.to_py() if hasattr(sim_reco_out_path, 'to_py') else str(sim_reco_out_path)
+_recon.run_sim_recon_from_npz(
+    sim_npz_bytes,
+    sim_ref_bytes,
+    out_path=_out,
+    output_mode=sim_output_mode,
+    matrix=_matrix,
+)
+`;
+
+/**
  * Scan index from a loaded scan NIfTI name, e.g. `scan_18_foo.nii.gz` → 18.
  */
 export function parseScanNumberFromVolumeName(volName) {
@@ -171,14 +162,16 @@ export function parseScanNumberFromVolumeName(volName) {
 /**
  * Human scan title from protocol file for scan N, e.g. `18. prot_TSE_2D_FLAIR`.
  * Falls back to queue draft name or volume filename when no protocol exists yet.
+ * @param explorer {object|null} SequenceExplorer, for the protocol name lookup;
+ *   omit it and the title falls back to the filename.
  */
-export function formatScanDisplayTitle(volName, job = null) {
+export function formatScanDisplayTitle(volName, job = null, explorer = null) {
     if (job?.cropOnly && job.scanNumber != null) {
         return `${job.scanNumber}. crop`;
     }
     const n = job?.scanNumber ?? parseScanNumberFromVolumeName(volName);
-    if (n != null && typeof window !== 'undefined' && window.seqExplorer?.getProtocolDisplayNameForScanNumber) {
-        const fromProtocol = window.seqExplorer.getProtocolDisplayNameForScanNumber(n);
+    if (n != null && typeof explorer?.getProtocolDisplayNameForScanNumber === 'function') {
+        const fromProtocol = explorer.getProtocolDisplayNameForScanNumber(n);
         if (fromProtocol) return fromProtocol;
     }
     if (job?.scanNumber != null && job?.name) {
@@ -191,26 +184,14 @@ export function formatScanDisplayTitle(volName, job = null) {
     return String(volName || '').replace(/\.nii(\.gz)?$/i, '');
 }
 
-/** Footer swipe layout (viewport ≤768px or OPTIONS → Compact). */
-export function isCompactFooterLayout() {
-    if (typeof window === 'undefined') return false;
-    return window.matchMedia('(max-width: 768px)').matches ||
-        !!document.querySelector('.lab-shell')?.classList.contains('compact-mode');
-}
-
-/** True when URL has ?pro=1 (or true/yes); matches index.html `window.pro`. */
-export function isProUser() {
-    if (typeof window !== 'undefined' && window.pro) return true;
-    if (typeof window === 'undefined' || !window.location?.search) return false;
-    return /^1|true|yes$/i.test(new URLSearchParams(window.location.search).get('pro') || '');
-}
-
 /**
  * ScanModule - Handles the scanning simulation queue
  * Borrows resampling logic from NiivueModule for FOV crop (no sequence run)
  */
 export class ScanModule {
-    constructor() {
+    constructor(ctx = null) {
+        /** Shared module registry; own empty one when hosted standalone. */
+        this.ctx = ctx ?? new AppContext();
         this.container = null;
         this.queue = [];
         this.currentSequence = null;
@@ -218,11 +199,6 @@ export class ScanModule {
         this.scanCounter = 0;
         /** Live protocol being edited in col-params; shown as top queue row until SCAN. */
         this.draftJob = null;
-        this._toolApiCall = null;
-        /** Set during runSimPipeline for per-tool WebSocket log tagging */
-        this._simPipelineJob = null;
-        this._toolWsInflight = 0;
-        this._toolWsWaiters = [];
         this._scanBackendId = readStoredSimBackendId();
         this._compareBackendId = readStoredSimBackendCompareId();
 
@@ -295,32 +271,119 @@ export class ScanModule {
         this._syncSimBackendRadios();
     }
 
-    /** Fetch `scan_zero/recon.py` and stage in Pyodide (source passed to Python via global). */
-    async _ensureSimReconPy(nvMod) {
-        const url = new URL("./recon.py", import.meta.url);
-        url.searchParams.set("_", String(Date.now()));
-        const text = await (await fetch(url, { cache: "no-store" })).text();
-        if (!text.includes("output_mode")) {
-            throw new Error("Fetched scan_zero/recon.py is stale (missing output_mode). Hard-refresh the page.");
+    /**
+     * Read the `matrix` definition out of a job's prepared `.seq` on the VFS.
+     *
+     * A step of its own rather than part of `_reconstructJob`: it is the only piece of the recon
+     * that needs the `.seq` bytes and pypulseq, so keeping it out lets the recon take `matrix`
+     * as plain data — a recon running off the main thread would otherwise have to be shipped
+     * the sequence and have pypulseq installed just to recover three integers.
+     *
+     * Tolerant, as it was inside the recon: no path, a path absent from the VFS, or any pypulseq
+     * failure all yield null. Only `kspace_log` output consults it (recon.py's non-Cartesian
+     * reshape fallback), so null is invisible in the default image mode.
+     *
+     * @param {object} job
+     * @param {object} nvMod
+     * @returns {Promise<number[]|null>} `[nx, ny, nz]`, or null when unavailable
+     */
+    async _readSeqMatrixDefinition(job, nvMod) {
+        return nvMod.enqueuePyodideTask(job.id, 'sim-seq-matrix', async () => {
+            nvMod.pyodide.globals.set('sim_seq_path', job.vfsSeqPath || '');
+            const matrixRes = await nvMod.pyodide.runPythonAsync(`
+_matrix = None
+_seq_path = sim_seq_path.to_py() if hasattr(sim_seq_path, 'to_py') else sim_seq_path
+if _seq_path:
+    try:
+        import os
+        import pypulseq as pp
+        _p = str(_seq_path)
+        if os.path.exists(_p):
+            _seq = pp.Sequence()
+            _seq.read(_p)
+            _m = _seq.get_definition('matrix')
+            if _m is not None:
+                _matrix = [int(_m[0]), int(_m[1]), int(_m[2]) if len(_m) > 2 else 1]
+    except Exception:
+        pass
+_matrix
+`);
+            const matrix = matrixRes?.toJs ? matrixRes.toJs() : matrixRes;
+            if (matrixRes?.destroy) matrixRes.destroy();
+            return matrix ?? null;
+        });
+    }
+
+    /**
+     * Reconstruct one job's raw signal into NIfTI bytes, and clean the file out of the
+     * worker's VFS afterwards.
+     *
+     * `opts.npzBytes` is the remote gateway's result `.npz`, still undecoded. `recon.py`
+     * opens it worker-side, so the compact bytes are the only thing that crosses the
+     * boundary; decoding first would build tens of thousands of small JS arrays on the
+     * main thread and then structured-clone them all across. The buffer is copied rather
+     * than transferred: detaching a caller's ArrayBuffer out from under it is a surprise
+     * the saved copy does not pay for.
+     *
+     * Runs on the shared Pyodide worker (`ctx.pyWorker`), which is what keeps a
+     * multi-second NUFFT off the main thread. Three consequences worth knowing:
+     *
+     *   - It no longer goes through `nvMod.enqueuePyodideTask`. That queue exists to
+     *     serialise work against the *main thread's* interpreter, and holding it here
+     *     would re-serialise the recon against resample and Execute for no reason. The
+     *     worker client serialises its own requests.
+     *   - Packages and `recon.py` are not fetched and staged per recon any more; the
+     *     worker is warmed once at startup (`py_worker_host.js`). `_ensureNibabelReady()`
+     *     is therefore not called from this path -- the main thread still needs it for
+     *     resample and Execute.
+     *   - The inputs travel as one `runPython({ globals })` message rather than six
+     *     separate sets, because two jobs finishing together would otherwise interleave
+     *     their globals. `outPath` is per-job, so the read after the run is unambiguous
+     *     even if another recon's run lands between them.
+     *
+     * @param {{ npzBytes: ArrayBuffer, reconRef: unknown, useRecon: boolean,
+     *           matrix: number[]|null, outPath: string, logTag: string }} opts —
+     *   `matrix` from `_readSeqMatrixDefinition`
+     * @returns {Promise<Uint8Array>} raw bytes of the written NIfTI
+     */
+    async _reconstructJob(opts) {
+        const { npzBytes, reconRef, useRecon, matrix, outPath, logTag } = opts;
+        const t0 = performance.now();
+        const host = this.ctx?.pyWorker;
+        if (!host) {
+            throw new Error('Recon needs ctx.pyWorker, which bootstrap did not build.');
         }
-        const py = nvMod.pyodide;
-        py.FS.mkdirTree("/scan_zero");
-        py.FS.writeFile("/scan_zero/recon.py", text);
-        py.globals.set("sim_recon_py_source", text);
+        const py = await host.ready();
+        const recoPath = await py.runPython(
+            RECON_PY_FROM_NPZ,
+            {
+                globals: {
+                    sim_npz_bytes: npzBytes,
+                    sim_ref_bytes: reconRef,
+                    sim_output_mode: useRecon ? 'image' : 'kspace_log',
+                    // An empty list, never null, for "no matrix definition": Pyodide surfaces
+                    // JS null as pyodide.ffi.JsNull rather than None, which passes recon.py's
+                    // `matrix is not None` guard and then raises TypeError in len().
+                    sim_matrix: matrix ?? [],
+                    sim_reco_out_path: outPath,
+                },
+            },
+        );
+        const bytes = await py.fsRead(String(recoPath || outPath), { unlink: true });
+        console.log(
+            `[${logTag}] ${useRecon ? 'PyNUFFT recon' : 'k-space log'}: ${(performance.now() - t0).toFixed(0)}ms`,
+        );
+        return bytes;
     }
 
     setupEventListeners() {
-        eventHub.on('sequenceSelected', (data) => {
-            this._onSequenceSelected(data);
-        });
-
         eventHub.on('fov_changed', (data) => {
             this.currentFov = data;
         });
     }
 
     _defaultDraftName(seq) {
-        const explorer = window.seqExplorer;
+        const explorer = this.ctx.explorer;
         const path = String(seq?.source?.path || seq?.fileName || '').replace(/\\/g, '/');
         const isProtocol = seq?.source?.itemKind === 'protocol' || path.startsWith('user/prot/');
         if (isProtocol && explorer?.protocolDerivedDefaultName) {
@@ -335,7 +398,7 @@ export class ScanModule {
 
     _draftProtocolLabel(seq) {
         if (!seq) return '';
-        const explorer = window.seqExplorer;
+        const explorer = this.ctx.explorer;
         const { fileName, functionName, source } = seq;
         if (explorer && typeof explorer._getSeqDisplayFileStem === 'function') {
             const isProtocol = source?.itemKind === 'protocol'
@@ -384,7 +447,8 @@ export class ScanModule {
         return job.errorDetail || job.error || 'error';
     }
 
-    _onSequenceSelected(data) {
+    /** Called by the sequence explorer when the selection changes; null clears the draft. */
+    onSequenceSelected(data) {
         this.currentSequence = data;
         if (!data) {
             this.draftJob = null;
@@ -407,7 +471,7 @@ export class ScanModule {
         const raw = String(this.draftJob.userName || '').trim();
         const label = raw || this._defaultDraftName(this.currentSequence);
         if (this._hasReservedScanPrefix(label)) {
-            window.seqExplorer?.showReservedPrefixDialog?.();
+            this.ctx.explorer?.showReservedPrefixDialog?.();
             return null;
         }
         this.draftJob.userName = label;
@@ -442,7 +506,7 @@ export class ScanModule {
             let val = input.value.trim();
             if (!val) val = this._defaultDraftName(this.currentSequence);
             if (this._hasReservedScanPrefix(val)) {
-                window.seqExplorer?.showReservedPrefixDialog?.();
+                this.ctx.explorer?.showReservedPrefixDialog?.();
                 val = this._defaultDraftName(this.currentSequence);
             }
             this.draftJob.userName = val;
@@ -540,8 +604,6 @@ export class ScanModule {
         if (settingsBtn) settingsBtn.onclick = () => this.openSimSettingsDialog();
         this.bindSimBackendRadios(this.container);
 
-        // Make this instance available globally for UI callbacks if needed
-        window.scanModule = this;
         this._syncScanControlLabels();
         this._syncMobileScanControls();
     }
@@ -643,8 +705,9 @@ export class ScanModule {
 
     /**
      * Disable buttons that call Pyodide *outside* the task queue (Get FOV, CROP) while any scan is
-     * in flight. plot seq stays available: only seq.write holds the interpreter, and plot seq waits
-     * on the same queue instead of being locked out for the whole remote simulation.
+     * in flight. plot seq stays available: scan prep executes on the worker, and plot seq's
+     * main-thread path waits on the same queue instead of being locked out for the whole remote
+     * simulation.
      */
     _syncScanBusyUi() {
         const busy = this.queue.some((j) => j.status === 'scanning');
@@ -666,7 +729,7 @@ export class ScanModule {
         const wrap = document.getElementById('seq-mobile-run-btns');
         if (!wrap) return;
         const statusSlot = wrap.querySelector('#seq-mobile-pipeline-status');
-        if (!isCompactFooterLayout()) {
+        if (!isCompactLayout()) {
             wrap.classList.remove('is-busy');
             wrap.querySelectorAll('.scan-btn-compact').forEach((btn) => {
                 btn.disabled = false;
@@ -704,7 +767,7 @@ export class ScanModule {
     async startCrop() {
         if (!isProUser()) return;
         // CROP = resample current viewer volume to FOV mask only (no seq execution / no .seq artifact)
-        const nvMod = window.nvModule;
+        const nvMod = this.ctx.nv;
         if (!nvMod || !nvMod.nv?.volumes?.length) {
             alert("No volume loaded in Niivue.");
             return;
@@ -754,9 +817,8 @@ export class ScanModule {
             simulation: {
                 backendId: backend.id,
                 backendLabel: backend.label,
-                toolUrl: backend.toolUrl,
                 useGpu: backend.useGpu === true,
-                transport: backend.transport || 'ws',
+                transport: backend.transport,
                 httpBaseUrl: backend.httpBaseUrl || null,
                 worker: backend.worker || null,
                 forwardBackend: backend.forwardBackend || null,
@@ -790,7 +852,7 @@ export class ScanModule {
             alert("Please select a sequence in the Explorer first.");
             return;
         }
-        const nvMod = window.nvModule;
+        const nvMod = this.ctx.nv;
         if (!nvMod || !nvMod.nv?.volumes?.length) {
             alert("No volume loaded in Niivue.");
             return;
@@ -802,15 +864,11 @@ export class ScanModule {
         const userName = this._getValidatedDraftName();
         if (!userName) return;
         const job = this._enqueueSimJob({ backendId: resolvedId, userName });
-        if (backend.transport === 'http') {
-            // Phase 1 model: await only prep + submit (reads live UI in order, freezes per-job
-            // seq + FOV), then poll + recon run in the background so many scans overlap on the
-            // Modal worker pool. See runHttpSimPipeline → _httpPrepareAndSubmit + _pumpHttpReaper.
-            await this._httpPrepareAndSubmit(job);
-            void this._pumpHttpReaper();
-        } else {
-            await this.runSimPipeline(job);
-        }
+        // Await only prep + submit (reads live UI in order, freezes per-job seq + FOV), then
+        // poll + recon run in the background so many scans overlap on the Modal worker pool.
+        // See runHttpSimPipeline → _httpPrepareAndSubmit + _pumpHttpReaper.
+        await this._httpPrepareAndSubmit(job);
+        void this._pumpHttpReaper();
     }
 
     async startScanCompare() {
@@ -826,17 +884,13 @@ export class ScanModule {
         return this.startScan('modal_http_cpu');
     }
 
-    async startSimMr0() {
-        return this.startScan('mr0sim');
-    }
-
     async startSimHttp() {
         return this.startScan('modal_http');
     }
 
     async runCropScan(job) {
-        // Borrow logic from window.nvModule (NiivueModule instance)
-        const nvMod = window.nvModule;
+        // Borrow logic from this.ctx.nv (NiivueModule instance)
+        const nvMod = this.ctx.nv;
         
         if (!nvMod) {
             job.status = 'error';
@@ -880,6 +934,7 @@ export class ScanModule {
                 return nvMod.readResampleOutputPath(res).bytes;
             });
 
+            this._revokeJobObjectUrl(job.niftiUrl);
             job.niftiUrl = URL.createObjectURL(new Blob([niftiBytes], {type: "application/octet-stream"}));
 
             job.status = 'done';
@@ -896,71 +951,6 @@ export class ScanModule {
         }
 
         this.updateQueueUI();
-    }
-
-    /**
-     * Wake Fly tool machines (HTTP) and preload toolapi-wasm. Fire-and-forget; does not block bootstrap.
-     */
-    prewarmToolBackends() {
-        for (const host of TOOL_FLY_HOSTS) {
-            fetch(`https://${host}/`, { mode: 'no-cors', cache: 'no-store' }).catch(() => {});
-        }
-        this._ensureToolApi().catch((err) => {
-            console.warn('ScanModule: toolapi preload failed:', err);
-        });
-    }
-
-    async _ensureToolApi() {
-        if (this._toolApiCall) return this._toolApiCall;
-        const { default: init, call } = await import('https://unpkg.com/toolapi@0.5.2/toolapi.js');
-        await init();
-        this._toolApiCall = call;
-        return call;
-    }
-
-    /** Short label for a tool WebSocket host, e.g. `tool-trajex.fly.dev` → `trajex`. */
-    _toolChannelFromUrl(url) {
-        try {
-            const host = new URL(url).hostname;
-            const m = host.match(/^tool-([^.]+)/);
-            return m ? m[1] : host;
-        } catch (_) {
-            return String(url);
-        }
-    }
-
-    /** Progress callback for one tool WebSocket session (separate channel per call). */
-    _toolOnMessageFor(channel) {
-        const tag = this._simPipelineJob ? this._jobSimLogTag(this._simPipelineJob) : 'SIM';
-        const ch = channel || 'tool';
-        return (msg) => {
-            console.log(`${tag} [${ch}]`, msg);
-            return true;
-        };
-    }
-
-    /** Progress callback for mr0sim/rapisim; return false to abort the server sim. */
-    _simOnMessage(job, channel) {
-        const tag = this._jobSimLogTag(job);
-        const ch = channel || 'sim';
-        return (msg) => {
-            if (job.abortSim) return false;
-            console.log(`${tag} [${ch}]`, msg);
-            if ((job.pipelineStage ?? 0) < 3) return true;
-
-            const parsed = parseMr0SimProgressMessage(msg);
-            if (parsed == null) return true;
-
-            const frac = typeof parsed === 'object' ? parsed.frac : parsed;
-            const indeterminate = typeof parsed === 'object' && parsed.indeterminate;
-            if (indeterminate) job._simIndeterminate = true;
-            if (indeterminate === false) job._simIndeterminate = false;
-
-            job.simProgressTarget = Math.max(job.simProgressTarget ?? 0, frac);
-            job.simProgress = job.simProgressTarget;
-            this._ensureSimProgressAnimator(job);
-            return true;
-        };
     }
 
     _simProgressForDisplay(job) {
@@ -1077,285 +1067,6 @@ export class ScanModule {
         if (job.status === 'scanning') this._syncMobileScanControls();
     }
 
-    /** mr0sim/rapisim call; abort via onMessage returning false when job.abortSim is set. */
-    async _callToolSim(url, input, channel, job) {
-        return await this._callTool(url, input, channel, this._simOnMessage(job, channel));
-    }
-
-    async _acquireToolSlot() {
-        if (this._toolWsInflight < MAX_CONCURRENT_TOOL_WS) {
-            this._toolWsInflight += 1;
-            return;
-        }
-        await new Promise((resolve) => this._toolWsWaiters.push(resolve));
-        this._toolWsInflight += 1;
-    }
-
-    _releaseToolSlot() {
-        this._toolWsInflight = Math.max(0, this._toolWsInflight - 1);
-        const next = this._toolWsWaiters.shift();
-        if (next) next();
-    }
-
-    /** Extract toolapi error string from a result dict, if any. */
-    _toolErrorMessage(result) {
-        if (!result) return null;
-        const r = result.Ok !== undefined ? result.Ok : result;
-        if (r?.Error) return String(r.Error);
-        if (r?.err) return String(r.err);
-        if (result?.Error) return String(result.Error);
-        if (result?.err) return String(result.err);
-        return null;
-    }
-
-    _assertToolOk(channel, result) {
-        const msg = this._toolErrorMessage(result);
-        if (msg) throw new Error(`${channel} failed: ${msg}`);
-        return result;
-    }
-
-    /**
-     * Build one error message when Promise.allSettled parallel tool/pyodide legs fail.
-     * @param {string} stageLabel
-     * @param {Array<{ label: string, settled: PromiseSettledResult }>} legs
-     */
-    _parallelStageError(stageLabel, legs) {
-        const parts = [];
-        for (const { label, settled } of legs) {
-            if (settled.status === 'rejected') {
-                const e = settled.reason;
-                parts.push(`${label}: ${e?.message || String(e)}`);
-            } else {
-                const toolMsg = this._toolErrorMessage(settled.value);
-                if (toolMsg) parts.push(`${label}: ${toolMsg}`);
-            }
-        }
-        if (!parts.length) return `${stageLabel} failed`;
-        return `${stageLabel} failed — ${parts.join('; ')}`;
-    }
-
-    /**
-     * One toolapi-wasm request = one WebSocket to `url` (slot-limited globally).
-     * @param {Function|null} [onMessage] — optional progress callback; default logs only.
-     */
-    async _callTool(url, input, channel, onMessage = null) {
-        await this._acquireToolSlot();
-        const call = await this._ensureToolApi();
-        const label = channel || this._toolChannelFromUrl(url);
-        console.log(`${this._simPipelineJob ? this._jobSimLogTag(this._simPipelineJob) : 'SIM'} [${label}] ws open → ${url}`);
-        try {
-            return await call(url, input, onMessage || this._toolOnMessageFor(label));
-        } finally {
-            console.log(`${this._simPipelineJob ? this._jobSimLogTag(this._simPipelineJob) : 'SIM'} [${label}] ws closed`);
-            this._releaseToolSlot();
-        }
-    }
-
-    /**
-     * Resample phantom volumes to FOV + build toolapi phantom dict (Pyodide queue).
-     */
-    async _simPhantomResampleAndConvert(nvMod, job, activeGroup, phantomRef, simLogTag) {
-        nvMod._setResamplePyodideOptions();
-        const resampledEntries = [];
-        nvMod.pyodide.globals.set("reference_bytes", phantomRef);
-        let volIdx = 0;
-        for (const vol of activeGroup.volumes) {
-            const src = nvMod.getVolumeNifti(vol);
-            nvMod.pyodide.globals.set("source_bytes", src);
-            const res = await nvMod.runPyodideResampling(vol, {
-                jobId: job.id,
-                suffix: `v${volIdx++}`,
-            });
-            const { bytes: outU8 } = nvMod.readResampleOutputPath(res);
-            resampledEntries.push({ name: vol.name, bytes: new Uint8Array(outU8) });
-        }
-        if (!resampledEntries.length) throw new Error("Resampling failed: no volumes produced.");
-
-        const selectedJson = typeof nvMod.getSelectedJsonForSim === 'function'
-            ? nvMod.getSelectedJsonForSim(activeGroup)
-            : null;
-        const phantomJsonFileName = selectedJson?.fileName
-            || activeGroup.jsonFileName
-            || (activeGroup.jsonName ? `${activeGroup.jsonName}.json` : null);
-        const phantomJsonContent = selectedJson?.content != null
-            ? selectedJson.content
-            : (typeof nvMod.getPhantomJsonContent === 'function'
-                ? nvMod.getPhantomJsonContent(activeGroup)
-                : activeGroup.jsonContent);
-        return this._convertResampledGroupToToolPhantom(nvMod, {
-            jsonName: activeGroup.jsonName,
-            jsonFileName: phantomJsonFileName,
-            jsonContent: phantomJsonContent,
-            resampledEntries,
-            jobId: job.id,
-        });
-    }
-
-
-    _trajectoryFromResult(result) {
-        if (!result) return null;
-        if (result.Ok !== undefined) result = result.Ok;
-        if (result.Error) return null;
-        if (result.Trajectory) result = result.Trajectory;
-        const out = [];
-        const toArr = (x) => Array.isArray(x) ? x : (x && x.length !== undefined) ? Array.from(x) : [];
-        const tl = result.TypedList;
-        if (tl?.Vec4 && (Array.isArray(tl.Vec4) || typeof tl.Vec4.length === 'number')) {
-            const arr = Array.isArray(tl.Vec4) ? tl.Vec4 : Array.from(tl.Vec4);
-            for (const v of arr) {
-                out.push([Number(v.k_x ?? v[0] ?? v.x ?? 0), Number(v.k_y ?? v[1] ?? v.y ?? 0), Number(v.k_z ?? v[2] ?? v.z ?? 0)]);
-            }
-            return out.length ? out : null;
-        }
-        if (tl) {
-            const kx = toArr(tl.k_x ?? tl.kx ?? tl[0]);
-            const ky = toArr(tl.k_y ?? tl.ky ?? tl[1]);
-            const kz = toArr(tl.k_z ?? tl.kz ?? tl[2]);
-            if (kx.length || ky.length) {
-                const n = Math.max(kx.length, ky.length, kz.length);
-                for (let i = 0; i < n; i++) out.push([Number(kx[i] || 0), Number(ky[i] || 0), Number(kz[i] || 0)]);
-                return out.length ? out : null;
-            }
-        }
-        return null;
-    }
-
-    _signalFromResult(result) {
-        if (!result) return null;
-        if (result.Ok !== undefined) result = result.Ok;
-        if (result.Error) return null;
-        const toArr = (x) => Array.isArray(x) ? x : (x != null && typeof x.length === 'number' ? Array.from(x) : []);
-        const tl = result.TypedList;
-        if (tl) {
-            const c = tl.Complex;
-            if (c) {
-                let real = c.real ?? c.Real;
-                let imag = c.imag ?? c.Imag;
-                if (c.Float && (Array.isArray(c.Float) || typeof c.Float.length === 'number')) {
-                    const fa = toArr(c.Float);
-                    if (fa.length >= 2) {
-                        real = real ?? fa[0];
-                        imag = imag ?? fa[1];
-                    }
-                }
-                const r = toArr(real), im = toArr(imag);
-                const n = Math.max(r.length, im.length);
-                if (n > 0) {
-                    const out = new Array(n);
-                    for (let i = 0; i < n; i++) out[i] = [Number(r[i] || 0), Number(im[i] || 0)];
-                    return out;
-                }
-                // Array-like complex values: [{Real,Imag}, ...] or [[r,i], ...]
-                if (typeof c.length === 'number' && c.length > 0) {
-                    const arr = toArr(c);
-                    const out = [];
-                    for (let i = 0; i < arr.length; i++) {
-                        const it = arr[i];
-                        const re = it != null && typeof it === 'object' ? (it.Real ?? it.real ?? it[0]) : (typeof it === 'number' ? it : undefined);
-                        const imv = it != null && typeof it === 'object' ? (it.Imag ?? it.imag ?? it[1]) : 0;
-                        if (re !== undefined) out.push([Number(re), Number(imv ?? 0)]);
-                    }
-                    if (out.length > 0) return out;
-                }
-            }
-            // Some encoders put real/imag at TypedList top-level.
-            const rTop = tl.real ?? tl.Real;
-            const iTop = tl.imag ?? tl.Imag;
-            if (rTop != null && iTop != null) {
-                const r = toArr(rTop), im = toArr(iTop);
-                const n = Math.max(r.length, im.length);
-                if (n > 0) {
-                    const out = new Array(n);
-                    for (let i = 0; i < n; i++) out[i] = [Number(r[i] || 0), Number(im[i] || 0)];
-                    return out;
-                }
-            }
-            // TypedList as flat or object list.
-            if (typeof tl.length === 'number' && tl.length > 0) {
-                const arr = toArr(tl);
-                const first = arr[0];
-                if (typeof first === 'number') {
-                    // Interleaved [r0,i0,r1,i1,...]
-                    let out = [];
-                    for (let i = 0; i + 1 < arr.length; i += 2) out.push([Number(arr[i] || 0), Number(arr[i + 1] || 0)]);
-                    if (out.length > 0) return out;
-                    // Split [r..., i...]
-                    const half = Math.floor(arr.length / 2);
-                    if (half > 0) {
-                        out = [];
-                        for (let i = 0; i < half; i++) out.push([Number(arr[i] || 0), Number(arr[half + i] || 0)]);
-                        if (out.length > 0) return out;
-                    }
-                }
-                if (first != null && typeof first === 'object') {
-                    const out = [];
-                    for (let i = 0; i < arr.length; i++) {
-                        const it = arr[i];
-                        const re = it.Real ?? it.real ?? it[0];
-                        const imv = it.Imag ?? it.imag ?? it[1];
-                        if (re !== undefined && imv !== undefined) out.push([Number(re), Number(imv)]);
-                    }
-                    if (out.length > 0) return out;
-                }
-            }
-        }
-        // List of complex values: [{Complex:[r,i]}, ...] or [[r,i], ...]
-        if (result.List && Array.isArray(result.List)) {
-            const out = [];
-            for (const item of result.List) {
-                if (item && item.Complex) {
-                    const c = item.Complex;
-                    const re = Array.isArray(c) ? c[0] : (c.real ?? c.Real ?? 0);
-                    const imv = Array.isArray(c) ? c[1] : (c.imag ?? c.Imag ?? 0);
-                    out.push([Number(re), Number(imv)]);
-                } else if (Array.isArray(item) && item.length >= 2) {
-                    out.push([Number(item[0] || 0), Number(item[1] || 0)]);
-                } else if (typeof item === 'number') {
-                    out.push([Number(item), 0]);
-                }
-            }
-            if (out.length > 0) return out;
-        }
-        return null;
-    }
-
-    /**
-     * Plain phantom dict from Pyodide (shape/affine/data volumes) must match toolapi 0.4.5 wire format:
-     * - Root: Value::SegmentedPhantom → { SegmentedPhantom: { tissues, b1_tx, b1_rx } }
-     * - Volume.data: toolapi TypedList::Float (not Value) → { Float: number[] } only — no TypedList wrapper
-     *   (WASM rejects `TypedList` here: data field deserializes as TypedList enum, not Value.)
-     * See toolapi value::structured::{Volume, SegmentedPhantom, PhantomTissue}.
-     */
-    _typedListFloat(arr) {
-        const src = Array.isArray(arr) ? arr : (arr != null && typeof arr.length === 'number' ? Array.from(arr) : []);
-        return { Float: src.map((x) => Number(x)) };
-    }
-
-    _normalizeShape3(s) {
-        const a = Array.isArray(s) ? s.map((x) => Number(x)) : [];
-        if (a.length === 3) return a;
-        if (a.length === 2) return [a[0], a[1], 1];
-        if (a.length === 1) return [a[0], 1, 1];
-        if (a.length > 3) return [a[0], a[1], a[2]];
-        throw new Error(`Invalid volume shape (need 1–3 dims): ${JSON.stringify(s)}`);
-    }
-
-    _encodeToolapiVolume(vol) {
-        if (!vol || typeof vol !== 'object') throw new Error('encodeToolapiVolume: invalid volume');
-        const shape = this._normalizeShape3(vol.shape);
-        const aff = vol.affine;
-        if (!Array.isArray(aff) || aff.length !== 3) throw new Error('encodeToolapiVolume: affine must be 3×4');
-        const affine = aff.map((row) => {
-            if (!Array.isArray(row) || row.length !== 4) throw new Error('encodeToolapiVolume: affine row must have 4 floats');
-            return row.map((x) => Number(x));
-        });
-        return {
-            shape,
-            affine,
-            data: this._typedListFloat(vol.data),
-        };
-    }
-
     _jobSimLogTag(job) {
         return formatSimBackendLabel(job?.simulation?.backendId)
             || job?.simulation?.backendLabel
@@ -1396,12 +1107,12 @@ export class ScanModule {
      * This block is metadata/provenance only (the sim consumes the live submit payload).
      */
     async _patchProtocolSimulationToml(job, { fovAffine, fovMatrix, phantomMatrix, phantomOversample, reconMatrix, phantomName }) {
-        if (!job?.scanNumber || !window.seqExplorer) return;
-        const protocolPath = window.seqExplorer.findProtocolPathForScanNumber(job.scanNumber);
+        if (!job?.scanNumber || !this.ctx.explorer) return;
+        const protocolPath = this.ctx.explorer.findProtocolPathForScanNumber(job.scanNumber);
         if (!protocolPath) return;
         const sim = job.simulation || {};
         const simulation = {
-            backend: sim.backendId || 'mr0sim',
+            backend: sim.backendId || DEFAULT_SIM_BACKEND_ID,
             phantom: phantomName || 'unknown',
         };
         if (fovAffine) simulation.fov_affine = fovAffine;
@@ -1412,7 +1123,7 @@ export class ScanModule {
         if (sim.max_state_count != null) simulation.max_state_count = sim.max_state_count;
         if (sim.min_emitted_signal != null) simulation.min_emitted_signal = sim.min_emitted_signal;
         if (sim.min_latent_signal != null) simulation.min_latent_signal = sim.min_latent_signal;
-        await window.seqExplorer.patchProtocolTomlSections(protocolPath, {
+        await this.ctx.explorer.patchProtocolTomlSections(protocolPath, {
             simulation,
             recon: {
                 matrix: reconMatrix,
@@ -1423,367 +1134,51 @@ export class ScanModule {
 
     /** Scan-ready bifti cache id of the active phantom group (or null). Public wrapper. */
     getActiveBiftiId() {
-        const nvMod = window.nvModule;
+        const nvMod = this.ctx.nv;
         const group = typeof nvMod?.getActivePhantomGroup === 'function'
             ? nvMod.getActivePhantomGroup()
             : null;
         return this._resolveBiftiId(group);
     }
 
-    _encodeSegmentedPhantomForToolapi(plain) {
-        if (!plain || typeof plain !== 'object') throw new Error('encodeSegmentedPhantomForToolapi: invalid phantom');
-        const tissuesIn = plain.tissues || {};
-        const tissues = {};
-        for (const [name, t] of Object.entries(tissuesIn)) {
-            if (!t || typeof t !== 'object') continue;
-            tissues[name] = {
-                density: this._encodeToolapiVolume(t.density),
-                db0: this._encodeToolapiVolume(t.db0),
-                t1: Number(t.t1),
-                t2: Number(t.t2),
-                t2dash: Number(t.t2dash),
-                adc: Number(t.adc),
-            };
-        }
-        const b1_tx = (plain.b1_tx || []).map((v) => this._encodeToolapiVolume(v));
-        const b1_rx = (plain.b1_rx || []).map((v) => this._encodeToolapiVolume(v));
-        return { SegmentedPhantom: { tissues, b1_tx, b1_rx } };
-    }
-
     async _prepareCurrentSeqForTools(job) {
         const _t = (label) => console.log(`[SEQ-PREP] ${label}: ${performance.now().toFixed(1)}ms`);
         _t('start');
-        if (window.seqExplorer) {
-            window.seqExplorer._pendingProtocolMeta = {
+        if (this.ctx.explorer) {
+            this.ctx.explorer._pendingProtocolMeta = {
                 scanNumber: job.scanNumber,
                 name: job.name,
             };
-            // Already inside enqueuePyodideTask (sim-seq). Run inline so this does not
-            // wait on a nested queue task and deadlock the drain.
-            window.seqExplorer._inlineNextExecute = true;
-            await window.seqExplorer.executeFunction(true, job.scanNumber);
-            window.seqExplorer._pendingProtocolMeta = null;
+            await this.ctx.explorer.executeFunction(true, job.scanNumber);
+            this.ctx.explorer._pendingProtocolMeta = null;
         }
-        if (window.seqExplorer?._lastExecutionError) {
-            throw new Error(window.seqExplorer._lastExecutionError);
+        if (this.ctx.explorer?._lastExecutionError) {
+            throw new Error(this.ctx.explorer._lastExecutionError);
         }
         _t('after executeFunction');
-        const nvMod = window.nvModule;
-        const isInterpreter = this.currentSequence && (this.currentSequence.functionName === 'seq_pulseq_interpreter');
-        let sourceSeqPath = null;
-        if (isInterpreter && window.seqExplorer) {
-            const paramsRoot = window.seqExplorer.paramsTarget || window.seqExplorer.container;
-            const input = paramsRoot ? paramsRoot.querySelector('#seq-param-seq_file') : null;
-            if (input && input.value && input.value.trim()) sourceSeqPath = input.value.trim();
+        const nvMod = this.ctx.nv;
+        const harvest = this.ctx.explorer?._lastHarvest;
+        const seqBytes = harvest?.seqBytes instanceof Uint8Array
+            ? harvest.seqBytes
+            : (harvest?.seqBytes instanceof ArrayBuffer ? new Uint8Array(harvest.seqBytes) : null);
+        if (!seqBytes || !seqBytes.byteLength) {
+            throw new Error("Could not prepare .seq file for simulation.");
         }
-        const sourceSeqPathPy = sourceSeqPath != null ? JSON.stringify(sourceSeqPath) : 'None';
-        // Record time just before executeFunction so we can detect .seq files written by the sequence
-        // script itself (e.g. mrseq writes to /home/pyodide/output/ internally).  We pass this as a
-        // Pyodide global so the Python snippet below can skip a second seq.write() and just copy.
-        const preExecTimeSec = (Date.now() / 1000) - 2; // 2s buffer for clock skew
-        nvMod.pyodide.globals.set('_pre_exec_mtime', preExecTimeSec);
-        const saveResult = await nvMod.pyodide.runPythonAsync(`
-import os, shutil, __main__, time as _time
-from seq_source_manager import SourceManager
-os.makedirs('/outputs', exist_ok=True)
-vfs_path = '/outputs/${job.baseName}.seq'
-source_seq_path = ${sourceSeqPathPy}
-_final_status = "no_sequence"
-if source_seq_path is not None and os.path.exists(source_seq_path):
-    shutil.copy2(source_seq_path, vfs_path)
-    _final_status = "success"
-else:
-    # If the sequence script (e.g. mrseq) already wrote a .seq file during executeFunction,
-    # copy it instead of calling seq.write() again — avoids a second ~14s serialisation.
-    _wrote_path = None
-    for _dir in ('/home/pyodide/output', '/home/pyodide'):
-        if not os.path.isdir(_dir):
-            continue
-        try:
-            _candidates = [
-                (_mt, os.path.join(_dir, _f))
-                for _f in os.listdir(_dir)
-                if _f.endswith('.seq')
-                for _mt in [os.path.getmtime(os.path.join(_dir, _f))]
-                if _mt >= _pre_exec_mtime
-            ]
-        except Exception:
-            _candidates = []
-        if _candidates:
-            _candidates.sort(reverse=True)
-            _wrote_path = _candidates[0][1]
-            break
-    if _wrote_path:
-        _t0 = _time.perf_counter()
-        shutil.copy2(_wrote_path, vfs_path)
-        _t1 = _time.perf_counter()
-        _size = os.path.getsize(vfs_path)
-        print(f"[SEQ-PREP] copy from script output ({os.path.basename(_wrote_path)}): {(_t1-_t0)*1000:.1f}ms, {_size/1024:.1f}KB", flush=True)
-        _final_status = "success"
-    else:
-        seq = getattr(SourceManager, '_last_sequence', None) or getattr(__main__, 'seq', None)
-        if seq:
-            _t0 = _time.perf_counter()
-            seq.write(vfs_path)
-            _t1 = _time.perf_counter()
-            _size = os.path.getsize(vfs_path)
-            print(f"[SEQ-PREP] seq.write(): {(_t1-_t0)*1000:.1f}ms, {_size/1024:.1f}KB", flush=True)
-            _final_status = "success"
-_final_status
-        `);
-        _t('after seq.write (Python)');
-        if (saveResult === "success") {
-            job.vfsSeqPath = `/outputs/${job.baseName}.seq`;
-            // Read as bytes — Pyodide transfers bytes as a shared ArrayBuffer (zero-copy),
-            // whereas reading as str copies every character through the WASM boundary.
-            const seqPy = await nvMod.pyodide.runPythonAsync(`
-with open('${job.vfsSeqPath}', 'rb') as f:
-    _sim_seq_bytes = f.read()
-_sim_seq_bytes
-            `);
-            _t('after VFS read (Python→JS boundary)');
-            const bytes = (seqPy && seqPy.toJs) ? seqPy.toJs() : seqPy;
-            _t('after toJs()');
-            if (seqPy?.destroy) seqPy.destroy();
-            const text = (bytes instanceof Uint8Array)
-                ? new TextDecoder('utf-8').decode(bytes)
-                : String(bytes || '');
-            _t(`after TextDecoder (${(text.length/1024).toFixed(1)}KB)`);
-            if (!text.trim()) {
-                throw new Error("Prepared .seq file is empty. Run/plot the sequence in the explorer so seq.write() produces content, or use a valid .seq path for the interpreter.");
-            }
-            return text;
-        }
-        throw new Error("Could not prepare .seq file for simulation.");
-    }
-
-    /**
-     * Build rapisim phantom dict from resampled NIfTI bytes in a temp FS folder only (no Niivue, no /phantom).
-     * @param {{ jsonName?: string, jsonFileName?: string, jsonContent?: string, resampledEntries: { name: string, bytes: Uint8Array }[] }} spec
-     */
-    async _convertResampledGroupToToolPhantom(nvMod, spec, jobId = null) {
-        await nvMod.initPyodide();
-        const STAGING = typeof nvMod.simStagingPath === "function"
-            ? nvMod.simStagingPath(jobId || spec.jobId || "sim")
-            : "/tmp/__sim_phantom_staging";
-        const stagingPy = JSON.stringify(STAGING);
-        await nvMod.pyodide.runPythonAsync(`
-import os, shutil
-_p = ${stagingPy}
-if os.path.exists(_p):
-    shutil.rmtree(_p)
-os.makedirs(_p, exist_ok=True)
-`);
-        const { jsonName, jsonFileName, jsonContent, resampledEntries } = spec;
-        if (!resampledEntries?.length) throw new Error("_convertResampledGroupToToolPhantom: no resampledEntries");
-        for (const ent of resampledEntries) {
-            const baseName = String(ent.name || "vol.nii").replace(/^\/+/, "").replace(/\.\.\//g, "");
-            if (!baseName) continue;
-            const u8 = ent.bytes instanceof Uint8Array ? ent.bytes : new Uint8Array(ent.bytes);
-            nvMod.pyodide.FS.writeFile(`${STAGING}/${baseName}`, u8);
-        }
-        const jsonFn = jsonFileName || `${jsonName || "phantom"}.json`;
-        if (jsonContent != null && jsonContent !== "") {
-            nvMod.pyodide.FS.writeFile(`${STAGING}/${jsonFn}`, typeof jsonContent === "string" ? jsonContent : String(jsonContent));
-        }
-        nvMod.pyodide.globals.set("sim_json_name", jsonFn);
-        nvMod.pyodide.globals.set("sim_phantom_base", STAGING);
-        let phantomObj;
+        const vfsPath = `/outputs/${job.baseName}.seq`;
         try {
-            phantomObj = await nvMod.pyodide.runPythonAsync(`
-import json, numpy as np, nibabel as nib, re, tempfile, os, shutil
-from nibabel.filebasedimages import ImageFileError
-cfg_name = sim_json_name.to_py() if hasattr(sim_json_name, 'to_py') else sim_json_name
-base = sim_phantom_base.to_py() if hasattr(sim_phantom_base, 'to_py') else str(sim_phantom_base)
-with open(os.path.join(base, cfg_name), 'r', encoding='utf-8') as f:
-    cfg = json.load(f)
-cache = {}
-def parse_ref(s):
-    m = re.match(r"^(.+)\\[(\\d+)\\]$", str(s).strip())
-    if not m: raise ValueError(f'Invalid ref: {s}')
-    return m.group(1), int(m.group(2))
-def _collect_nifti_refs(val, out):
-    if isinstance(val, str) and '[' in val:
-        try:
-            out.add(parse_ref(val)[0])
-        except ValueError:
-            pass
-    elif isinstance(val, dict) and 'file' in val:
-        _collect_nifti_refs(val['file'], out)
-    elif isinstance(val, list):
-        for item in val:
-            _collect_nifti_refs(item, out)
-def _ensure_staged_nifti(fname):
-    dst = os.path.join(base, fname)
-    if os.path.isfile(dst):
-        return
-    src = os.path.join('/phantom', fname)
-    if os.path.isfile(src):
-        os.makedirs(os.path.dirname(dst) or base, exist_ok=True)
-        shutil.copy2(src, dst)
-_ref_names = set()
-for _t in cfg.get('tissues', {}).values():
-    if isinstance(_t, dict):
-        for _k, _v in _t.items():
-            _collect_nifti_refs(_v, _ref_names)
-for _fn in _ref_names:
-    _ensure_staged_nifti(_fn)
-def load4d(fn):
-    if fn in cache: return cache[fn]
-    path = base + '/' + fn
-    try:
-        img = nib.load(path)
-    except ImageFileError as e:
-        # Plain NIfTI sometimes wrongly named *.nii.gz (not gzip)
-        if "not a gzip file" in str(e).lower() and str(fn).lower().endswith(".nii.gz"):
-            with open(path, "rb") as src, tempfile.NamedTemporaryFile(suffix=".nii", delete=False) as tmp:
-                tmp.write(src.read())
-                tmp_path = tmp.name
-            img = nib.load(tmp_path)
-        else:
-            raise
-    dat = img.get_fdata()
-    if dat.ndim == 3: dat = dat[..., np.newaxis]
-    cache[fn] = (img.affine, dat)
-    return cache[fn]
-def make_vol(arr, aff):
-    vox = np.sqrt((aff[:3,:3]**2).sum(axis=0))
-    diag_aff = np.diag([float(vox[0]), float(vox[1]), float(vox[2]), 1.0])
-    return {
-        "shape": list(arr.shape),
-        "affine": diag_aff[:3,:4].tolist(),
-        "data": np.asarray(arr, dtype=np.float64).ravel(order='C').tolist()
-    }
-def _load_prop_map(prop_val, shape, prop_name):
-    """Load 3D map from constant / file_ref / mapping (no tissue mask)."""
-    if isinstance(prop_val, (int, float)):
-        return np.full(shape, float(prop_val), dtype=np.float64)
-    if isinstance(prop_val, str):
-        fn, idx = parse_ref(prop_val)
-        _, v4 = load4d(fn)
-        x = np.asarray(v4[:, :, :, idx], dtype=np.float64)
-        if x.shape != shape:
-            raise ValueError(
-                f'{prop_name} map {prop_val!r} shape {x.shape} != grid shape {shape}'
-            )
-        return x
-    if isinstance(prop_val, dict):
-        fn, idx = parse_ref(prop_val['file'])
-        _, v4 = load4d(fn)
-        x = np.asarray(v4[:, :, :, idx], dtype=np.float64)
-        if x.shape != shape:
-            raise ValueError(
-                f'{prop_name} file {prop_val.get("file")!r} shape {x.shape} != grid shape {shape}'
-            )
-        x_min = float(x.min())
-        x_max = float(x.max())
-        x_mean = float(x.mean())
-        x_std = float(x.std())
-        vol = eval(
-            prop_val['func'],
-            {'__builtins__': {}},
-            {'x': x, 'x_min': x_min, 'x_max': x_max, 'x_mean': x_mean, 'x_std': x_std},
-        )
-        vol = np.asarray(vol, dtype=np.float64)
-        if vol.shape != shape:
-            raise ValueError(
-                f'{prop_name} func result shape {vol.shape} != grid shape {shape}'
-            )
-        return vol
-    raise ValueError(f'Unsupported {prop_name} type: {type(prop_val)}')
-def resolve_vol(prop_val, dens, prop_name='property'):
-    """Per-tissue 3D property masked by that tissue's density."""
-    mask = dens > 0
-    if isinstance(prop_val, (int, float)):
-        out = np.zeros(dens.shape, dtype=np.float64)
-        out[mask] = float(prop_val)
-        return out
-    vol = _load_prop_map(prop_val, dens.shape, prop_name)
-    return np.where(mask, vol, 0.0)
-def prop_scalar(prop_val, default, prop_name):
-    """Scalar for toolapi (T1, T2, …): constant or PD-weighted mean in tissue."""
-    if isinstance(prop_val, (int, float)):
-        return float(prop_val)
-    if isinstance(prop_val, str):
-        fn, idx = parse_ref(prop_val)
-        _, v4 = load4d(fn)
-        vv = np.asarray(v4[:, :, :, idx], dtype=np.float64).ravel(order='C')
-        dd = dens.ravel(order='C')
-        s = float(dd.sum())
-        return float((dd * vv).sum() / s) if s > 0 else float(default)
-    if isinstance(prop_val, dict):
-        vol = _load_prop_map(prop_val, dens.shape, prop_name)
-        dd = dens.ravel(order='C')
-        vv = vol.ravel(order='C')
-        s = float(dd.sum())
-        return float((dd * vv).sum() / s) if s > 0 else float(default)
-    return float(default)
-tissues = {}
-first = None
-all_tissues = list(cfg.get('tissues', {}).values())
-ref_shape = None
-ref_aff = None
-for n,t in cfg.get('tissues',{}).items():
-    if first is None: first = t
-    dfn,didx = parse_ref(t['density'])
-    aff,d4 = load4d(dfn); dens = d4[:,:,:,didx]
-    if ref_shape is None:
-        ref_shape = dens.shape
-        ref_aff = aff
-    tissues[n] = {
-        "density": make_vol(dens, aff),
-        "db0": make_vol(resolve_vol(t.get('dB0', 0.0), dens, 'dB0'), aff),
-        "t1": prop_scalar(t.get('T1', float('inf')), float('inf'), 'T1'),
-        "t2": prop_scalar(t.get('T2', float('inf')), float('inf'), 'T2'),
-        "t2dash": prop_scalar(t.get("T2'", float('inf')), float('inf'), "T2'"),
-        "adc": prop_scalar(t.get('ADC', 0.0), 0.0, 'ADC'),
-    }
-b1_tx=[]; b1_rx=[]
-def _first_nonempty_b1(key):
-    # Prefer first non-empty tissue-level B1 list across all tissues.
-    for tt in all_tissues:
-        if not isinstance(tt, dict):
-            continue
-        vals = tt.get(key, None)
-        if isinstance(vals, list) and len(vals) > 0:
-            return vals
-    return None
-tx_vals = _first_nonempty_b1('B1+')
-rx_vals = _first_nonempty_b1('B1-')
-if tx_vals is None and first:
-    tx_vals = first.get('B1+', [1.0])
-if rx_vals is None and first:
-    rx_vals = first.get('B1-', [1.0])
-def b1_channel_vol(p, label):
-    # B1 maps are global (not masked to one tissue); see nifti_phantom_v1 spec.
-    if isinstance(p, (int, float)):
-        return make_vol(np.ones(ref_shape, dtype=np.float64) * float(p), ref_aff)
-    return make_vol(_load_prop_map(p, ref_shape, label), ref_aff)
-for p in (tx_vals or [1.0]):
-    b1_tx.append(b1_channel_vol(p, 'B1+'))
-for p in (rx_vals or [1.0]):
-    b1_rx.append(b1_channel_vol(p, 'B1-'))
-# MR0SIM expects at least one TX map; keep parity with phantomlib-style defaults.
-if len(b1_tx) == 0:
-    b1_tx.append(make_vol(np.ones(ref_shape, dtype=np.float64), ref_aff))
-# Also keep RX non-empty for robustness.
-if len(b1_rx) == 0:
-    b1_rx.append(make_vol(np.ones(ref_shape, dtype=np.float64), ref_aff))
-{"tissues": tissues, "b1_tx": b1_tx, "b1_rx": b1_rx}
-        `);
-        } finally {
-            try {
-                await nvMod.pyodide.runPythonAsync(`
-import os, shutil
-_p = ${stagingPy}
-if os.path.exists(_p):
-    shutil.rmtree(_p)
-`);
-            } catch (_) { /* ignore */ }
+            nvMod.pyodide.FS.mkdirTree('/outputs');
+        } catch {
+            /* already there */
         }
-        const out = (phantomObj && phantomObj.toJs) ? phantomObj.toJs() : phantomObj;
-        if (phantomObj?.destroy) phantomObj.destroy();
-        return out;
+        nvMod.pyodide.FS.writeFile(vfsPath, seqBytes);
+        job.vfsSeqPath = vfsPath;
+        _t('after harvested seq write (main VFS)');
+        const text = new TextDecoder('utf-8').decode(seqBytes);
+        _t(`after TextDecoder (${(text.length / 1024).toFixed(1)}KB)`);
+        if (!text.trim()) {
+            throw new Error("Prepared .seq file is empty. Run/plot the sequence in the explorer so seq.write() produces content, or use a valid .seq path for the interpreter.");
+        }
+        return text;
     }
 
     _getHttpSimBaseUrl(job) {
@@ -1998,33 +1393,6 @@ if os.path.exists(_p):
         return await resp.json();
     }
 
-    async _parseHttpNpzForRecon(nvMod, npzBytes) {
-        nvMod.pyodide.globals.set('http_npz_bytes', npzBytes);
-        const pairsPy = await nvMod.pyodide.runPythonAsync(`
-import io
-import numpy as np
-_buf = http_npz_bytes.to_py() if hasattr(http_npz_bytes, 'to_py') else http_npz_bytes
-if isinstance(_buf, (list, tuple)):
-    _buf = bytes(_buf)
-data = np.load(io.BytesIO(_buf))
-signal = np.asarray(data['signal']).ravel()
-ktraj = np.asarray(data['ktraj'], dtype=np.float32)
-if ktraj.ndim == 2 and ktraj.shape[0] == 3 and ktraj.shape[1] != 3:
-    ktraj = ktraj.T
-sig_pairs = [[float(np.real(x)), float(np.imag(x))] for x in signal]
-traj_pts = []
-for i in range(ktraj.shape[0]):
-    kx = float(ktraj[i, 0])
-    ky = float(ktraj[i, 1] if ktraj.shape[1] > 1 else 0.0)
-    kz = float(ktraj[i, 2] if ktraj.shape[1] > 2 else 0.0)
-    traj_pts.append([kx, ky, kz])
-(sig_pairs, traj_pts)
-        `);
-        const out = (pairsPy && pairsPy.toJs) ? pairsPy.toJs() : pairsPy;
-        if (pairsPy?.destroy) pairsPy.destroy();
-        return { signalPairs: out[0], trajPoints: out[1] };
-    }
-
     /**
      * HTTP full pipeline (back-compat wrapper): prep + submit (awaited), then background poll + recon.
      * Prefer calling `_httpPrepareAndSubmit` + `_pumpHttpReaper` directly (as `startScan` does).
@@ -2042,7 +1410,7 @@ for i in range(ktraj.shape[0]):
      * @param {object} job
      */
     async _httpPrepareAndSubmit(job) {
-        const nvMod = window.nvModule;
+        const nvMod = this.ctx.nv;
         const simLogTag = this._jobSimLogTag(job);
         const httpBase = this._getHttpSimBaseUrl(job);
         job.httpBaseUrl = httpBase;
@@ -2259,13 +1627,17 @@ for i in range(ktraj.shape[0]):
     }
 
     /**
-     * Phases D–F for one finished job: fetch NPZ → local PyNUFFT recon (Pyodide-serialised) → finalize.
-     * Runs detached from the poll loop; recon ordering is handled by `enqueuePyodideTask`.
+     * Phases D–F for one finished job: fetch NPZ → PyNUFFT recon on the worker → finalize.
+     * Runs detached from the poll loop.
+     *
+     * Orchestration only: the compute steps it drives (`_readSeqMatrixDefinition`,
+     * `_reconstructJob`) take and return data, so job state, staging, the viewer load and
+     * the error path all live here. The result NPZ is not decoded on the way past — it goes
+     * to `_reconstructJob` as bytes and is decoded inside the worker.
      * @param {object} job
      */
     async _httpFinishJob(job) {
-        const nvMod = window.nvModule;
-        const simLogTag = this._jobSimLogTag(job);
+        const nvMod = this.ctx.nv;
         const _tFinish = performance.now();
         try {
             if (job.abortSim) throw new Error('user stopped');
@@ -2276,15 +1648,10 @@ for i in range(ktraj.shape[0]):
             this._setPipelineStage(job, 3);
 
             const npzBytes = await this._httpFetchResultNpz(job.httpBaseUrl, job.httpJobId);
-            const { signalPairs, trajPoints } = await nvMod.enqueuePyodideTask(job.id, 'http-npz', () =>
-                this._parseHttpNpzForRecon(nvMod, npzBytes),
-            );
-
-            if (!trajPoints?.length) throw new Error(`${simLogTag}: HTTP result has no trajectory.`);
-            if (!signalPairs?.length) throw new Error(`${simLogTag}: HTTP result has no signal.`);
-
             const reconRef = nvMod.generateFovMaskNiftiFromSnapshot(job.fovSnapshot, job.reconMatrix);
 
+            // Sampled after the result fetch, not before it: this reads the live recon checkbox,
+            // so hoisting it above a multi-second fetch would change which setting wins.
             const useRecon = typeof nvMod.isScanReconEnabled === 'function'
                 ? nvMod.isScanReconEnabled()
                 : nvMod.scanRecon?.checked !== false;
@@ -2294,68 +1661,20 @@ for i in range(ktraj.shape[0]):
             job.reconDone = false;
             job.stageCaption = 'reco';
             this._setPipelineStage(job, 4);
-            const _tRecon = performance.now();
-            const recoBytes = await nvMod.enqueuePyodideTask(job.id, 'sim-recon', async () => {
-                await nvMod._ensureNibabelReady();
-                await nvMod.pyodide.loadPackage(['micropip']);
-                await nvMod.pyodide.runPythonAsync(`
-import micropip
-try:
-    import pynufft  # noqa
-except Exception:
-    await micropip.install('pynufft')
-                `);
-                await this._ensureSimReconPy(nvMod);
-                nvMod.pyodide.globals.set('sim_signal_pairs', signalPairs);
-                nvMod.pyodide.globals.set('sim_traj_points', trajPoints);
-                nvMod.pyodide.globals.set('sim_ref_bytes', reconRef);
-                nvMod.pyodide.globals.set('sim_output_mode', useRecon ? 'image' : 'kspace_log');
-                nvMod.pyodide.globals.set('sim_seq_path', job.vfsSeqPath || '');
-                nvMod.pyodide.globals.set('sim_reco_out_path', recoOutPath);
-                const recoPathRes = await nvMod.pyodide.runPythonAsync(`
-import types
-_matrix = None
-_seq_path = sim_seq_path.to_py() if hasattr(sim_seq_path, 'to_py') else sim_seq_path
-if _seq_path:
-    try:
-        import os
-        import pypulseq as pp
-        _p = str(_seq_path)
-        if os.path.exists(_p):
-            _seq = pp.Sequence()
-            _seq.read(_p)
-            _m = _seq.get_definition('matrix')
-            if _m is not None:
-                _matrix = [int(_m[0]), int(_m[1]), int(_m[2]) if len(_m) > 2 else 1]
-    except Exception:
-        pass
-_src = sim_recon_py_source.to_py() if hasattr(sim_recon_py_source, 'to_py') else str(sim_recon_py_source)
-if "output_mode" not in _src:
-    raise RuntimeError("sim_recon_py_source is stale (missing output_mode)")
-_recon = types.ModuleType("_scan_recon_live")
-_recon.__dict__["__file__"] = "/scan_zero/recon.py"
-exec(compile(_src, "/scan_zero/recon.py", "exec"), _recon.__dict__)
-_out = sim_reco_out_path.to_py() if hasattr(sim_reco_out_path, 'to_py') else str(sim_reco_out_path)
-_recon.run_sim_recon(
-    sim_signal_pairs,
-    sim_traj_points,
-    sim_ref_bytes,
-    out_path=_out,
-    output_mode=sim_output_mode,
-    matrix=_matrix,
-)
-                `);
-                const recoPath = (recoPathRes && recoPathRes.toJs) ? recoPathRes.toJs() : recoPathRes;
-                if (recoPathRes?.destroy) recoPathRes.destroy();
-                const path = String(recoPath || recoOutPath);
-                const bytes = nvMod.pyodide.FS.readFile(path);
-                try { nvMod.pyodide.FS.unlink(path); } catch (_) {}
-                return bytes;
+            const seqMatrix = await this._readSeqMatrixDefinition(job, nvMod);
+            const recoBytes = await this._reconstructJob({
+                npzBytes,
+                reconRef,
+                useRecon,
+                matrix: seqMatrix,
+                outPath: recoOutPath,
+                logTag: 'HTTP',
             });
-            console.log(`[HTTP] ${useRecon ? 'PyNUFFT recon' : 'k-space log'}: ${(performance.now() - _tRecon).toFixed(0)}ms`);
             job.reconDone = true;
             this._setPipelineStage(job, 4);
 
+            this._revokeJobObjectUrl(job.niftiUrl);
+            this._revokeJobObjectUrl(job.seqUrl);
             job.niftiUrl = URL.createObjectURL(new Blob([recoBytes], { type: 'application/octet-stream' }));
             job.seqUrl = URL.createObjectURL(new Blob([job.seqText || ''], { type: 'text/plain' }));
             job.status = 'done';
@@ -2379,261 +1698,6 @@ _recon.run_sim_recon(
         }
         this.updateQueueUI();
         this._syncScanBusyUi();
-    }
-
-    /**
-     * Shared pipeline: resample phantom → conseq / trajex → rapisim or tool-mr0sim → PyNUFFT → queue result.
-     * @param {object} job — must include simulation.toolUrl (from _enqueueSimJob).
-     */
-    async runSimPipeline(job) {
-        const nvMod = window.nvModule;
-        const simToolUrl = job.simulation?.toolUrl || TOOL_MR0SIM_T4;
-        const simLogTag = this._jobSimLogTag(job);
-        this._simPipelineJob = job;
-        job.abortSim = false;
-        job.status = 'scanning';
-        job.pipelineStage = 0;
-        job.error = null;
-        this.updateQueueUI();
-        const _tPipeline = performance.now();
-        try {
-            // FOV contract: **Pulseq seq.definitions FOV** (m) is authoritative for physical size (mm).
-            // Sequence must run *before* generateFovMaskNifti() so executeFunction can emit sequence_fov_dims
-            // and the viewer FOV sliders update first; mask grid (mask X/Y/Z), offsets, rotation stay as in UI.
-            // Resampling + PyNUFFT ref then match the same geometry the user sees after seq sync.
-            // Ensure run_resampling / run_resampling_serial3d_to_4d are defined.
-            await nvMod.initPyodide();
-            const activeGroup = typeof nvMod.getActivePhantomGroup === 'function'
-                ? nvMod.getActivePhantomGroup()
-                : nvMod.volumeGroups?.find(g => g.volumes?.length && !String(g.jsonName || '').endsWith('_resampled') && !String(g.jsonName || '').endsWith('_averaged'));
-            if (!activeGroup) throw new Error("No phantom group with JSON found. Load phantom via Add (json/nii) first.");
-
-            const _tSeq = performance.now();
-            const seqText = await nvMod.enqueuePyodideTask(job.id, "sim-seq", async () => {
-                await nvMod._ensureNibabelReady();
-                const _t0 = performance.now();
-                const text = await this._prepareCurrentSeqForTools(job);
-                console.log(`[SIM] _prepareCurrentSeqForTools: ${(performance.now() - _t0).toFixed(0)}ms, seqText ${(text.length / 1024).toFixed(1)}KB`);
-                return text;
-            });
-            console.log(`[SIM] sim-seq: ${(performance.now() - _tSeq).toFixed(0)}ms`);
-
-            job.fovSnapshot = nvMod.captureFovSnapshot();
-            console.log(`[${simLogTag}] fovSnapshot:`, job.fovSnapshot);
-
-            const phantomOversample = nvMod.getPhantomOversampleFactors();
-            job.phantomOversample = phantomOversample;
-            const phantomFovSnapshot = nvMod.applyPhantomOversampleToSnapshot(job.fovSnapshot, phantomOversample);
-            const phantomMatrix = nvMod.getSimPhantomMatrixDims(phantomOversample);
-            const phantomMatrixBase = nvMod.getPhantomMatrixDims();
-            const reconMatrix = nvMod.getReconMatrixDims();
-            const phantomRef = nvMod.generateFovMaskNiftiFromSnapshot(
-                phantomFovSnapshot,
-                phantomMatrix,
-            );
-            const reconRef = nvMod.generateFovMaskNiftiFromSnapshot(job.fovSnapshot, reconMatrix);
-            // UI-faithful (non-oversampled) recon-grid affine for the shared/provenance metadata.
-            const fovReslice = nvMod.getResliceToFromFovSnapshot(job.fovSnapshot, reconMatrix);
-
-            try {
-                await this._patchProtocolSimulationToml(job, {
-                    fovAffine: this._flattenFovAffineForToml(fovReslice.affine),
-                    fovMatrix: reconMatrix,
-                    phantomMatrix: phantomMatrixBase,
-                    phantomOversample,
-                    reconMatrix,
-                    phantomName: this.getActiveBiftiId() || activeGroup.jsonName || activeGroup.jsonFileName || 'unknown',
-                });
-            } catch (tomlErr) {
-                console.warn(`[${simLogTag}] protocol TOML simulation/recon patch failed:`, tomlErr);
-            }
-
-            // conseq (Fly) ∥ footprint resample + phantom convert (Pyodide queue)
-            const _tParallelPrep = performance.now();
-            const [conseqSettled, phantomSettled] = await Promise.allSettled([
-                this._callTool(
-                    TOOL_CONSEQ,
-                    { Dict: { seq_file: { Str: seqText }, exact_trajectory: { Bool: false } } },
-                    'conseq',
-                ),
-                nvMod.enqueuePyodideTask(job.id, "sim-phantom", () =>
-                    this._simPhantomResampleAndConvert(nvMod, job, activeGroup, phantomRef, simLogTag),
-                ),
-            ]);
-            const prepLegs = [
-                { label: 'conseq', settled: conseqSettled },
-                { label: 'phantom resample', settled: phantomSettled },
-            ];
-            const prepFail = prepLegs.filter((leg) =>
-                leg.settled.status === 'rejected' || this._toolErrorMessage(leg.settled.value),
-            );
-            if (prepFail.length) {
-                throw new Error(this._parallelStageError('Prepare (conseq ∥ resample)', prepLegs));
-            }
-            const seq = this._assertToolOk('conseq', conseqSettled.value);
-            const phantomPayload = phantomSettled.value;
-            console.log(`[SIM] conseq ∥ phantom resample: ${(performance.now() - _tParallelPrep).toFixed(0)}ms`);
-            this._setPipelineStage(job, 1);
-
-            const ev = seq?.TypedList?.InstantSeqEvent;
-            const events = ev
-                ? { TypedList: { InstantSeqEvent: ev } }
-                : seq;
-            const phantomForSim = this._encodeSegmentedPhantomForToolapi(phantomPayload);
-            const simChannel = String(simToolUrl || '').includes('rapisim') ? 'rapisim' : 'mr0sim';
-
-            // trajex ∥ sim (after conseq + phantom; recon needs both)
-            this._setPipelineStage(job, 2);
-            job.simProgress = 0;
-            job.simProgressTarget = 0;
-            job.simDisplayProgress = 0;
-            job._simIndeterminate = false;
-            this._setPipelineStage(job, 3);
-            this._ensureSimProgressAnimator(job);
-            const _tParallelSim = performance.now();
-            const simDict = { sequence: seq, phantom: phantomForSim };
-            if (job.simulation?.useGpu) {
-                simDict.use_gpu = { Bool: true };
-            }
-            const [trajSettled, simSettled] = await Promise.allSettled([
-                this._callTool(
-                    TOOL_TRAJEX,
-                    { Dict: { sequence: events, t1: { Float: 1.0 }, t2: { Float: 0.1 }, min_mag: { Float: 0.001 } } },
-                    'trajex',
-                ),
-                this._callToolSim(
-                    simToolUrl,
-                    { Dict: simDict },
-                    simChannel,
-                    job,
-                ),
-            ]);
-            if (job.abortSim) throw new Error('user stopped');
-            const simLegs = [
-                { label: 'trajex', settled: trajSettled },
-                { label: simChannel, settled: simSettled },
-            ];
-            const simFail = simLegs.filter((leg) =>
-                leg.settled.status === 'rejected' || this._toolErrorMessage(leg.settled.value),
-            );
-            if (simFail.length) {
-                if (job.abortSim) throw new Error('user stopped');
-                throw new Error(this._parallelStageError('Simulate (trajex ∥ sim)', simLegs));
-            }
-            const trajResult = trajSettled.value;
-            const signalResult = simSettled.value;
-            console.log(`[SIM] trajex ∥ ${simChannel}: ${(performance.now() - _tParallelSim).toFixed(0)}ms`);
-
-            const traj = this._trajectoryFromResult(trajResult);
-            const signal = this._signalFromResult(signalResult);
-            if (!traj?.length) {
-                throw new Error(`${simLogTag}: trajex returned no trajectory (k-space path empty).`);
-            }
-            if (!signal?.length) {
-                throw new Error(`${simLogTag}: ${simChannel} returned no signal.`);
-            }
-            if (job.abortSim) throw new Error('user stopped');
-            this._stopSimProgressAnimator(job);
-            job.simProgressTarget = 1;
-            job.simDisplayProgress = 1;
-            job.simProgress = 1;
-            this._setPipelineStage(job, 3);
-            const useRecon = typeof nvMod.isScanReconEnabled === 'function'
-                ? nvMod.isScanReconEnabled()
-                : nvMod.scanRecon?.checked !== false;
-            const _t6 = performance.now();
-            const recoOutPath = typeof nvMod.simReconOutPath === "function"
-                ? nvMod.simReconOutPath(job.id)
-                : "/tmp/__sim_pipeline_reco.nii";
-            job.reconDone = false;
-            this._setPipelineStage(job, 4);
-            const recoBytes = await nvMod.enqueuePyodideTask(job.id, "sim-recon", async () => {
-                await nvMod.pyodide.loadPackage(["micropip"]);
-                await nvMod.pyodide.runPythonAsync(`
-import micropip
-try:
-    import pynufft  # noqa
-except Exception:
-    await micropip.install('pynufft')
-                `);
-                await this._ensureSimReconPy(nvMod);
-                nvMod.pyodide.globals.set("sim_signal_pairs", signal);
-                nvMod.pyodide.globals.set("sim_traj_points", traj || []);
-                nvMod.pyodide.globals.set("sim_ref_bytes", reconRef);
-                nvMod.pyodide.globals.set("sim_output_mode", useRecon ? "image" : "kspace_log");
-                nvMod.pyodide.globals.set("sim_seq_path", job.vfsSeqPath || "");
-                nvMod.pyodide.globals.set("sim_reco_out_path", recoOutPath);
-                const recoPathRes = await nvMod.pyodide.runPythonAsync(`
-import types
-_matrix = None
-_seq_path = sim_seq_path.to_py() if hasattr(sim_seq_path, 'to_py') else sim_seq_path
-if _seq_path:
-    try:
-        import os
-        import pypulseq as pp
-        _p = str(_seq_path)
-        if os.path.exists(_p):
-            _seq = pp.Sequence()
-            _seq.read(_p)
-            _m = _seq.get_definition('matrix')
-            if _m is not None:
-                _matrix = [int(_m[0]), int(_m[1]), int(_m[2]) if len(_m) > 2 else 1]
-    except Exception:
-        pass
-_src = sim_recon_py_source.to_py() if hasattr(sim_recon_py_source, 'to_py') else str(sim_recon_py_source)
-if "output_mode" not in _src:
-    raise RuntimeError("sim_recon_py_source is stale (missing output_mode)")
-_recon = types.ModuleType("_scan_recon_live")
-_recon.__dict__["__file__"] = "/scan_zero/recon.py"
-exec(compile(_src, "/scan_zero/recon.py", "exec"), _recon.__dict__)
-_out = sim_reco_out_path.to_py() if hasattr(sim_reco_out_path, 'to_py') else str(sim_reco_out_path)
-_recon.run_sim_recon(
-    sim_signal_pairs,
-    sim_traj_points,
-    sim_ref_bytes,
-    out_path=_out,
-    output_mode=sim_output_mode,
-    matrix=_matrix,
-)
-                `);
-                const recoPath = (recoPathRes && recoPathRes.toJs) ? recoPathRes.toJs() : recoPathRes;
-                if (recoPathRes?.destroy) recoPathRes.destroy();
-                const path = String(recoPath || recoOutPath);
-                const bytes = nvMod.pyodide.FS.readFile(path);
-                try { nvMod.pyodide.FS.unlink(path); } catch (_) {}
-                return bytes;
-            });
-            console.log(`[SIM] ${useRecon ? 'PyNUFFT recon' : 'k-space log'}: ${(performance.now()-_t6).toFixed(0)}ms`);
-            job.reconDone = true;
-            this._setPipelineStage(job, 4);
-
-            if (job.abortSim) throw new Error('user stopped');
-
-            // 7) show in Niivue (scan-like naming/path)
-            job.niftiUrl = URL.createObjectURL(new Blob([recoBytes], { type: "application/octet-stream" }));
-            job.seqUrl = URL.createObjectURL(new Blob([seqText], { type: "text/plain" }));
-            job.status = 'done';
-            console.log(`[SIM] *** TOTAL pipeline: ${(performance.now()-_tPipeline).toFixed(0)}ms ***`);
-            // Auto-load: don't resync FOV — preserve any in-progress FOV planning the user is doing
-            // for the next scan. Explicit VIEW SCAN clicks still sync (default `syncFov=true`).
-            this.loadJob(job.id, false);
-        } catch (e) {
-            if (job.abortSim) {
-                console.warn(`[${simLogTag}] stopped by user`);
-                job.status = 'error';
-                job.error = 'user stopped';
-            } else {
-                console.error(`[${simLogTag}] failed:`, e);
-                job.status = 'error';
-                job.error = typeof nvMod?.formatPyodideError === "function"
-                    ? nvMod.formatPyodideError(e)
-                    : (e.message || String(e));
-            }
-        } finally {
-            this._stopSimProgressAnimator(job);
-            this._simPipelineJob = null;
-        }
-        this.updateQueueUI();
     }
 
     /** Update discrete pipeline stage; sim sub-progress uses _ensureSimProgressAnimator. */
@@ -2697,7 +1761,7 @@ _recon.run_sim_recon(
         html += this.queue.map(job => `
             <div class="queue-item status-${job.status}" data-id="${job.id}">
                 <div class="item-main">
-                    <div class="item-title">${this._escapeHtml(formatScanDisplayTitle(`${job.baseName}.nii.gz`, job))}</div>
+                    <div class="item-title">${this._escapeHtml(formatScanDisplayTitle(`${job.baseName}.nii.gz`, job, this.ctx.explorer))}</div>
                     <div class="item-meta"${job.status === 'error' ? ` title="${this._escapeAttr(this._jobErrorTooltip(job))}"` : ''}>${this._escapeHtml(this._jobMetaLine(job))}</div>
                 </div>
                 <div class="item-actions">
@@ -2766,9 +1830,52 @@ _recon.run_sim_recon(
         this._syncMobileScanControls();
     }
 
+    /**
+     * True if a viewer volume or an in-progress download <a> still fetches `url`.
+     * loadUrl tags the volume with sourceUrl, and preview/compare re-fetch from it.
+     */
+    _jobObjectUrlStillHeld(url) {
+        const nvs = [
+            this.ctx.nv?.nv,
+            this.ctx.scanPreview?.nv,
+            this.ctx.scanCompare?.module?.nv,
+        ];
+        for (const nv of nvs) {
+            const vols = nv?.volumes;
+            if (!vols) continue;
+            for (const vol of vols) {
+                if ((vol.sourceUrl || vol.url) === url) return true;
+            }
+        }
+        const links = document.getElementsByTagName('a');
+        for (const a of links) {
+            if (a.href === url) return true;
+        }
+        return false;
+    }
+
+    /** Revoke a createObjectURL result unless a viewer or download link still holds it. */
+    _revokeJobObjectUrl(url) {
+        if (!url || !String(url).startsWith('blob:')) return;
+        if (this._jobObjectUrlStillHeld(url)) return;
+        try {
+            URL.revokeObjectURL(url);
+        } catch (_) { /* already revoked or not a blob URL */ }
+    }
+
+    /** Drop job.niftiUrl / job.seqUrl, revoking any blob that nothing still displays. */
+    _releaseJobObjectUrls(job) {
+        if (!job) return;
+        this._revokeJobObjectUrl(job.niftiUrl);
+        this._revokeJobObjectUrl(job.seqUrl);
+        job.niftiUrl = null;
+        job.seqUrl = null;
+    }
+
     removeJob(jobId) {
         const index = this.queue.findIndex(j => j.id === jobId);
         if (index !== -1) {
+            this._releaseJobObjectUrls(this.queue[index]);
             this.queue.splice(index, 1);
             this.updateQueueUI();
         }
@@ -2779,7 +1886,7 @@ _recon.run_sim_recon(
         if (!job || !job.vfsSeqPath) return;
 
         try {
-            const nvMod = window.nvModule;
+            const nvMod = this.ctx.nv;
             if (!nvMod || !nvMod.pyodide) return;
 
             // Read the file from Pyodide VFS using Python bytes conversion
@@ -2827,8 +1934,8 @@ data
     /** Ctrl+VIEW SCAN: lazy compare pane C only (does not change B selection). */
     async loadJobToCompare(jobId) {
         const job = this.queue.find(j => j.id === jobId);
-        if (job?.status === 'done' && window.scanCompare) {
-            await window.scanCompare.loadFromJob(job);
+        if (job?.status === 'done' && this.ctx.scanCompare) {
+            await this.ctx.scanCompare.loadFromJob(job);
         }
     }
 
@@ -2842,31 +1949,31 @@ data
     /** Volume list / preview overlay title, e.g. `1. gre_seq`. */
     getScanDisplayTitle(vol) {
         if (!vol?.name) return '';
-        return formatScanDisplayTitle(vol.name, this.getJobForVolume(vol));
+        return formatScanDisplayTitle(vol.name, this.getJobForVolume(vol), this.ctx.explorer);
     }
 
     /** Native tooltip: full protocol parameters for a scan volume row. */
     getProtocolTooltipForVolume(vol) {
         const n = parseScanNumberFromVolumeName(vol?.name);
         if (n == null) return null;
-        return window.seqExplorer?.getProtocolTooltipForScanNumber?.(n) ?? null;
+        return this.ctx.explorer?.getProtocolTooltipForScanNumber?.(n) ?? null;
     }
 
     /** Tooltip for scan N via protocol file (used by paper plot and volume list). */
     getProtocolTooltipForScanNumber(scanNumber) {
-        return window.seqExplorer?.getProtocolTooltipForScanNumber?.(scanNumber) ?? null;
+        return this.ctx.explorer?.getProtocolTooltipForScanNumber?.(scanNumber) ?? null;
     }
 
     async loadJob(jobId, syncFov = true) {
         const job = this.queue.find(j => j.id === jobId);
-        if (job && job.status === 'done' && window.nvModule) {
+        if (job && job.status === 'done' && this.ctx.nv) {
             // Planning view only on explicit VIEW SCAN (syncFov=true). Auto-load after SCAN/CROP
             // keeps the current mode (e.g. plot.seq) so the user switches manually.
-            if (syncFov && window.viewManager && window.viewManager.currentMode !== 'planning') {
-                window.viewManager.setMode('planning');
+            if (syncFov && this.ctx.viewManager && this.ctx.viewManager.currentMode !== 'planning') {
+                this.ctx.viewManager.setMode('planning');
             }
 
-            const nvMod = window.nvModule;
+            const nvMod = this.ctx.nv;
             const targetName = job.baseName + ".nii.gz";
             
             // 1. Check if already loaded
@@ -2933,17 +2040,17 @@ data
         }
 
         // 1. Switch mode to sequence
-        if (window.viewManager) {
-            window.viewManager.setMode('sequence');
+        if (this.ctx.viewManager) {
+            this.ctx.viewManager.setMode('sequence');
             
             // 2. Prepare the plot container (borrowed from SequenceExplorer)
-            if (window.seqExplorer) {
-                const explorer = window.seqExplorer;
+            if (this.ctx.explorer) {
+                const explorer = this.ctx.explorer;
                 const plotRoot = explorer.plotTarget || explorer.container;
                 const plotContainer = plotRoot.querySelector('#seq-mpl-actual-target');
 
                 // 3. Run Python to read and plot the specific .seq file (ChartGPU or matplotlib per selector)
-                const py = window.nvModule.pyodide;
+                const py = this.ctx.nv?.pyodide;
                 if (py) {
                     const plotSpeed =
                         plotRoot.querySelector('#seq-plot-speed-selector')?.value ||
@@ -2976,7 +2083,6 @@ data
                                 await explorer.disposeSeqChartGpu();
                                 plotContainer.innerHTML = '';
                                 document.pyodideMplTarget = plotContainer;
-                                window.pyodideMplTarget = plotContainer;
                             }
                             await py.runPythonAsync(`
 import pypulseq as pp
