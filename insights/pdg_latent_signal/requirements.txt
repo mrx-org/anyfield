@@ -1,0 +1,6 @@
+# Install into a separate venv, not the repo's dev env: an installed pypulseq
+# shadows the repo's own pypulseq/ namespace package (see requirements-dev.txt).
+MRzeroCore==1.6.1
+pypulseq==1.5.0.post1
+matplotlib>=3.8
+pillow>=10
