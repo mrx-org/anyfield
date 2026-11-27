@@ -73,6 +73,21 @@ def test_web_routes(http):
     assert http.get("/s/abc").status_code == 200
 
 
+def test_cache_headers(tmp_path):
+    (tmp_path / "assets").mkdir()
+    (tmp_path / "index.html").write_text("<!doctype html>")
+    (tmp_path / "assets" / "index-abc123.js").write_text("x")
+    mcp = build(MemoryStore(), "http://testserver", static_dir=tmp_path)
+    with TestClient(http_app(mcp)) as c:
+        assert c.get("/s/abc").headers["cache-control"] == "no-cache"
+        assert c.get("/").headers["cache-control"] == "no-cache"
+        asset = c.get("/assets/index-abc123.js")
+        assert asset.status_code == 200
+        assert "immutable" in asset.headers["cache-control"]
+        missing = c.get("/assets/old-hash.js")
+        assert missing.status_code == 404 and "cache-control" not in missing.headers
+
+
 def test_authkit_provider_wiring():
     """The real provider: metadata points to AuthKit, the audience is our /mcp."""
     from anyfield.auth import authkit_auth

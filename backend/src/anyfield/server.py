@@ -40,6 +40,10 @@ FOV_VIEWER_APP_URI = "ui://anyfield/fov-viewer.html"
 SESSION_APP_URI = "ui://anyfield/session.html"
 MAX_SESSIONS_PER_USER = 200
 MAX_MATRIX = 1024
+# The page is checked on every load (it names the assets of the current build); the
+# assets have the hash of their content in their name, so they never change.
+PAGE_CACHE = {"Cache-Control": "no-cache"}
+ASSET_CACHE = {"Cache-Control": "public, max-age=31536000, immutable"}
 
 
 def build(
@@ -344,8 +348,8 @@ def build(
             return RedirectResponse(target, status_code=308)
         page = static_dir / "index.html" if static_dir else None
         if page and page.exists():
-            return FileResponse(page)
-        return HTMLResponse("<!doctype html><p>anyfield: frontend not built.</p>")
+            return FileResponse(page, headers=PAGE_CACHE)
+        return HTMLResponse("<!doctype html><p>anyfield: frontend not built.</p>", headers=PAGE_CACHE)
 
     mcp.custom_route("/", methods=["GET"])(index)
     mcp.custom_route("/s/{key}", methods=["GET"])(index)
@@ -377,8 +381,18 @@ def http_app(mcp: FastMCP):
         make_login_on_demand(app, "/mcp")
     static_dir = getattr(mcp, "_anyfield_static_dir", None)
     if static_dir and (static_dir / "assets").exists():
-        app.routes.append(Mount("/assets", StaticFiles(directory=static_dir / "assets")))
+        app.routes.append(Mount("/assets", ImmutableFiles(directory=static_dir / "assets")))
     return app
+
+
+class ImmutableFiles(StaticFiles):
+    """Static files cached for good (the build hashes their names); a missing one is not."""
+
+    async def get_response(self, path: str, scope: Scope) -> Response:
+        response = await super().get_response(path, scope)
+        if response.status_code in (200, 304):
+            response.headers.update(ASSET_CACHE)
+        return response
 
 
 def _v(v: list[float] | None) -> Vec3 | None:
