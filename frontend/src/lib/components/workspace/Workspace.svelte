@@ -152,18 +152,20 @@
 
 <div class="flex h-full min-h-[32rem] flex-col text-sm text-text">
   <div class="flex items-center gap-2 border-b border-border px-2 py-1">
-    <select
-      class="select w-auto text-xs"
-      aria-label="Tool hinzufügen"
-      value=""
-      onchange={(e) => {
-        add(e.currentTarget.value);
-        e.currentTarget.value = "";
-      }}
-    >
-      <option value="" disabled>Tool hinzufügen …</option>
-      {#each addable as [name, t] (name)}<option value={name}>{t.label} ({name})</option>{/each}
-    </select>
+    <!-- One button per tool: adds it as a tab of the active area -->
+    <div class="flex min-w-0 items-center gap-0.5 overflow-x-auto" role="toolbar" aria-label="Tool hinzufügen">
+      {#each addable as [name, t] (name)}
+        <button
+          type="button"
+          class="btn-icon btn-icon-sm hover:preset-tonal shrink-0"
+          aria-label="{t.label} hinzufügen"
+          title="{t.label} hinzufügen ({name})"
+          onclick={() => add(name)}
+        >
+          <t.icon class="size-4" aria-hidden="true" />
+        </button>
+      {/each}
+    </div>
     {#if !isDefault}
       <button
         type="button"
