@@ -34,7 +34,7 @@ class FakeGateway:
                 ]
             }
         if name == "create_upload_url":
-            return {"url": f"{GATEWAY}/upload/tok", "expires_in": 600}
+            return {"url": f"{GATEWAY}/upload/tok/", "expires_in": 600}
         raise AssertionError(name)
 
 
@@ -57,9 +57,9 @@ async def test_file_tools():
         await call(c, "list_user_files", refresh=True)
         assert sum(1 for c in gw.calls if c[0] == "list_files") == lists + 1
 
-        up = await call(c, "create_file_upload_url", file_name="x.zip")
-        assert up == {"url": f"{GATEWAY}/upload/tok", "expires_in": 600}
-        assert gw.calls[-1] == ("create_upload_url", {"file_name": "x.zip"})
+        up = await call(c, "create_file_upload_url", file_name="my x.zip")
+        assert up == {"url": f"{GATEWAY}/upload/tok/my%20x.zip", "expires_in": 600}
+        assert gw.calls[-1] == ("create_upload_url", {})
 
         tools = {t.name: t for t in await c.list_tools()}
         resources = {str(r.uri) for r in await c.list_resources()}

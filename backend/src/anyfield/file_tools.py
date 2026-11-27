@@ -3,7 +3,8 @@
 bytes go straight between the browser and the gateway:
 
 - upload: `create_file_upload_url` hands out the gateway's short-lived upload URL
-  (`create_upload_url`), the browser PUTs the file there and gets its sha256 back;
+  (`create_upload_url`, with the file name appended), the browser PUTs the file
+  there and gets its sha256 back;
 - list: the gateway's `list_files` for the caller;
 - download: `<gateway>/files/<sha256>`, no login needed (the hash is the permission).
 """
@@ -11,6 +12,7 @@ bytes go straight between the browser and the gateway:
 from __future__ import annotations
 
 import time
+from urllib.parse import quote
 from collections.abc import Awaitable, Callable
 from pathlib import Path
 from typing import Annotated, Any, Literal
@@ -101,10 +103,12 @@ class UserFiles:
         return result
 
     async def upload_url(self, file_name: str) -> dict[str, Any]:
-        r = await self._need()("create_upload_url", {"file_name": file_name})
+        # The gateway's URL names no file: the last path segment does
+        r = await self._need()("create_upload_url", {})
         if not isinstance(r, dict) or "url" not in r:
             raise ToolError("The MRX gateway returned no upload URL.")
-        return {"url": r["url"], "expires_in": r.get("expires_in")}
+        url = r["url"].rstrip("/") + "/" + quote(file_name, safe="")
+        return {"url": url, "expires_in": r.get("expires_in")}
 
     def download_url(self, sha256: str) -> str:
         return f"{self.gateway_url}/files/{sha256}"
