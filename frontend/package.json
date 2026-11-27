@@ -35,7 +35,8 @@
     "@modelcontextprotocol/ext-apps": "^2.0.4",
     "@modelcontextprotocol/sdk": "^1.32.2",
     "@niivue/niivue": "^0.69.0",
-    "codemirror": "^6.0.2"
+    "codemirror": "^6.0.2",
+    "dockview": "8.10.0"
   },
   "packageManager": "pnpm@10.28.0"
 }

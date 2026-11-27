@@ -46,3 +46,8 @@ export function sequenceSummary(s: State): string {
   const where = isCasSequence(q) ? `in the CAS, sha256 ${q.sha256}` : `source ${q.source}, ${q.url}`;
   return `Chosen sequence: ${func}${q.name} (${q.type}, ${where}).`;
 }
+
+/** What the workspace hands back to the chat: its state, with the arrangement. */
+export function workspaceSummary(s: State): string {
+  return `Workspace: ${JSON.stringify(s)}`;
+}

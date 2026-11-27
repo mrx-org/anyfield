@@ -14,6 +14,10 @@ export interface Transport {
   setChatContext?(text: string): Promise<void>;
   /** In a chat: open a URL in the browser (the app's iframe may not navigate or download). */
   openLink?(url: string): Promise<void>;
+  /** In a chat: whether the host can show the app fullscreen, and whether it does now. */
+  fullscreen?(): { available: boolean; active: boolean };
+  /** In a chat: ask the host for fullscreen (true) or back inline (false). */
+  setFullscreen?(on: boolean): Promise<void>;
 }
 
 export class ToolCallError extends Error {

@@ -35,6 +35,9 @@ importers:
       codemirror:
         specifier: ^6.0.2
         version: 6.0.2
+      dockview:
+        specifier: 8.10.0
+        version: 8.10.0
     devDependencies:
       '@lucide/svelte':
         specifier: ^1.77.0
@@ -777,6 +780,12 @@ packages:
 
   devalue@5.9.4:
     resolution: {integrity: sha512-sPAT4pztbu6586/hrhOnMKS17IJrvg12mXiSPSS3W5qDeN2RGgvZ0diZCm31dBbnevfVmujNO3IM2wrS4Y2Rhg==}
+
+  dockview-core@8.10.0:
+    resolution: {integrity: sha512-11MpSwPbeCDkdHoq5dwG9cdy9Hr0chQ0idsJlUw5CuN0npOUk1MI0Mlt0dRMYHjgE34lmDUbEtRJGimscnveZA==}
+
+  dockview@8.10.0:
+    resolution: {integrity: sha512-V0uy9ynvIIgLJHqcQ1RXS1NH8CDiYEtg7fT+UT3wD8732b1GDzUdxsKUXFdZEz6H/mE0G+IOKY5JUxgCUjAADQ==}
 
   dunder-proto@1.0.1:
     resolution: {integrity: sha512-KIN/nDJBQRcXw0MLVhZE9iQHmG68qAVIBg9CqmUYjmQIhgij9U5MFvrqkUL5FbtyyzZuOeOt0zdeRe4UY7ct+A==}
@@ -2317,6 +2326,12 @@ snapshots:
   detect-libc@2.1.2: {}
 
   devalue@5.9.4: {}
+
+  dockview-core@8.10.0: {}
+
+  dockview@8.10.0:
+    dependencies:
+      dockview-core: 8.10.0
 
   dunder-proto@1.0.1:
     dependencies:

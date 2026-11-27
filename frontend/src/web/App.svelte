@@ -5,12 +5,9 @@
   import { onMount } from "svelte";
   import { AnyfieldClient } from "../lib/client/anyfield";
   import { LoginRedirect, McpHttpTransport } from "../lib/client/mcp-http";
-  import FovPlanner from "../lib/components/fov/FovPlanner.svelte";
-  import FovViewer from "../lib/components/fov/FovViewer.svelte";
-  import PhantomBrowser from "../lib/components/phantom/PhantomBrowser.svelte";
-  import SequenceBrowser from "../lib/components/sequence/SequenceBrowser.svelte";
   import SessionEditor from "../lib/components/session/SessionEditor.svelte";
   import FileManager from "../lib/components/files/FileManager.svelte";
+  import Workspace from "../lib/components/workspace/Workspace.svelte";
   import { LocalSelection } from "../lib/state/local.svelte";
   import ToolFrame from "../lib/components/ToolFrame.svelte";
   import Toaster from "../lib/components/Toaster.svelte";
@@ -168,23 +165,11 @@
         </Dialog.Positioner>
       </Portal>
     </Dialog>
-    <!-- Independent tools on the same session, side by side -->
-    <main class="flex min-h-0 flex-1 flex-col lg:flex-row">
-      <!-- Left: phantom and sequence browser, one above the other -->
-      <div class="flex shrink-0 flex-col lg:w-80">
-        <section class="max-h-[45vh] min-h-0 p-1 lg:max-h-none lg:flex-1" aria-label="Phantom">
-          <ToolFrame name="phantom_browser" class="h-full"><PhantomBrowser sel={store} /></ToolFrame>
-        </section>
-        <section class="max-h-[45vh] min-h-0 p-1 lg:max-h-none lg:flex-1" aria-label="Sequenz">
-          <ToolFrame name="sequence_browser" class="h-full"><SequenceBrowser sel={store} /></ToolFrame>
-        </section>
-      </div>
-      <section class="min-h-96 flex-1 p-1" aria-label="FOV im Phantom">
-        <ToolFrame name="fov_viewer" class="h-full"><FovViewer sel={store} /></ToolFrame>
-      </section>
-      <section class="shrink-0 p-1 lg:w-80" aria-label="FOV-Planung">
-        <ToolFrame name="fov_planner" class="h-full"><FovPlanner sel={store} /></ToolFrame>
-      </section>
+    <!-- The workspace: the session's tools in panels, arranged as its `layout` says -->
+    <main class="min-h-0 flex-1 p-1">
+      <ToolFrame name="workspace" class="h-full">
+        {#key store}<Workspace sel={store} />{/key}
+      </ToolFrame>
     </main>
   {:else}
     <main class="mx-auto flex w-full max-w-xl flex-col gap-6 p-6">

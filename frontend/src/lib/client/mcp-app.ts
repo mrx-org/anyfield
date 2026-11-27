@@ -21,6 +21,18 @@ export class McpAppTransport implements Transport {
     await this.app.updateModelContext({ content: [{ type: "text", text }] });
   }
 
+  fullscreen(): { available: boolean; active: boolean } {
+    const ctx = this.app.getHostContext();
+    return {
+      available: !!ctx?.availableDisplayModes?.includes("fullscreen"),
+      active: ctx?.displayMode === "fullscreen",
+    };
+  }
+
+  async setFullscreen(on: boolean): Promise<void> {
+    await this.app.requestDisplayMode({ mode: on ? "fullscreen" : "inline" });
+  }
+
   async openLink(url: string): Promise<void> {
     const r = await this.app.openLink({ url });
     if (r.isError) throw new Error("Der Chat hat den Link nicht geöffnet.");

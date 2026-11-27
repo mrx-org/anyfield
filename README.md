@@ -35,6 +35,7 @@ Web-App: `/` (eigene Sessions), `/s/{key}` (eine Session, mit Ansicht des Zustan
 | Dateien | `list_user_files`, `create_file_upload_url`, `open_file_upload`, `open_file_list`, `open_file_manager` |
 | FOV-Planer | `set_fov`, `move_fov`, `rotate_fov`, `open_fov_planner`, `open_fov_viewer` |
 | Phantom (BIfTI) | `list_phantom_collections`, `list_phantoms`, `list_phantom_tissues`, `select_phantom`, `set_phantom_property`, `get_phantom_maps`, `open_phantom_browser`, `open_phantom_preview` |
+| Workspace | `open_workspace` (Anordnung im Zustandsfeld `layout`, geändert mit `patch_state`) |
 | Sequenz | `list_sequence_sources`, `list_sequences`, `select_sequence`, `open_sequence_browser` (Quellen vorerst Platzhalter, siehe unten) |
 
 Der Session-Zustand ist ein kleines JSON nur mit der Auswahl, keine Daten:
@@ -46,7 +47,8 @@ Der Session-Zustand ist ein kleines JSON nur mit der Auswahl, keine Daten:
   "view": { "property": "T1" },
   "fov": { "center_mm": [0, 0, 10], "rotation_deg": [0, 0, 20], "size_mm": [220, 220, 60] },
   "matrix": [128, 128, 1],
-  "sequence": { "source": "anyseq", "type": "py", "url": "https://…/gre_seq.py", "name": "gre_seq.py", "func": "seq_gre" }
+  "sequence": { "source": "anyseq", "type": "py", "url": "https://…/gre_seq.py", "name": "gre_seq.py", "func": "seq_gre" },
+  "layout": null
 }
 ```
 
@@ -71,8 +73,7 @@ Fenster ein (auch Rechtsklick ziehen im Bild); ein neues Volumen beginnt beim We
 arbeitet es auf der Session; ohne wählt der Nutzer lokal, jede Änderung geht als
 Kontext an das Modell (`updateModelContext`), „In den Chat“ schickt die Auswahl als
 Nachricht. `select_phantom` geht auch ohne Session (prüft nur die Wahl). Die Website
-zeigt unter `/s/{key}` links Phantom- und Sequenz-Browser untereinander, daneben visuellen
-FOV-Planer und FOV-Planer.
+zeigt unter `/s/{key}` den Workspace der Session (siehe unten).
 
 Der Phantom-Browser hat zwei Reiter: **Katalog** (bifti-Registry) und **CAS**, die
 Dateiliste (`file_list`, siehe Datei-Tools) fest im Modus BIfTI, ohne Download; ein Klick
@@ -98,6 +99,31 @@ die Quellen aus v3, je mit einer Dummy-Datei `backend_not_ready_dummy` (URL unte
 `.invalid`). Funktionen einer CAS-Datei (`.py`, `.ipynb`) und die Vorschau (Dauer,
 Parameter) kommen ebenfalls mit dem Gateway. Eine `url` sollte dann auf einen Commit zeigen,
 nicht auf einen Branch, damit dieselbe Wahl denselben Code meint.
+
+Der **Workspace** (`workspace`, `open_workspace`) zeigt mehrere Tools in Panels
+([dockview](https://dockview.dev)): als Reiter gestapelt, nebeneinander oder
+untereinander. Der Nutzer zieht Reiter und Trennlinien, schließt Panels und fügt Tools
+hinzu; die Anordnung steht im Zustand unter `layout` (`null`: die Standard-Anordnung,
+Phantom- und Sequenz-Browser links, visueller FOV-Planer, FOV-Planer). Die KI setzt sie
+mit `patch_state`, etwa um ein Ergebnis mit passenden Tools zu zeigen:
+
+```json
+"layout": { "root": { "split": "row", "sizes": [0.3, 0.7], "children": [
+  { "tabs": [{ "id": "p1", "tool": "phantom_browser" }, { "id": "p2", "tool": "file_list", "options": { "mode": "sequence" } }], "active": 1 },
+  { "split": "column", "children": [{ "tabs": [{ "id": "p3", "tool": "fov_viewer" }] }, { "tabs": [{ "id": "p4", "tool": "fov_planner" }] }] }
+] } }
+```
+
+Ein Knoten ist ein Split (`split`: `row` nebeneinander, `column` untereinander;
+`children`; `sizes` als Anteile) oder ein Stapel mit Reitern (`tabs`, `active`). Ein Panel
+ist ein Tool (Name ohne `open_`) mit den Optionen seines `open_*`-Tools; alle Panels
+hängen an derselben Auswahl. Der Server prüft Tools und Optionen, vergibt fehlende `id`s,
+normiert `sizes` und fasst einen Split in einem Split derselben Richtung zusammen
+(`layout.py`). `{"root": null}` ist ein leerer Workspace. Die Seite schickt das Layout,
+wenn das Ziehen fertig ist; ein anderswo geändertes Layout baut die Panels neu auf. Schmal
+(Handy) zeigt der Workspace die Panels als Reiter, ohne das Layout zu ändern. Im Chat
+bietet er Vollbild an, wo der Host es kann. Die Workspace-App enthält alle Tools und ist
+die größte App (etwa 1,2 MB gzip); die einzelnen Apps importieren nur ihr Tool.
 
 Tools lassen sich verschachteln: Der Phantom-Browser enthält die Phantom-Vorschau
 (`open_phantom_preview`) zum Aufklappen. Zugeklappt (Standard, pro Gerät) wird sie nicht
@@ -186,6 +212,7 @@ backend/   Python (uv), FastMCP, Modal
   src/anyfield/phantom_tools.py  Phantom-Tool
   src/anyfield/sequences.py  Sequenz-Quellen (Platzhalter, bis das Gateway sie listet)
   src/anyfield/seq_tools.py  Sequenz-Tool
+  src/anyfield/layout.py     Workspace-Layout: Prüfung und Normierung
   src/anyfield/file_tools.py     Datei-Tools (Upload, Liste, Download über das Gateway)
   src/anyfield/modal_app.py  Deployment
 frontend/  Svelte 5, TypeScript, Vite, NiiVue, Skeleton (UI), Lucide (Icons)
@@ -196,6 +223,8 @@ frontend/  Svelte 5, TypeScript, Vite, NiiVue, Skeleton (UI), Lucide (Icons)
   src/lib/components/session/  Session-Editor (JSON)
   src/lib/components/files/    Datei-Upload, Dateiliste, Dateimanager
   src/lib/components/sequence/ Sequenz-Browser
+  src/lib/components/workspace/ Workspace (dockview), Verzeichnis der Tools in src/lib/tools.ts,
+                             Layout ↔ dockview in src/lib/layout.ts
   src/web/                   Web-App
   src/mcp-app/               MCP Apps: je ein Einstieg <name>.ts, gemeinsame Hülle McpApp.svelte;
                              gebaut aus der Vorlage mcp-app.html zu dist/<name>-app.html

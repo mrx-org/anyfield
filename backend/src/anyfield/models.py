@@ -86,6 +86,45 @@ class CasSequence(BaseModel):
 Sequence = SourceSequence | CasSequence
 
 
+class Panel(BaseModel):
+    """A tab of the workspace: one tool (its name without `open_`) with its display options."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    id: str | None = Field(default=None, description="Unique short id; given by the server if left out")
+    tool: str = Field(description="e.g. 'phantom_browser', 'fov_viewer', 'file_list'")
+    options: dict[str, Any] = Field(
+        default_factory=dict, description="Its options, e.g. {'mode': 'sequence'}"
+    )
+
+
+class Stack(BaseModel):
+    """An area of the workspace with tabs (one tab: just the tool)."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    tabs: list[Panel] = Field(min_length=1)
+    active: int = Field(default=0, description="Index of the tab in front")
+
+
+class Split(BaseModel):
+    """Areas side by side (`row`) or one above the other (`column`)."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    split: Literal["row", "column"]
+    children: list[Split | Stack] = Field(min_length=2)
+    sizes: list[float] | None = Field(default=None, description="Fraction per child (sum 1); default: equal")
+
+
+class Layout(BaseModel):
+    """The workspace: a tree of splits and stacks of tabs (`root: null`: empty)."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    root: Split | Stack | None = None
+
+
 class View(BaseModel):
     """How the viewers show the phantom (each viewer picks its plane itself)."""
 
@@ -112,6 +151,9 @@ class State(BaseModel):
     matrix: Int3 = Field(default=(128, 128, 1), description="Resolution (x, y, z) of the planned scan")
     sequence: Sequence | None = Field(
         default=None, description="Chosen sequence (select_sequence); null: none yet"
+    )
+    layout: Layout | None = Field(
+        default=None, description="Tools in the workspace and their arrangement; null: the default"
     )
 
     @field_validator("tissues")

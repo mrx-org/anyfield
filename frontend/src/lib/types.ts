@@ -75,6 +75,33 @@ export interface UserFile {
   url: string;
 }
 
+/** A tab of the workspace: one tool (its name without `open_`) with its display options. */
+export interface Panel {
+  id: string;
+  tool: string;
+  options?: Record<string, unknown>;
+}
+
+/** An area of the workspace with tabs; `active`: index of the tab in front. */
+export interface Stack {
+  tabs: Panel[];
+  active?: number;
+}
+
+/** Areas side by side (row) or one above the other (column); sizes are fractions. */
+export interface Split {
+  split: "row" | "column";
+  children: LayoutNode[];
+  sizes?: number[];
+}
+
+export type LayoutNode = Split | Stack;
+
+/** The workspace (state field `layout`); `root` null or missing: empty. */
+export interface Layout {
+  root?: LayoutNode | null;
+}
+
 /** Plane of a viewer: transversal, coronal, sagittal or a 3D rendering. Per viewer, not in the state. */
 export type Plane = "tra" | "cor" | "sag" | "3d";
 
@@ -94,6 +121,8 @@ export interface State {
   matrix: Vec3;
   /** Chosen sequence; null or missing: none yet. */
   sequence?: SequenceChoice | null;
+  /** Tools of the workspace and their arrangement; null or missing: the default. */
+  layout?: Layout | null;
 }
 
 /** JSON Merge Patch (RFC 7386) of a State: objects merge, null removes, the rest replaces. */
@@ -114,6 +143,8 @@ export type StatePatch = {
     name?: string;
     func?: string | null;
   } | null;
+  /** Merge patch: `layoutPatch` nulls the fields of the other kind of root node. */
+  layout?: { root?: Record<string, unknown> | null } | null;
 };
 
 export interface Session {

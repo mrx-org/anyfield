@@ -26,11 +26,12 @@ from starlette.types import ASGIApp, Receive, Scope, Send
 
 from . import file_tools, phantom_tools, seq_tools
 from . import fov as fov_ops
+from . import layout as layout_ops
 from .args import ExpectedRev, OptionalSessionKey, SessionKey, Vec3Arg
 from .auth import AuthProvider, make_login_on_demand, require_user
 from .file_tools import UserFiles
 from .gateway import GATEWAY_URL, GatewayClient
-from .models import PhantomChoice, Session, State, Vec3, merge_patch, new_key
+from .models import Layout, PhantomChoice, Session, State, Vec3, merge_patch, new_key
 from .phantoms import PROPERTY_KEYS, Catalog, PhantomMaps
 from .sequences import SequenceCatalog
 from .store import SessionStore
@@ -38,6 +39,20 @@ from .store import SessionStore
 FOV_APP_URI = "ui://anyfield/fov-planner.html"
 FOV_VIEWER_APP_URI = "ui://anyfield/fov-viewer.html"
 SESSION_APP_URI = "ui://anyfield/session.html"
+WORKSPACE_APP_URI = "ui://anyfield/workspace.html"
+WORKSPACE_DESCRIPTION = (
+    "Show anyfield's workspace: several tools in panels (tabs, side by side or one above "
+    "the other) that the user arranges, adds and closes; e.g. to present a result with the "
+    "viewer and the planner side by side. The arrangement is the state field `layout` (null: "
+    'the default one): {"root": node}, a node is a split {"split": "row"|"column", '
+    '"children": [nodes], "sizes": [fractions]} or a stack of tabs {"tabs": [{"id"?, "tool", '
+    '"options"?}], "active": index}. Tools: '
+    + ", ".join(layout_ops.TOOLS)
+    + ' (their open_* tool without `open_`; options as there, e.g. file_list {"mode": '
+    '"sequence"}). Panel ids are given by the server if left out. With a session set it with '
+    'patch_state {"layout": ...}; without one the arrangement the user ends up with comes back '
+    "to the chat. In clients without MCP Apps this returns the state."
+)
 MAX_SESSIONS_PER_USER = 200
 MAX_MATRIX = 1024
 # The page is checked on every load (it names the assets of the current build); the
@@ -121,6 +136,11 @@ def build(
         if new.view.property not in PROPERTY_KEYS:
             raise ToolError(f"Unknown property {new.view.property!r}. Known: {', '.join(PROPERTY_KEYS)}")
         await seq_tools.check(sequences, old, new)
+        if new.layout is not None and new.layout != old.layout:
+            try:
+                new = new.model_copy(update={"layout": layout_ops.normalize(new.layout)})
+            except layout_ops.LayoutError as e:
+                raise ToolError(str(e)) from e
         return new.model_copy(update={"fov": fov})
 
     async def change(
@@ -232,6 +252,39 @@ def build(
         return await opened(session_key)
 
     app_html(mcp, SESSION_APP_URI, "Session", "session-app.html", base_url, static_dir)
+
+    # --- Workspace: several tools in panels ---------------------------------
+
+    @mcp.tool(
+        app=AppConfig(resource_uri=WORKSPACE_APP_URI),
+        annotations={"readOnlyHint": True},
+        description=WORKSPACE_DESCRIPTION,
+    )
+    async def open_workspace(
+        session_key: OptionalSessionKey = None,
+        layout: Annotated[
+            dict[str, Any] | None,
+            Field(
+                description="Without a session: the layout to start with (as the state field "
+                "`layout`). With a session leave it out: the session's layout is shown, change it "
+                "with patch_state"
+            ),
+        ] = None,
+    ) -> dict[str, Any]:
+        # Description: WORKSPACE_DESCRIPTION (it names the tools)
+        if session_key is not None:
+            if layout is not None:
+                raise ToolError("With a session the workspace shows its layout: set it with patch_state.")
+            return await opened(session_key)
+        state = State()
+        if layout is not None:
+            try:
+                state.layout = layout_ops.normalize(Layout.model_validate(layout))
+            except (layout_ops.LayoutError, ValidationError) as e:
+                raise ToolError(str(e)) from e
+        return {"key": None, "state": state.model_dump()}
+
+    app_html(mcp, WORKSPACE_APP_URI, "Workspace", "workspace-app.html", base_url, static_dir)
 
     # --- FOV planner ---------------------------------------------------------
 
