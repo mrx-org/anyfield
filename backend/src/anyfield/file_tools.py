@@ -26,11 +26,12 @@ from .args import OptionalSessionKey
 from .auth import current_user
 
 Call = Callable[[str, dict[str, Any]], Awaitable[Any]]
-FileMode = Literal["all", "bifti"]
+FileMode = Literal["all", "bifti", "sequence"]
 ModeArg = Annotated[
     FileMode | None,
     Field(
-        description="'all' files or only 'bifti' phantoms (.zip; whether one really is a phantom shows when its maps load)"
+        description="'all' files, only 'bifti' phantoms (.zip; whether one really is a phantom shows "
+        "when its maps load) or only 'sequence' files (.seq, .py, .ipynb)"
     ),
 ]
 
@@ -49,6 +50,17 @@ MAX_CACHED = 1000
 def is_bifti(f: dict[str, Any]) -> bool:
     """A bifti phantom as far as a listing can tell: a .zip (as `CasFiles`)."""
     return str(f.get("name", "")).lower().endswith(".zip") or "zip" in str(f.get("type") or "")
+
+
+SEQUENCE_EXTENSIONS = (".seq", ".py", ".ipynb")
+
+
+def is_sequence(f: dict[str, Any]) -> bool:
+    """A sequence file as far as its name tells: .seq, .py or .ipynb."""
+    return str(f.get("name", "")).lower().endswith(SEQUENCE_EXTENSIONS)
+
+
+FILTERS = {"bifti": is_bifti, "sequence": is_sequence}
 
 
 class UserFiles:
@@ -70,10 +82,11 @@ class UserFiles:
 
     async def list(self, refresh: bool = False, mode: FileMode = "all") -> list[dict[str, Any]]:
         """`{sha256, name, type, size, uploaded_at, url}` per file, newest first;
-        `mode` 'bifti': only the bifti phantoms. From the cache unless `refresh` or
-        older than `LIST_TTL`."""
+        `mode` 'bifti': only the bifti phantoms, 'sequence': only sequence files. From
+        the cache unless `refresh` or older than `LIST_TTL`."""
         listed = await self._all(refresh)
-        return [f for f in listed if is_bifti(f)] if mode == "bifti" else listed
+        keep = FILTERS.get(mode)
+        return [f for f in listed if keep(f)] if keep else listed
 
     async def _all(self, refresh: bool) -> list[dict[str, Any]]:
         who, now = self._who(), time.monotonic()
@@ -136,7 +149,8 @@ def register(
         `uploaded_at` and `url` to download it. The gateway removes a file a day
         after its last use. The list may be a few minutes old; `refresh` for the
         current one (e.g. right after an upload). `mode='bifti'` for the phantoms
-        (pass one to select_phantom as `sha256`)."""
+        (pass one to select_phantom as `sha256`), `mode='sequence'` for sequence files
+        (select_sequence `sha256`)."""
         return await files.list(refresh, mode or "all")
 
     @mcp.tool
@@ -161,8 +175,8 @@ def register(
         mode: Annotated[
             FileMode | None,
             Field(
-                description="Fix what the list shows: 'all' files or only 'bifti' phantoms (the type "
-                "column is left out). Omit to let the user switch."
+                description="Fix what the list shows: 'all' files, only 'bifti' phantoms (the type "
+                "column is left out) or only 'sequence' files. Omit to let the user switch."
             ),
         ] = None,
         download: Annotated[bool, Field(description="Show the download buttons")] = True,
@@ -170,7 +184,8 @@ def register(
         """Show the user's files as a sortable, searchable table (name, type, size,
         uploaded) with download buttons. Clicking a name: without a session it sends
         `"name": <sha256>` to the chat; with a session it depends on the mode - in
-        'bifti' mode it makes the file the session's phantom, in 'all' mode nothing.
+        'bifti' mode it makes the file the session's phantom, in 'sequence' mode its
+        sequence, in 'all' mode nothing.
         E.g. mode='bifti' to let the user pick one of their phantoms. Returns the files
         (and with a session the session) too."""
         listed = await files.list(mode=mode or "all")

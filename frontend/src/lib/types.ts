@@ -23,6 +23,47 @@ export interface CasPhantom {
 
 export type PhantomChoice = CatalogPhantom | CasPhantom;
 
+/** Kind of a sequence file: Pulseq .seq, Python file, notebook or Python package module. */
+export type SeqType = "seq" | "py" | "ipynb" | "module";
+
+/** A sequence of a sequence source: a file and, unless it is a .seq, the function in it. */
+export interface SourceSequence {
+  source: string;
+  type: SeqType;
+  /** Where the file lives: its URL, for a module its dotted path. */
+  url: string;
+  name: string;
+  func?: string | null;
+}
+
+/** A sequence file in the gateway's CAS. The hash is the permission. */
+export interface CasSequence {
+  sha256: string;
+  type: SeqType;
+  name: string;
+  func?: string | null;
+}
+
+export type SequenceChoice = SourceSequence | CasSequence;
+
+/** A sequence source (`list_sequence_sources`): a folder, a single file or a Python package. */
+export interface SequenceSource {
+  source: string;
+  type: "folder" | "file" | "module";
+  /** URL or module path. */
+  origin: string;
+  description?: string;
+}
+
+/** A file of a sequence source (`list_sequences`) with its sequence functions. */
+export interface SequenceFile {
+  name: string;
+  type: SeqType;
+  url: string;
+  /** None for a .seq file (it is a sequence itself). */
+  functions: string[];
+}
+
 /** A file of the user in the gateway's storage (`list_user_files`). */
 export interface UserFile {
   sha256: string;
@@ -51,6 +92,8 @@ export interface State {
   fov: Fov;
   /** Resolution (x, y, z) of the planned scan. */
   matrix: Vec3;
+  /** Chosen sequence; null or missing: none yet. */
+  sequence?: SequenceChoice | null;
 }
 
 /** JSON Merge Patch (RFC 7386) of a State: objects merge, null removes, the rest replaces. */
@@ -62,6 +105,15 @@ export type StatePatch = {
   view?: Partial<View>;
   fov?: Partial<Fov>;
   matrix?: Vec3;
+  /** Merge patch: give `null` for the fields of the other kind of sequence. */
+  sequence?: {
+    source?: string | null;
+    url?: string | null;
+    sha256?: string | null;
+    type?: SeqType;
+    name?: string;
+    func?: string | null;
+  } | null;
 };
 
 export interface Session {

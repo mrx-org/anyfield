@@ -9,7 +9,7 @@ from __future__ import annotations
 
 import secrets
 import time
-from typing import Any
+from typing import Any, Literal
 
 from pydantic import BaseModel, ConfigDict, Field, field_validator
 
@@ -55,6 +55,36 @@ class CasPhantom(BaseModel):
 
 Phantom = PhantomChoice | CasPhantom
 
+SeqType = Literal["seq", "py", "ipynb", "module"]
+
+
+class SourceSequence(BaseModel):
+    """A sequence of a sequence source (list_sequence_sources): a file and, unless it
+    is a .seq file, the sequence function in it."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    source: str = Field(description="Name of the sequence source, e.g. 'anyseq'")
+    type: SeqType = Field(description="Kind of file: seq, py, ipynb, or module (a Python package)")
+    url: str = Field(description="Where the file lives: its URL, for a module its dotted path")
+    name: str = Field(description="File name, e.g. 'gre_seq.py'")
+    func: str | None = Field(default=None, description="Sequence function in the file; none for .seq")
+
+
+class CasSequence(BaseModel):
+    """A sequence file in the gateway's CAS (.seq, .py or .ipynb, e.g. an upload).
+    The hash is the permission, as for a CAS phantom."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    sha256: str = Field(pattern=r"^[0-9a-f]{64}$", description="Hash of the file in the CAS")
+    type: SeqType = Field(description="Kind of file: seq, py or ipynb")
+    name: str = Field(description="File name, for display only")
+    func: str | None = Field(default=None, description="Sequence function in the file; none for .seq")
+
+
+Sequence = SourceSequence | CasSequence
+
 
 class View(BaseModel):
     """How the viewers show the phantom (each viewer picks its plane itself)."""
@@ -80,6 +110,9 @@ class State(BaseModel):
     view: View = Field(default_factory=View)
     fov: Fov = Field(default_factory=Fov)
     matrix: Int3 = Field(default=(128, 128, 1), description="Resolution (x, y, z) of the planned scan")
+    sequence: Sequence | None = Field(
+        default=None, description="Chosen sequence (select_sequence); null: none yet"
+    )
 
     @field_validator("tissues")
     @classmethod

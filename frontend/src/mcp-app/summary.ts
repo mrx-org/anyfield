@@ -1,4 +1,5 @@
 import { isCas } from "../lib/phantom";
+import { isCasSequence } from "../lib/sequence";
 import type { PhantomChoice, State, Vec3 } from "../lib/types";
 
 const v = (x: Vec3) => `(${x.map((n) => Math.round(n * 10) / 10).join(", ")})`;
@@ -35,4 +36,13 @@ export function fovSummary(s: State): string {
 /** What the session editor hands back to the chat (only without a session). */
 export function stateSummary(s: State): string {
   return `Edited state: ${JSON.stringify(s)}`;
+}
+
+/** What the sequence browser hands back to the chat. */
+export function sequenceSummary(s: State): string {
+  const q = s.sequence;
+  if (!q) return "No sequence chosen.";
+  const func = q.func ? `function ${q.func} in ` : "";
+  const where = isCasSequence(q) ? `in the CAS, sha256 ${q.sha256}` : `source ${q.source}, ${q.url}`;
+  return `Chosen sequence: ${func}${q.name} (${q.type}, ${where}).`;
 }

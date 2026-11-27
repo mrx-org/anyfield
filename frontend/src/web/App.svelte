@@ -8,6 +8,7 @@
   import FovPlanner from "../lib/components/fov/FovPlanner.svelte";
   import FovViewer from "../lib/components/fov/FovViewer.svelte";
   import PhantomBrowser from "../lib/components/phantom/PhantomBrowser.svelte";
+  import SequenceBrowser from "../lib/components/sequence/SequenceBrowser.svelte";
   import SessionEditor from "../lib/components/session/SessionEditor.svelte";
   import FileManager from "../lib/components/files/FileManager.svelte";
   import { LocalSelection } from "../lib/state/local.svelte";
@@ -169,9 +170,15 @@
     </Dialog>
     <!-- Independent tools on the same session, side by side -->
     <main class="flex min-h-0 flex-1 flex-col lg:flex-row">
-      <section class="max-h-[45vh] shrink-0 p-1 lg:max-h-none lg:w-80" aria-label="Phantom">
-        <ToolFrame name="phantom_browser" class="h-full"><PhantomBrowser sel={store} /></ToolFrame>
-      </section>
+      <!-- Left: phantom and sequence browser, one above the other -->
+      <div class="flex shrink-0 flex-col lg:w-80">
+        <section class="max-h-[45vh] min-h-0 p-1 lg:max-h-none lg:flex-1" aria-label="Phantom">
+          <ToolFrame name="phantom_browser" class="h-full"><PhantomBrowser sel={store} /></ToolFrame>
+        </section>
+        <section class="max-h-[45vh] min-h-0 p-1 lg:max-h-none lg:flex-1" aria-label="Sequenz">
+          <ToolFrame name="sequence_browser" class="h-full"><SequenceBrowser sel={store} /></ToolFrame>
+        </section>
+      </div>
       <section class="min-h-96 flex-1 p-1" aria-label="FOV im Phantom">
         <ToolFrame name="fov_viewer" class="h-full"><FovViewer sel={store} /></ToolFrame>
       </section>

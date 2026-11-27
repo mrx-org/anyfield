@@ -35,6 +35,7 @@ Web-App: `/` (eigene Sessions), `/s/{key}` (eine Session, mit Ansicht des Zustan
 | Dateien | `list_user_files`, `create_file_upload_url`, `open_file_upload`, `open_file_list`, `open_file_manager` |
 | FOV-Planer | `set_fov`, `move_fov`, `rotate_fov`, `open_fov_planner`, `open_fov_viewer` |
 | Phantom (BIfTI) | `list_phantom_collections`, `list_phantoms`, `list_phantom_tissues`, `select_phantom`, `set_phantom_property`, `get_phantom_maps`, `open_phantom_browser`, `open_phantom_preview` |
+| Sequenz | `list_sequence_sources`, `list_sequences`, `select_sequence`, `open_sequence_browser` (Quellen vorerst Platzhalter, siehe unten) |
 
 Der Session-Zustand ist ein kleines JSON nur mit der Auswahl, keine Daten:
 
@@ -44,7 +45,8 @@ Der Session-Zustand ist ein kleines JSON nur mit der Auswahl, keine Daten:
   "tissues": ["GM", "WM"],
   "view": { "property": "T1" },
   "fov": { "center_mm": [0, 0, 10], "rotation_deg": [0, 0, 20], "size_mm": [220, 220, 60] },
-  "matrix": [128, 128, 1]
+  "matrix": [128, 128, 1],
+  "sequence": { "source": "anyseq", "type": "py", "url": "https://…/gre_seq.py", "name": "gre_seq.py", "func": "seq_gre" }
 }
 ```
 
@@ -69,7 +71,8 @@ Fenster ein (auch Rechtsklick ziehen im Bild); ein neues Volumen beginnt beim We
 arbeitet es auf der Session; ohne wählt der Nutzer lokal, jede Änderung geht als
 Kontext an das Modell (`updateModelContext`), „In den Chat“ schickt die Auswahl als
 Nachricht. `select_phantom` geht auch ohne Session (prüft nur die Wahl). Die Website
-zeigt unter `/s/{key}` Phantom-Browser, visuellen FOV-Planer und FOV-Planer nebeneinander.
+zeigt unter `/s/{key}` links Phantom- und Sequenz-Browser untereinander, daneben visuellen
+FOV-Planer und FOV-Planer.
 
 Der Phantom-Browser hat zwei Reiter: **Katalog** (bifti-Registry) und **CAS**, die
 Dateiliste (`file_list`, siehe Datei-Tools) fest im Modus BIfTI, ohne Download; ein Klick
@@ -77,6 +80,24 @@ wählt das Phantom. Ein geteiltes CAS-Phantom, das nicht in den eigenen Dateien 
 steht dort nicht (MRX-90). Die KI findet BIfTIs mit `list_user_files(mode="bifti")`. Ob ein Zip ein
 Phantom ist, zeigt sich erst beim Laden der Karten. Wer was listen darf (z. B. kein
 `list_files` für `visitor`), regelt das Gateway.
+
+`sequence` ist die gewählte Sequenz, `null` für keine: entweder aus einer **Quelle**
+`{source, type, url, name, func}` (`type` `py`, `ipynb`, `seq` oder `module`; `url` sagt, wo
+die Datei liegt, bei einem Modul der Python-Pfad; `func` die Sequenzfunktion darin, bei
+`.seq` keine) oder eine Datei im CAS `{sha256, type, name, func}`. Gewählt wird sie im
+**Sequenz-Browser** (`sequence_browser`, `open_sequence_browser`) oder mit
+`select_sequence`. Er hat einen Reiter je Quelle (Dateien und ihre Funktionen als Baum,
+mit Suche, schmal horizontal scrollbar) und einen Reiter **CAS** (Dateiliste im Modus
+`sequence`: `.seq`, `.py`, `.ipynb`). Oben lässt sich die Vorschau aufklappen.
+
+Die Quellen (wie `sources.toml` in v3: GitHub-Ordner, einzelne Dateien, Python-Pakete) und
+ihre Sequenzen aufzulisten heißt Repositories holen, Python parsen und Pakete importieren:
+das wird ein Tool des Gateways, wie der BIfTI-Katalog. Bis es das gibt, liefert
+`backend/src/anyfield/sequences.py` Platzhalter in der Form, die das Gateway liefern soll:
+die Quellen aus v3, je mit einer Dummy-Datei `backend_not_ready_dummy` (URL unter
+`.invalid`). Funktionen einer CAS-Datei (`.py`, `.ipynb`) und die Vorschau (Dauer,
+Parameter) kommen ebenfalls mit dem Gateway. Eine `url` sollte dann auf einen Commit zeigen,
+nicht auf einen Branch, damit dieselbe Wahl denselben Code meint.
 
 Tools lassen sich verschachteln: Der Phantom-Browser enthält die Phantom-Vorschau
 (`open_phantom_preview`) zum Aufklappen. Zugeklappt (Standard, pro Gerät) wird sie nicht
@@ -139,12 +160,13 @@ anyfield hält keine Dateien, die Bytes gehen direkt zwischen Browser und Gatewa
   Spalte sortierbar, mit Suche, schmal horizontal scrollbar. Erste Spalte lädt herunter
   (`<gateway>/files/<hash>`, ohne Login: der Hash ist die Berechtigung; im Chat über
   `openLink`, das iframe darf nicht selbst herunterladen). Ein Dropdown neben der Suche
-  zeigt alle Dateien oder nur BIfTIs (`.zip`). Optionen des Tools: `mode` (`all` oder
-  `bifti`) legt das Dropdown fest und graut es aus, bei `bifti` ohne Spalte „Typ“;
+  zeigt alle Dateien, nur BIfTIs (`.zip`) oder nur Sequenzdateien (`.seq`, `.py`,
+  `.ipynb`). Optionen des Tools: `mode` (`all`, `bifti` oder `sequence`) legt das
+  Dropdown fest und graut es aus, bei `bifti` ohne Spalte „Typ“;
   `download=false` blendet die Downloads aus. Ein Klick auf den Namen schickt
   `"name": <hash>` in den Chat (auf der Website kopiert er, mit Benachrichtigung unten
-  rechts); nur mit Session im Modus `bifti` wird die Datei stattdessen Phantom der Session
-  (Knopf gefüllt). Weitere Modi (z. B. Sequenzen) setzen später ihr Feld. Das Gateway löscht eine Datei einen Tag
+  rechts); nur mit Session im Modus `bifti` wird die Datei stattdessen Phantom der Session,
+  im Modus `sequence` ihre Sequenz (Knopf gefüllt). Das Gateway löscht eine Datei einen Tag
   nach ihrer letzten Nutzung.
 - `file_manager` (`open_file_manager`): beides untereinander; ein Upload lädt die Liste
   neu. Auf der Website hinter „Dateien“ in der Kopfzeile.
@@ -162,6 +184,8 @@ backend/   Python (uv), FastMCP, Modal
   src/anyfield/migrations.py Migrationen gespeicherter Sessions (Schema-Versionen)
   src/anyfield/phantoms.py   Katalog und Karten vom Gateway, FOV → Scan-Raster
   src/anyfield/phantom_tools.py  Phantom-Tool
+  src/anyfield/sequences.py  Sequenz-Quellen (Platzhalter, bis das Gateway sie listet)
+  src/anyfield/seq_tools.py  Sequenz-Tool
   src/anyfield/file_tools.py     Datei-Tools (Upload, Liste, Download über das Gateway)
   src/anyfield/modal_app.py  Deployment
 frontend/  Svelte 5, TypeScript, Vite, NiiVue, Skeleton (UI), Lucide (Icons)
@@ -171,6 +195,7 @@ frontend/  Svelte 5, TypeScript, Vite, NiiVue, Skeleton (UI), Lucide (Icons)
   src/lib/components/phantom/  Phantom-Browser, Phantom-Vorschau, Viewer-Baustein PhantomViewer
   src/lib/components/session/  Session-Editor (JSON)
   src/lib/components/files/    Datei-Upload, Dateiliste, Dateimanager
+  src/lib/components/sequence/ Sequenz-Browser
   src/web/                   Web-App
   src/mcp-app/               MCP Apps: je ein Einstieg <name>.ts, gemeinsame Hülle McpApp.svelte;
                              gebaut aus der Vorlage mcp-app.html zu dist/<name>-app.html

@@ -1,6 +1,6 @@
 import { phantomArgs, phantomKey } from "../phantom";
 import type { FileMode } from "../files";
-import type { FovChange, PhantomChoice, PhantomCollection, PhantomMaps, PhantomTree, ScanGrid, Session, SessionSummary, StatePatch, UserFile, Vec3 } from "../types";
+import type { FovChange, PhantomChoice, PhantomCollection, PhantomMaps, PhantomTree, ScanGrid, SequenceFile, SequenceSource, Session, SessionSummary, StatePatch, UserFile, Vec3 } from "../types";
 import type { Transport } from "./transport";
 
 export type SessionPoll = Session | { rev: number; unchanged: true };
@@ -66,7 +66,10 @@ export class AnyfieldClient {
   listPhantomCollections = () => this.call<PhantomCollection[]>("list_phantom_collections");
   listPhantoms = (collection: string, path?: string[]) =>
     this.call<PhantomTree>("list_phantoms", { collection, ...(path ? { path } : {}) });
-  /** The caller's bifti .zip files in the gateway's CAS. */
+
+  // Sequences (sources: placeholders until the gateway lists them)
+  listSequenceSources = () => this.call<SequenceSource[]>("list_sequence_sources");
+  listSequences = (source: string) => this.call<SequenceFile[]>("list_sequences", { source });
 
   /** The tissue names of a phantom (null: the default), cached per phantom. */
   listTissues(phantom: PhantomChoice | null): Promise<string[]> {

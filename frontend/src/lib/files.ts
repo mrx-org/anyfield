@@ -46,9 +46,11 @@ export function filterFiles(files: UserFile[], query: string): UserFile[] {
   return q ? files.filter((f) => f.name.toLowerCase().includes(q) || (f.type ?? "").toLowerCase().includes(q)) : files;
 }
 
-/** What the list shows: all files, or only the bifti phantoms (the server filters). */
-export type FileMode = "all" | "bifti";
+/** What the list shows: all files, only the bifti phantoms or only the sequence files
+ * (.seq, .py, .ipynb; the server filters). */
+export type FileMode = "all" | "bifti" | "sequence";
 export const FILE_MODES: { key: FileMode; label: string }[] = [
   { key: "all", label: "Alle Dateien" },
   { key: "bifti", label: "BIfTIs" },
+  { key: "sequence", label: "Sequenzen" },
 ];

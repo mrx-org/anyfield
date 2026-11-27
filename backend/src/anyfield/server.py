@@ -24,7 +24,7 @@ from starlette.routing import Mount
 from starlette.staticfiles import StaticFiles
 from starlette.types import ASGIApp, Receive, Scope, Send
 
-from . import file_tools, phantom_tools
+from . import file_tools, phantom_tools, seq_tools
 from . import fov as fov_ops
 from .args import ExpectedRev, OptionalSessionKey, SessionKey, Vec3Arg
 from .auth import AuthProvider, make_login_on_demand, require_user
@@ -32,6 +32,7 @@ from .file_tools import UserFiles
 from .gateway import GATEWAY_URL, GatewayClient
 from .models import PhantomChoice, Session, State, Vec3, merge_patch, new_key
 from .phantoms import PROPERTY_KEYS, Catalog, PhantomMaps
+from .sequences import SequenceCatalog
 from .store import SessionStore
 
 FOV_APP_URI = "ui://anyfield/fov-planner.html"
@@ -51,20 +52,23 @@ def build(
     maps: PhantomMaps | None = None,
     gateway: GatewayClient | None = None,
     files: UserFiles | None = None,
+    sequences: SequenceCatalog | None = None,
 ) -> FastMCP:
     """`gateway` serves the phantom catalog, CAS phantoms, maps and the user's
-    files; tests pass `catalog`, `maps` and `files` instead."""
+    files; tests pass `catalog`, `maps` and `files` instead. `sequences`: the
+    sequence sources (placeholders until the gateway lists them)."""
     base_url = base_url.rstrip("/")
     call = gateway.call_tool if gateway else None
     catalog = catalog or Catalog(call)
     maps = maps or PhantomMaps(call)
     files = files or UserFiles(call, gateway.url if gateway else GATEWAY_URL)
+    sequences = sequences or SequenceCatalog()
     mcp = FastMCP(
         "anyfield",
         instructions=(
             "anyfield is the user interface for planning virtual MRI scans: small tools to choose a "
-            "phantom, view it and plan the field of view (FOV). Every UI tool works without a session "
-            "(the user's choice comes back to the chat) or with a `session_key`: then the choice is "
+            "phantom, view it, plan the field of view (FOV) and choose a sequence. Every UI tool works "
+            "without a session (the user's choice comes back to the chat) or with a `session_key`: then the choice is "
             "stored in the session's state, a small JSON (`get_state`, `patch_state`), and the user "
             "sees changes in the browser within a second, and vice versa. Managing sessions "
             "(list/create/rename/delete) needs a login; all other tools only need the session key. "
@@ -112,6 +116,7 @@ def build(
             new = new.model_copy(update={"tissues": None})
         if new.view.property not in PROPERTY_KEYS:
             raise ToolError(f"Unknown property {new.view.property!r}. Known: {', '.join(PROPERTY_KEYS)}")
+        await seq_tools.check(sequences, old, new)
         return new.model_copy(update={"fov": fov})
 
     async def change(
@@ -186,7 +191,7 @@ def build(
             int | None, Field(description="Last revision the caller has; if unchanged, only {rev, unchanged}")
         ] = None,
     ) -> dict[str, Any]:
-        """A session: name, revision, its state (phantom, view, fov, matrix) and the
+        """A session: name, revision, its state (phantom, view, fov, matrix, sequence) and the
         link to open it in the browser."""
         session = await load(session_key)
         if known_rev is not None and known_rev == session.rev:
@@ -309,6 +314,14 @@ def build(
         phantom_tools.Ctx(base_url=base_url, change=change, public=public, opened=opened),
         catalog=catalog,
         maps=maps,
+        files=files,
+        static_dir=static_dir,
+    )
+
+    seq_tools.register(
+        mcp,
+        phantom_tools.Ctx(base_url=base_url, change=change, public=public, opened=opened),
+        catalog=sequences,
         files=files,
         static_dir=static_dir,
     )

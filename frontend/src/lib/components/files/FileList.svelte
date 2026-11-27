@@ -5,9 +5,9 @@
   // Options (MCP tool open_file_list, or set by a parent): `mode` fixes the dropdown
   // (bifti: no type column), `download` the download buttons.
   // Clicking a name: `"name": <sha256>` to the chat (website: copied, with a notice);
-  // with a session in bifti mode instead the file becomes the session's phantom (its
-  // button filled). `select` (the phantom browser) picks the phantom also into a local
-  // selection.
+  // with a session in bifti mode instead the file becomes the session's phantom, in
+  // sequence mode its sequence (its button filled). `select` (phantom and sequence
+  // browser) picks it also into a local selection.
   // Bump `reload` to load the list again (e.g. after an upload). Opened again, the list
   // this client loaded last shows at once while the server's (cached a few minutes)
   // comes in.
@@ -17,6 +17,7 @@
   import RefreshCw from "@lucide/svelte/icons/refresh-cw";
   import { FILE_MODES, filterFiles, formatSize, formatTime, sortFiles, type FileMode, type SortKey } from "../../files";
   import { isCas, phantomPatch } from "../../phantom";
+  import { casSequence, isCasSequence, sequencePatch } from "../../sequence";
   import type { Selection } from "../../state/selection";
   import type { UserFile } from "../../types";
   import FileName from "./FileName.svelte";
@@ -34,7 +35,8 @@
     mode?: FileMode | null;
     /** Show the download buttons. */
     download?: boolean;
-    /** A click in bifti mode picks the phantom, also without a session (default: with one). */
+    /** A click in bifti or sequence mode picks the phantom or sequence, also without a
+     * session (default: with one). */
     select?: boolean;
   } = $props();
 
@@ -52,14 +54,26 @@
   let query = $state("");
   let chosenMode = $state<FileMode>("all");
   const mode = $derived(fixedMode ?? chosenMode);
-  /** What a click on a name does. */
-  const click = $derived(mode === "bifti" && (select ?? !!sel.sessionKey) ? "phantom" : "chat");
+  /** What a click on a name does: pick it as the mode's state field, or hand it to the chat. */
+  const click = $derived(
+    mode !== "all" && (select ?? !!sel.sessionKey) ? (mode === "bifti" ? "phantom" : "sequence") : "chat",
+  );
   const phantomSha = $derived(sel.state?.phantom && isCas(sel.state.phantom) ? sel.state.phantom.sha256 : null);
+  const sequenceSha = $derived(
+    sel.state?.sequence && isCasSequence(sel.state.sequence) ? sel.state.sequence.sha256 : null,
+  );
+  /** The file the state has picked in this mode (its button filled). */
+  const picked = $derived(click === "phantom" ? phantomSha : click === "sequence" ? sequenceSha : null);
 
   function pick(f: UserFile) {
-    if (f.sha256 === phantomSha) return;
-    // Another phantom has other tissues: back to all of them
-    sel.patch({ phantom: phantomPatch({ sha256: f.sha256, name: f.name }), tissues: null });
+    if (f.sha256 === picked) return;
+    if (click === "phantom") {
+      // Another phantom has other tissues: back to all of them
+      sel.patch({ phantom: phantomPatch({ sha256: f.sha256, name: f.name }), tissues: null });
+    } else {
+      const seq = casSequence(f);
+      if (seq) sel.patch({ sequence: sequencePatch(seq) });
+    }
   }
   let sortKey = $state<SortKey>("uploaded_at");
   let ascending = $state(false);
@@ -176,12 +190,12 @@
                 </td>
               {/if}
               <td class="max-w-64 px-2 py-1">
-                {#if click === "phantom"}
+                {#if click !== "chat"}
                   <button
                     type="button"
-                    class="btn btn-sm max-w-full justify-start {f.sha256 === phantomSha ? 'preset-filled-primary-500' : 'preset-tonal'}"
-                    title="Als Phantom wählen"
-                    aria-pressed={f.sha256 === phantomSha}
+                    class="btn btn-sm max-w-full justify-start {f.sha256 === picked ? 'preset-filled-primary-500' : 'preset-tonal'}"
+                    title={click === "phantom" ? "Als Phantom wählen" : "Als Sequenz wählen"}
+                    aria-pressed={f.sha256 === picked}
                     onclick={() => pick(f)}><span class="truncate">{f.name}</span></button
                   >
                 {:else}
@@ -197,7 +211,9 @@
       </table>
     </div>
     {#if !shown.length}
-      <p class="p-2 text-xs text-muted">{mode === "bifti" && !query ? "Keine BIfTIs." : "Keine Datei passt zur Suche."}</p>
+      <p class="p-2 text-xs text-muted">
+        {query ? "Keine Datei passt zur Suche." : mode === "bifti" ? "Keine BIfTIs." : "Keine Sequenzdateien."}
+      </p>
     {/if}
   {:else if loading}
     <p class="p-2 text-xs text-muted">Lade Dateien …</p>
