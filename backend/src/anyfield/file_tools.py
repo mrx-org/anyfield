@@ -12,10 +12,10 @@ bytes go straight between the browser and the gateway:
 from __future__ import annotations
 
 import time
-from urllib.parse import quote
 from collections.abc import Awaitable, Callable
 from pathlib import Path
 from typing import Annotated, Any, Literal
+from urllib.parse import quote
 
 from fastmcp import FastMCP
 from fastmcp.apps.config import AppConfig
