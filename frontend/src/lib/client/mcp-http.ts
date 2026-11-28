@@ -48,7 +48,8 @@ export class McpHttpTransport implements Transport {
   async callTool(name: string, args: Record<string, unknown> = {}): Promise<unknown> {
     const client = await this.connect();
     try {
-      const result = await client.callTool({ name, arguments: args });
+      // Who calls, for the history (the server forgets `initialize` between requests)
+      const result = await client.callTool({ name, arguments: args, _meta: { "anyfield/client": "anyfield-web" } });
       return unwrapResult(name, result as Parameters<typeof unwrapResult>[1]);
     } catch (e) {
       if (e instanceof UnauthorizedError) throw new LoginRedirect();

@@ -11,6 +11,9 @@ export class MockTransport implements Transport {
     const s: Session = {
       key: "mock-key",
       name: "Mock",
+      color: "#3b82f6",
+      project: { id: "mock-project", name: "Mock" },
+      head: "h0",
       rev: 1,
       updated_at: 0,
       state: structuredClone(DEFAULT_STATE),

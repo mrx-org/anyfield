@@ -12,12 +12,14 @@ import FolderOpen from "@lucide/svelte/icons/folder-open";
 import Move3d from "@lucide/svelte/icons/move-3d";
 import ScanEye from "@lucide/svelte/icons/scan-eye";
 import SlidersHorizontal from "@lucide/svelte/icons/sliders-horizontal";
+import GitGraph from "@lucide/svelte/icons/git-graph";
 import Upload from "@lucide/svelte/icons/upload";
 import FileList from "./components/files/FileList.svelte";
 import FileManager from "./components/files/FileManager.svelte";
 import FileUpload from "./components/files/FileUpload.svelte";
 import FovPlanner from "./components/fov/FovPlanner.svelte";
 import FovViewer from "./components/fov/FovViewer.svelte";
+import History from "./components/history/History.svelte";
 import PhantomBrowser from "./components/phantom/PhantomBrowser.svelte";
 import PhantomPreview from "./components/phantom/PhantomPreview.svelte";
 import SequenceBrowser from "./components/sequence/SequenceBrowser.svelte";
@@ -51,5 +53,6 @@ export const TOOLS: Record<string, ToolDef> = {
   file_manager: tool(m.tool_file_manager, FolderOpen, FileManager),
   file_list: tool(m.tool_file_list, Files, FileList),
   file_upload: tool(m.tool_file_upload, Upload, FileUpload),
-  session: tool(m.tool_session, Braces, SessionEditor, true),
+  history: tool(m.tool_history, GitGraph, History, true),
+  state: tool(m.tool_state, Braces, SessionEditor, true),
 };

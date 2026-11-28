@@ -44,11 +44,11 @@ def call(http, tool, token=None, **args):
 def test_anonymous_can_list_tools(http):
     r, msg = rpc(http, "tools/list")
     assert r.status_code == 200
-    assert "list_sessions" in {t["name"] for t in msg["result"]["tools"]}
+    assert "list_projects" in {t["name"] for t in msg["result"]["tools"]}
 
 
 def test_management_without_token_gets_oauth_challenge(http):
-    r, _ = call(http, "list_sessions")
+    r, _ = call(http, "list_projects")
     assert r.status_code == 401
     assert r.headers["www-authenticate"].startswith("Bearer")
 
@@ -59,13 +59,14 @@ def test_invalid_token_is_rejected(http):
 
 
 def test_key_tools_work_anonymously(http):
-    _, created = call(http, "create_session", token=TOKEN, name="geteilt")
+    _, created = call(http, "create_project", token=TOKEN, name="geteilt")
     key = created["result"]["structuredContent"]["key"]
     r, moved = call(http, "move_fov", session_key=key, delta_mm=[0, 0, 5])
     assert r.status_code == 200 and not moved["result"].get("isError")
     assert moved["result"]["structuredContent"]["fov"]["center_mm"] == [0, 0, 5]
-    _, listed = call(http, "list_sessions", token=TOKEN)
-    assert [s["key"] for s in listed["result"]["structuredContent"]["result"]] == [key]
+    _, listed = call(http, "list_projects", token=TOKEN)
+    projects = listed["result"]["structuredContent"]["result"]
+    assert [p["name"] for p in projects] == ["geteilt"] and projects[0]["sessions"][0]["key"] == key
 
 
 def test_web_routes(http):
@@ -99,7 +100,7 @@ def test_authkit_provider_wiring():
         assert meta["resource"] == "https://testserver/mcp"
         assert meta["authorization_servers"] == ["https://example.authkit.app/"]
         assert auth.token_verifier.audience == "https://testserver/mcp"
-        r, _ = call(c, "create_session")
+        r, _ = call(c, "create_project")
         assert r.status_code == 401 and "resource_metadata" in r.headers["www-authenticate"]
         r, _ = rpc(c, "tools/list")
         assert r.status_code == 200
@@ -171,7 +172,7 @@ def test_protected_resource_behind_worker():
         meta = c.get("/.well-known/oauth-protected-resource/mcp", headers=forwarded).json()
         assert meta["resource"] == "https://app.anyfield.net/mcp"
         assert auth.token_verifier.audience == "https://app.anyfield.net/mcp"
-        r, _ = rpc(c, "tools/call", {"name": "list_sessions", "arguments": {}}, headers=forwarded)
+        r, _ = rpc(c, "tools/call", {"name": "list_projects", "arguments": {}}, headers=forwarded)
         assert r.status_code == 401
         assert (
             "https://app.anyfield.net/.well-known/oauth-protected-resource/mcp"

@@ -6,20 +6,21 @@ async def call(client, tool, **args):
     return (await client.call_tool(tool, args)).structured_content
 
 
-async def test_session_lifecycle(client, as_user):
+async def test_project_lifecycle(client, as_user):
     as_user("alice")
-    s = await call(client, "create_session", name="Kopf")
-    assert len(s["key"]) >= 20 and s["name"] == "Kopf" and s["rev"] == 1
+    s = await call(client, "create_project", name="Kopf")
+    assert len(s["key"]) >= 20 and s["name"] == "default" and s["project"]["name"] == "Kopf" and s["rev"] == 1
     assert s["web_url"].endswith(f"/s/{s['key']}")
+    pid = s["project"]["id"]
 
-    listed = (await call(client, "list_sessions"))["result"]
-    assert [x["key"] for x in listed] == [s["key"]]
+    listed = (await call(client, "list_projects"))["result"]
+    assert [p["id"] for p in listed] == [pid] and [x["key"] for x in listed[0]["sessions"]] == [s["key"]]
 
-    renamed = await call(client, "rename_session", session_key=s["key"], name="Knie")
-    assert renamed["name"] == "Knie" and renamed["rev"] == 2
+    renamed = await call(client, "rename_project", project_id=pid, name="Knie")
+    assert renamed["name"] == "Knie"
 
-    await client.call_tool("delete_session", {"session_key": s["key"]})
-    assert (await call(client, "list_sessions"))["result"] == []
+    await client.call_tool("delete_project", {"project_id": pid})
+    assert (await call(client, "list_projects"))["result"] == []
     with pytest.raises(ToolError, match="Unknown session key"):
         await client.call_tool("get_state", {"session_key": s["key"]})
 
@@ -27,24 +28,24 @@ async def test_session_lifecycle(client, as_user):
 async def test_management_needs_login(client, as_user):
     as_user(None)
     with pytest.raises(ToolError, match="Login required"):
-        await client.call_tool("create_session", {})
+        await client.call_tool("create_project", {})
     with pytest.raises(ToolError, match="Login required"):
-        await client.call_tool("list_sessions", {})
+        await client.call_tool("list_projects", {})
 
 
-async def test_only_owner_renames_and_deletes(client, as_user):
+async def test_only_owner_renames_and_deletes_projects(client, as_user):
     as_user("alice")
-    s = await call(client, "create_session")
+    pid = (await call(client, "create_project"))["project"]["id"]
     as_user("bob")
-    for tool, args in [("rename_session", {"name": "x"}), ("delete_session", {})]:
+    for tool, args in [("rename_project", {"name": "x"}), ("delete_project", {})]:
         with pytest.raises(ToolError, match="Only the owner"):
-            await client.call_tool(tool, {"session_key": s["key"], **args})
-    assert (await call(client, "list_sessions"))["result"] == []
+            await client.call_tool(tool, {"project_id": pid, **args})
+    assert (await call(client, "list_projects"))["result"] == []
 
 
 async def test_session_tools_need_only_the_key(client, as_user):
     as_user("alice")
-    key = (await call(client, "create_session"))["key"]
+    key = (await call(client, "create_project"))["key"]
     as_user(None)
     session = await call(client, "get_state", session_key=key)
     assert session["state"]["fov"]["size_mm"] == [200.0, 200.0, 100.0]
@@ -61,7 +62,7 @@ async def test_session_tools_need_only_the_key(client, as_user):
 
 async def test_get_state_unchanged(client, as_user):
     as_user("alice")
-    key = (await call(client, "create_session"))["key"]
+    key = (await call(client, "create_project"))["key"]
     assert await call(client, "get_state", session_key=key, known_rev=1) == {"rev": 1, "unchanged": True}
     await call(client, "move_fov", session_key=key, delta_mm=[1, 0, 0])
     assert (await call(client, "get_state", session_key=key, known_rev=1))["rev"] == 2
@@ -69,7 +70,7 @@ async def test_get_state_unchanged(client, as_user):
 
 async def test_fov_validation_and_conflicts(client, as_user):
     as_user("alice")
-    key = (await call(client, "create_session"))["key"]
+    key = (await call(client, "create_project"))["key"]
     with pytest.raises(ToolError, match="size_mm"):
         await client.call_tool("set_fov", {"session_key": key, "size_mm": [0, 10, 10]})
     with pytest.raises(ToolError, match="Conflict"):
@@ -85,14 +86,14 @@ async def test_fov_viewer_is_an_app(client):
     assert r["key"] is None and r["state"]["fov"]["size_mm"] == [200.0, 200.0, 100.0]
 
 
-async def test_session_editor_is_an_app(client, as_user):
+async def test_state_editor_is_an_app(client, as_user):
     tools = {t.name: t for t in await client.list_tools()}
-    assert tools["open_session"].meta["ui"]["resourceUri"] == "ui://anyfield/session.html"
+    assert tools["open_state"].meta["ui"]["resourceUri"] == "ui://anyfield/state.html"
     resources = {str(r.uri): r for r in await client.list_resources()}
-    assert resources["ui://anyfield/session.html"].mime_type.startswith("text/html")
+    assert resources["ui://anyfield/state.html"].mime_type.startswith("text/html")
     as_user("alice")
-    key = (await call(client, "create_session"))["key"]
-    r = await call(client, "open_session", session_key=key)
+    key = (await call(client, "create_project"))["key"]
+    r = await call(client, "open_state", session_key=key)
     assert r["key"] == key and r["rev"] == 1 and "state" in r
     # What its "Update" sends: a patch with the loaded revision; unknown fields fail
     with pytest.raises(ToolError, match="extra|Extra"):
@@ -114,7 +115,7 @@ async def test_fov_planner_is_an_app(client):
 
 async def test_patch_state(client, as_user):
     as_user("alice")
-    key = (await call(client, "create_session"))["key"]
+    key = (await call(client, "create_project"))["key"]
     r = await call(
         client,
         "patch_state",

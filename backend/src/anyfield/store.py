@@ -1,4 +1,5 @@
-"""Where sessions live.
+"""Where projects, their nodes and sessions live: entries `p:<id>` (project),
+`n:<project>:<hash>` (node), `s:<key>` (session), `o:<owner>` (the owner's project ids).
 
 `MemoryStore` for tests and local runs. `ModalStore` on Modal: a Modal Dict as
 the fast store every container sees, plus a Volume as durable copy, because a
@@ -14,48 +15,100 @@ from pathlib import Path
 from typing import Protocol
 
 from .migrations import migrate_json
-from .models import Session
+from .models import Node, Project, Session
 
 log = logging.getLogger(__name__)
 
 
-def load_session(raw: str) -> Session:
-    """A stored session, migrated to the current schema if it is older (migrations.py)."""
-    return Session.model_validate_json(migrate_json(raw) or raw)
+class Entries:
+    """Typed access on top of raw entries (`_get`, `_put`; None deletes). A session
+    of an older schema is migrated when read; entries the migration adds (its
+    project and root node) are written unless they exist (migrations.py)."""
+
+    async def _get(self, entry: str) -> str | None:
+        raise NotImplementedError
+
+    async def _put(self, entry: str, raw: str | None) -> None:
+        raise NotImplementedError
+
+    async def get(self, key: str) -> Session | None:
+        raw = await self._get(f"s:{key}")
+        if raw is None:
+            return None
+        migrated = migrate_json(raw)
+        if migrated is not None:
+            raw, extra = migrated
+            for entry, value in extra.items():
+                if await self._get(entry) is None:
+                    await self._put(entry, value)
+            await self._put(f"s:{key}", raw)
+        return Session.model_validate_json(raw)
+
+    async def put(self, session: Session) -> None:
+        await self._put(f"s:{session.key}", session.model_dump_json())
+
+    async def delete(self, key: str) -> None:
+        await self._put(f"s:{key}", None)
+
+    async def get_project(self, project_id: str) -> Project | None:
+        raw = await self._get(f"p:{project_id}")
+        return None if raw is None else Project.model_validate_json(raw)
+
+    async def put_project(self, project: Project) -> None:
+        await self._put(f"p:{project.id}", project.model_dump_json())
+
+    async def delete_project(self, project_id: str) -> None:
+        await self._put(f"p:{project_id}", None)
+
+    async def get_node(self, project_id: str, h: str) -> Node | None:
+        raw = await self._get(f"n:{project_id}:{h}")
+        return None if raw is None else Node.model_validate_json(raw)
+
+    async def put_node(self, project_id: str, node: Node) -> None:
+        await self._put(f"n:{project_id}:{node.hash}", node.model_dump_json())
+
+    async def delete_node(self, project_id: str, h: str) -> None:
+        await self._put(f"n:{project_id}:{h}", None)
+
+    async def owned_by(self, owner: str) -> list[str]:
+        """The ids of the owner's projects."""
+        raw = await self._get(f"o:{owner}")
+        return [] if raw is None else json.loads(raw)
+
+    async def set_owned_by(self, owner: str, ids: list[str]) -> None:
+        await self._put(f"o:{owner}", json.dumps(ids))
 
 
 class SessionStore(Protocol):
     async def get(self, key: str) -> Session | None: ...
     async def put(self, session: Session) -> None: ...
     async def delete(self, key: str) -> None: ...
+    async def get_project(self, project_id: str) -> Project | None: ...
+    async def put_project(self, project: Project) -> None: ...
+    async def delete_project(self, project_id: str) -> None: ...
+    async def get_node(self, project_id: str, h: str) -> Node | None: ...
+    async def put_node(self, project_id: str, node: Node) -> None: ...
+    async def delete_node(self, project_id: str, h: str) -> None: ...
     async def owned_by(self, owner: str) -> list[str]: ...
-    async def set_owned_by(self, owner: str, keys: list[str]) -> None: ...
+    async def set_owned_by(self, owner: str, ids: list[str]) -> None: ...
 
 
-class MemoryStore:
+class MemoryStore(Entries):
     def __init__(self) -> None:
-        self.sessions: dict[str, str] = {}
-        self.owners: dict[str, list[str]] = {}
+        self.entries: dict[str, str] = {}
 
-    async def get(self, key: str) -> Session | None:
-        raw = self.sessions.get(key)
-        return None if raw is None else load_session(raw)
+    async def _get(self, entry: str) -> str | None:
+        return self.entries.get(entry)
 
-    async def put(self, session: Session) -> None:
-        self.sessions[session.key] = session.model_dump_json()
-
-    async def delete(self, key: str) -> None:
-        self.sessions.pop(key, None)
-
-    async def owned_by(self, owner: str) -> list[str]:
-        return list(self.owners.get(owner, []))
-
-    async def set_owned_by(self, owner: str, keys: list[str]) -> None:
-        self.owners[owner] = list(keys)
+    async def _put(self, entry: str, raw: str | None) -> None:
+        if raw is None:
+            self.entries.pop(entry, None)
+        else:
+            self.entries[entry] = raw
 
 
-class ModalStore:
-    """Dict entries `s:<key>` (session JSON) and `o:<owner>` (list of keys).
+class ModalStore(Entries):
+    """The entries in a Modal Dict.
 
     Every write also goes to `<root>/<entry>.json` on the Volume, at most every
     `flush_s` seconds per entry (an FOV drag is ~10 writes per second). A Dict
@@ -116,20 +169,3 @@ class ModalStore:
             else:
                 path.write_text(raw)
         self.volume.commit()
-
-    async def get(self, key: str) -> Session | None:
-        raw = await self._get(f"s:{key}")
-        return None if raw is None else load_session(raw)
-
-    async def put(self, session: Session) -> None:
-        await self._put(f"s:{session.key}", session.model_dump_json())
-
-    async def delete(self, key: str) -> None:
-        await self._put(f"s:{key}", None)
-
-    async def owned_by(self, owner: str) -> list[str]:
-        raw = await self._get(f"o:{owner}")
-        return [] if raw is None else json.loads(raw)
-
-    async def set_owned_by(self, owner: str, keys: list[str]) -> None:
-        await self._put(f"o:{owner}", json.dumps(keys))

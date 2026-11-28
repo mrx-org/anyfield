@@ -1,6 +1,6 @@
 import { phantomArgs, phantomKey } from "../phantom";
 import type { FileMode } from "../files";
-import type { FovChange, PhantomChoice, PhantomCollection, PhantomMaps, PhantomTree, ScanGrid, SequenceFile, SequenceSource, Session, SessionSummary, StatePatch, UserFile, Vec3 } from "../types";
+import type { FovChange, History, PhantomChoice, PhantomCollection, PhantomMaps, PhantomTree, ProjectSummary, ScanGrid, SequenceFile, SequenceSource, Session, StatePatch, UserFile, Vec3 } from "../types";
 import type { Transport } from "./transport";
 
 export type SessionPoll = Session | { rev: number; unchanged: true };
@@ -16,11 +16,24 @@ export class AnyfieldClient {
     return this.transport.callTool(name, args) as Promise<T>;
   }
 
-  // Session management (needs a login)
-  listSessions = () => this.call<SessionSummary[]>("list_sessions");
-  createSession = (name?: string) => this.call<Session>("create_session", name ? { name } : {});
+  // Projects (need a login)
+  listProjects = () => this.call<ProjectSummary[]>("list_projects");
+  createProject = (name?: string) => this.call<Session>("create_project", name ? { name } : {});
+  renameProject = (id: string, name: string) => this.call<ProjectSummary>("rename_project", { project_id: id, name });
+  deleteProject = (id: string) => this.call<string>("delete_project", { project_id: id });
+
+  // Sessions of a project and its history (session key only)
+  listSessions = (key: string) => this.call<ProjectSummary>("list_sessions", { session_key: key });
+  /** Branch off: a new session at `at` (default: where `key` is). */
+  createSession = (key: string, name?: string, at?: string) =>
+    this.call<Session>("create_session", { session_key: key, ...(name ? { name } : {}), ...(at ? { at } : {}) });
   renameSession = (key: string, name: string) => this.call<Session>("rename_session", { session_key: key, name });
-  deleteSession = (key: string) => this.call<string>("delete_session", { session_key: key });
+  deleteSession = (key: string) => this.call<{ deleted: string; next: Session | null }>("delete_session", { session_key: key });
+  getHistory = (key: string, limit?: number) =>
+    this.call<History>("get_history", { session_key: key, ...(limit ? { limit } : {}) });
+  undo = (key: string) => this.call<Session>("undo", { session_key: key });
+  redo = (key: string) => this.call<Session>("redo", { session_key: key });
+  gotoState = (key: string, state: string) => this.call<Session>("goto_state", { session_key: key, state });
 
   // Session state (session key only)
   getState = (key: string, knownRev?: number) =>

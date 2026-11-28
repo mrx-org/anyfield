@@ -5,7 +5,7 @@ a resource server. It checks the AuthKit JWT (JWKS) and its audience, which is
 anyfield's `/mcp` URL (a Resource Indicator in WorkOS). A user is the token's
 `sub` (WorkOS user id).
 
-Managing sessions (list, create, rename, delete) needs a login. Every other
+Managing projects (list, create, rename, delete) needs a login. Every other
 tool needs only the session key, passed as a tool argument: whoever knows it
 may use the session, so it can be shared.
 
@@ -30,7 +30,7 @@ from pydantic import BaseModel
 from starlette.routing import Route
 from starlette.types import ASGIApp, Message, Receive, Scope, Send
 
-LOGIN_TOOLS = frozenset({"list_sessions", "create_session", "rename_session", "delete_session"})
+LOGIN_TOOLS = frozenset({"list_projects", "create_project", "rename_project", "delete_project"})
 
 
 class User(BaseModel):

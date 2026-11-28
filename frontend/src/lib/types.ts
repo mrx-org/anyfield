@@ -147,9 +147,15 @@ export type StatePatch = {
   layout?: { root?: Record<string, unknown> | null } | null;
 };
 
+/** A session: a named pointer (`head`) into its project's history, with the state there. */
 export interface Session {
   key: string;
   name: string;
+  /** Its marker colour in the history. */
+  color: string;
+  project: { id: string; name?: string };
+  /** Hash of the state it is at. */
+  head: string;
   rev: number;
   updated_at: number;
   state: State;
@@ -199,11 +205,41 @@ export interface PhantomCollection {
 /** A registry phantoms list: file names and nested groups. */
 export type PhantomTree = Array<string | { group: string; default?: string; phantoms: PhantomTree }>;
 
+/** A session as its project lists it. */
 export interface SessionSummary {
   key: string;
   name: string;
-  rev: number;
+  color: string;
   updated_at: number;
+  web_url: string;
+}
+
+/** A project with its sessions (`list_projects`, `list_sessions`). */
+export interface ProjectSummary {
+  id: string;
+  name: string;
+  updated_at: number;
+  sessions: SessionSummary[];
+}
+
+/** A state in a project's history: what changed (keys), by whom, when. */
+export interface HistoryState {
+  hash: string;
+  parent: string | null;
+  change: string[];
+  actor: string;
+  time: number;
+}
+
+/** The history of a session's project (`get_history`), newest first. */
+export interface History {
+  project: { id: string; name: string };
+  session: string;
+  head: string;
+  states: HistoryState[];
+  total: number;
+  leaves: string[];
+  sessions: { key: string; name: string; color: string; head: string }[];
 }
 
 export interface FovChange {

@@ -28,6 +28,11 @@ class _FileListOptions(BaseModel):
     download: bool | None = None
 
 
+class _HistoryOptions(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    sessions: bool | None = None
+
+
 class _NoOptions(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
@@ -43,7 +48,8 @@ TOOLS: dict[str, type[BaseModel]] = {
     "file_upload": _NoOptions,
     "file_list": _FileListOptions,
     "file_manager": _NoOptions,
-    "session": _NoOptions,
+    "state": _NoOptions,
+    "history": _HistoryOptions,
 }
 
 

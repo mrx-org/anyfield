@@ -3,12 +3,20 @@ import { type Transport, unwrapResult } from "./transport";
 
 /** Inside an MCP App iframe: tool calls go through the host's connection. */
 export class McpAppTransport implements Transport {
-  constructor(private app: App) {}
+  /** `client`: the app's name, sent along for the history (the host's own name comes too). */
+  constructor(
+    private app: App,
+    private client?: string,
+  ) {}
 
   async callTool(name: string, args: Record<string, unknown> = {}): Promise<unknown> {
     // postMessage cannot clone Svelte state proxies: send plain JSON
     const plain = JSON.parse(JSON.stringify(args)) as Record<string, unknown>;
-    const result = await this.app.callServerTool({ name, arguments: plain });
+    const result = await this.app.callServerTool({
+      name,
+      arguments: plain,
+      ...(this.client ? { _meta: { "anyfield/client": this.client } } : {}),
+    });
     return unwrapResult(name, result as Parameters<typeof unwrapResult>[1]);
   }
 

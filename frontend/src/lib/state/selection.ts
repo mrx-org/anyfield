@@ -1,5 +1,5 @@
 import type { AnyfieldClient } from "../client/anyfield";
-import type { State, StatePatch } from "../types";
+import type { Session, State, StatePatch } from "../types";
 
 /**
  * What a tool component is bound to: the current choices and a way to change
@@ -22,4 +22,9 @@ export interface Selection {
   /** Change the state and wait for the result: rejects with the server's message if it
    * does not validate, or (with `expectedRev`) if the session has changed since. */
   commit(patch: StatePatch, expectedRev?: number): Promise<void>;
+  /** A session: take a newer version the server returned (e.g. from undo). */
+  accept?(session: Session): void;
+  /** A session: open another session (of the project) in this view; set by the shell
+   * (website: navigate, MCP App: rebind). Absent: switching is not possible here. */
+  navigate?: ((key: string) => void) | null;
 }
