@@ -42,7 +42,8 @@
   // svelte-ignore state_referenced_locally
   const app = new App({ name, version: "0.1.0" });
   // Everything towards the chat goes through the transport, as in the components
-  const transport = new McpAppTransport(app);
+  // svelte-ignore state_referenced_locally
+  const transport = new McpAppTransport(app, name);
   const client = new AnyfieldClient(transport);
   let sel = $state<Selection | null>(null);
   /** The tool call's arguments but the session key: options of the tool (e.g. mode). */
@@ -74,6 +75,8 @@
     if (sel?.sessionKey === key) return;
     if (sel instanceof SessionStore) sel.stop();
     const store = new SessionStore(client, key);
+    // The history tool switches sessions: in the chat, this app shows the other one
+    store.navigate = openSession;
     store.start();
     sel = store;
   }

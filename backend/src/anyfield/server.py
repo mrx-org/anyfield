@@ -4,9 +4,7 @@ the same tools. Session management needs a login, the rest a session key."""
 
 from __future__ import annotations
 
-import asyncio
 import time
-from collections import defaultdict
 from collections.abc import Callable
 from pathlib import Path
 from typing import Annotated, Any
@@ -31,14 +29,16 @@ from .args import ExpectedRev, LocaleArg, OptionalSessionKey, SessionKey, Vec3Ar
 from .auth import AuthProvider, make_login_on_demand, require_user
 from .file_tools import UserFiles
 from .gateway import GATEWAY_URL, GatewayClient
-from .models import Layout, PhantomChoice, Session, State, Vec3, merge_patch, new_key
+from .models import Layout, PhantomChoice, Project, Session, State, Vec3, merge_patch
 from .phantoms import PROPERTY_KEYS, Catalog, PhantomMaps
+from .projects import Projects
 from .sequences import SequenceCatalog
 from .store import SessionStore
 
 FOV_APP_URI = "ui://anyfield/fov-planner.html"
 FOV_VIEWER_APP_URI = "ui://anyfield/fov-viewer.html"
-SESSION_APP_URI = "ui://anyfield/session.html"
+STATE_APP_URI = "ui://anyfield/state.html"
+HISTORY_APP_URI = "ui://anyfield/history.html"
 WORKSPACE_APP_URI = "ui://anyfield/workspace.html"
 WORKSPACE_DESCRIPTION = (
     "Show anyfield's workspace: several tools in panels (tabs, side by side or one above "
@@ -53,7 +53,7 @@ WORKSPACE_DESCRIPTION = (
     'patch_state {"layout": ...}; without one the arrangement the user ends up with comes back '
     "to the chat. In clients without MCP Apps this returns the state."
 )
-MAX_SESSIONS_PER_USER = 200
+MAX_PROJECTS_PER_USER = 200
 MAX_MATRIX = 1024
 # The page is checked on every load (it names the assets of the current build); the
 # assets have the hash of their content in their name, so they never change.
@@ -89,18 +89,23 @@ def build(
             "phantom, view it, plan the field of view (FOV) and choose a sequence. Every UI tool works "
             "without a session (the user's choice comes back to the chat) or with a `session_key`: then the choice is "
             "stored in the session's state, a small JSON (`get_state`, `patch_state`), and the user "
-            "sees changes in the browser within a second, and vice versa. Managing sessions "
+            "sees changes in the browser within a second, and vice versa. A session belongs to a project "
+            "and points into its history, a tree of states: every change is committed automatically "
+            "(undo, redo, goto_state, get_history; create_session branches off). Managing projects "
             "(list/create/rename/delete) needs a login; all other tools only need the session key. "
             "Coordinates are world RAS in mm."
         ),
         auth=auth,
     )
-    locks: defaultdict[str, asyncio.Lock] = defaultdict(asyncio.Lock)
+    projects = Projects(store)
 
-    def public(s: Session) -> dict[str, Any]:
+    def public(s: Session, project: Project | None = None) -> dict[str, Any]:
         return {
             "key": s.key,
             "name": s.name,
+            "color": s.color,
+            "project": {"id": s.project, "name": project.name} if project else {"id": s.project},
+            "head": s.head,
             "rev": s.rev,
             "updated_at": s.updated_at,
             "state": s.state.model_dump(),
@@ -108,16 +113,11 @@ def build(
         }
 
     async def load(key: str) -> Session:
-        session = await store.get(key)
-        if session is None:
-            raise ToolError("Unknown session key.")
-        return session
+        return await projects.session(key)
 
-    async def save(session: Session) -> Session:
-        session.rev += 1
-        session.updated_at = time.time()
-        await store.put(session)
-        return session
+    async def full(s: Session) -> dict[str, Any]:
+        """The session with its project's name."""
+        return public(s, await store.get_project(s.project))
 
     async def checked(old: State, new: State) -> State:
         """Validate a new state against the old one: FOV limits, known phantom and property."""
@@ -146,65 +146,196 @@ def build(
     async def change(
         session_key: str, fn: Callable[[State], State], expected_rev: int | None = None
     ) -> Session:
-        """Apply `fn` to a session's state (validated), atomically per session."""
-        async with locks[session_key]:
-            session = await load(session_key)
-            if expected_rev is not None and expected_rev != session.rev:
-                raise ToolError(f"Conflict: session is at rev {session.rev}, not {expected_rev}. Re-read it.")
-            try:
-                new = fn(session.state.model_copy(deep=True))
-            except (ValueError, ValidationError) as e:
-                raise ToolError(str(e)) from e
-            session.state = await checked(session.state, new)
-            return await save(session)
+        """Apply `fn` to a session's state (validated) and commit it to the project's
+        history (projects.Projects.change)."""
+        return await projects.change(session_key, fn, checked, expected_rev)
 
-    async def owned(key: str) -> Session:
+    async def owned(project_id: str) -> Project:
         user = require_user()
-        session = await load(key)
-        if session.owner != user.id:
-            raise ToolError("Only the owner of a session may rename or delete it.")
-        return session
+        project = await projects.project(project_id)
+        if project.owner != user.id:
+            raise ToolError("Only the owner of a project may rename or delete it.")
+        return project
 
-    # --- Session management (login required, see auth.LOGIN_TOOLS) ---------
+    def project_summary(p: Project) -> dict[str, Any]:
+        sessions = sorted(p.sessions.items(), key=lambda kv: kv[1].updated_at, reverse=True)
+        return {
+            "id": p.id,
+            "name": p.name,
+            "updated_at": p.updated_at,
+            "sessions": [
+                {
+                    "key": k,
+                    "name": r.name,
+                    "color": r.color,
+                    "updated_at": r.updated_at,
+                    "web_url": f"{base_url}/s/{k}",
+                }
+                for k, r in sessions
+            ],
+        }
+
+    # --- Projects (login required, see auth.LOGIN_TOOLS) ----------------------
 
     @mcp.tool(annotations={"readOnlyHint": True})
-    async def list_sessions() -> list[dict[str, Any]]:
-        """List the sessions of the logged-in user, most recently changed first."""
+    async def list_projects() -> list[dict[str, Any]]:
+        """List the projects of the logged-in user, most recently changed first, each with
+        its sessions (key, name, color; most recently changed first). A project without
+        a session gets one (`default`, on its newest state)."""
         user = require_user()
-        sessions = [s for s in [await store.get(k) for k in await store.owned_by(user.id)] if s]
-        sessions.sort(key=lambda s: s.updated_at, reverse=True)
-        return [{"key": s.key, "name": s.name, "updated_at": s.updated_at, "rev": s.rev} for s in sessions]
+        found = [p for p in [await store.get_project(i) for i in await store.owned_by(user.id)] if p]
+        found = [await projects.ensure_session(p) for p in found]
+        found.sort(key=lambda p: p.updated_at, reverse=True)
+        return [project_summary(p) for p in found]
 
     @mcp.tool
-    async def create_session(name: str = "New session") -> dict[str, Any]:
-        """Create a session owned by the logged-in user. Returns its key: anybody who
-        has the key can open and change the session, so it can be shared."""
+    async def create_project(name: str = "New project") -> dict[str, Any]:
+        """Create a project owned by the logged-in user, with one session `default`.
+        Returns that session: its key opens it and every other tool takes it; anybody
+        who has the key can open and change the session, so it can be shared."""
         user = require_user()
-        keys = await store.owned_by(user.id)
-        if len(keys) >= MAX_SESSIONS_PER_USER:
-            raise ToolError(f"At most {MAX_SESSIONS_PER_USER} sessions per user. Delete some first.")
-        session = Session(key=new_key(), name=name.strip() or "New session", owner=user.id)
-        await save(session)
-        await store.set_owned_by(user.id, [*keys, session.key])
-        return public(session)
+        ids = await store.owned_by(user.id)
+        if len(ids) >= MAX_PROJECTS_PER_USER:
+            raise ToolError(f"At most {MAX_PROJECTS_PER_USER} projects per user. Delete some first.")
+        project, session = await projects.create_project(name.strip() or "New project", user.id)
+        await store.set_owned_by(user.id, [*ids, project.id])
+        return public(session, project)
+
+    @mcp.tool
+    async def rename_project(
+        project_id: Annotated[str, Field(description="Project id (list_projects)")], name: str
+    ) -> dict[str, Any]:
+        """Rename a project of the logged-in user."""
+        async with projects.lock(project_id):
+            project = await owned(project_id)
+            project.name = name.strip() or project.name
+            project.updated_at = time.time()
+            await store.put_project(project)
+        return project_summary(project)
+
+    @mcp.tool(annotations={"destructiveHint": True})
+    async def delete_project(
+        project_id: Annotated[str, Field(description="Project id (list_projects)")],
+    ) -> str:
+        """Delete a project of the logged-in user with all its states and sessions: their
+        keys stop working."""
+        async with projects.lock(project_id):
+            project = await owned(project_id)
+            await projects.delete_project(project)
+            ids = await store.owned_by(project.owner)
+            await store.set_owned_by(project.owner, [i for i in ids if i != project.id])
+        return f"Deleted project '{project.name}'."
+
+    # --- Sessions of a project (session key only) -----------------------------
+
+    @mcp.tool(annotations={"readOnlyHint": True})
+    async def list_sessions(session_key: SessionKey) -> dict[str, Any]:
+        """The project of a session and all its sessions (key, name, color), most recently
+        changed first."""
+        s = await load(session_key)
+        return project_summary(await projects.ensure_session(await projects.project(s.project)))
+
+    @mcp.tool
+    async def create_session(
+        session_key: SessionKey,
+        name: Annotated[str | None, Field(description="Name of the new session")] = None,
+        at: Annotated[
+            str | None,
+            Field(description="State (hash from get_history) to start at; default: where this session is"),
+        ] = None,
+    ) -> dict[str, Any]:
+        """Branch off: a new session of the same project that starts at a state of its
+        history and then goes on independently (its own undo/redo). Returns it with
+        its own key."""
+        s = await projects.branch(session_key, at, name)
+        return await full(s)
 
     @mcp.tool
     async def rename_session(session_key: SessionKey, name: str) -> dict[str, Any]:
-        """Rename a session of the logged-in user."""
-        async with locks[session_key]:
-            session = await owned(session_key)
-            session.name = name.strip() or session.name
-            return public(await save(session))
+        """Rename a session."""
+        return await full(await projects.rename_session(session_key, name))
 
     @mcp.tool(annotations={"destructiveHint": True})
-    async def delete_session(session_key: SessionKey) -> str:
-        """Delete a session of the logged-in user. Its key stops working."""
-        async with locks[session_key]:
-            session = await owned(session_key)
-            await store.delete(session.key)
-            keys = await store.owned_by(session.owner)
-            await store.set_owned_by(session.owner, [k for k in keys if k != session.key])
-        return f"Deleted session '{session.name}'."
+    async def delete_session(session_key: SessionKey) -> dict[str, Any]:
+        """Delete a session: its key stops working, the states of the project stay.
+        Returns the session to go on with (`next`): the project's most recently changed
+        one, or, if this was the last, a new session `default` on the newest state."""
+        project, nxt = await projects.delete_session(session_key)
+        return {"deleted": session_key, "next": public(nxt, project) if nxt else None}
+
+    # --- History of a session's project ---------------------------------------
+
+    @mcp.tool(annotations={"readOnlyHint": True})
+    async def get_history(
+        session_key: SessionKey,
+        limit: Annotated[
+            int, Field(ge=1, le=5000, description="At most this many states, newest first")
+        ] = 200,
+    ) -> dict[str, Any]:
+        """The tree of states of the session's project, newest first: per state its
+        `hash`, `parent`, `change` (the keys that changed, e.g. fov.center_mm), `actor`
+        and `time`; the `leaves` (ends of branches) and the `sessions` with the state
+        each is at (`head`). This session is `session`. Changes are committed
+        automatically (several of the same change in a row are one state)."""
+        s = await load(session_key)
+        p = await projects.project(s.project)
+        nodes = sorted(p.nodes.items(), key=lambda kv: kv[1].time, reverse=True)[:limit]
+        return {
+            "project": {"id": p.id, "name": p.name},
+            "session": s.key,
+            "head": s.head,
+            "states": [{"hash": h, **n.model_dump()} for h, n in nodes],
+            "total": len(p.nodes),
+            "leaves": p.leaves,
+            "sessions": [
+                {"key": k, "name": r.name, "color": r.color, "head": r.head}
+                for k, r in sorted(p.sessions.items(), key=lambda kv: kv[1].updated_at, reverse=True)
+            ],
+        }
+
+    @mcp.tool
+    async def undo(
+        session_key: SessionKey, steps: Annotated[int, Field(ge=1, le=1000)] = 1
+    ) -> dict[str, Any]:
+        """Undo: move the session back `steps` states in its history. Nothing is lost:
+        redo goes forward again; a change after an undo starts a new branch."""
+        return await full(await projects.undo(session_key, steps))
+
+    @mcp.tool
+    async def redo(
+        session_key: SessionKey, steps: Annotated[int, Field(ge=1, le=1000)] = 1
+    ) -> dict[str, Any]:
+        """Redo: move the session forward `steps` states (at a branch: the one it came
+        back from, else the newest)."""
+        return await full(await projects.redo(session_key, steps))
+
+    @mcp.tool
+    async def goto_state(
+        session_key: SessionKey,
+        state: Annotated[str, Field(description="Hash of a state of the project (get_history)")],
+    ) -> dict[str, Any]:
+        """Move the session to any state of its project's history (other sessions stay)."""
+        return await full(await projects.goto(session_key, state))
+
+    @mcp.tool(app=AppConfig(resource_uri=HISTORY_APP_URI), annotations={"readOnlyHint": True})
+    async def open_history(
+        session_key: SessionKey,
+        sessions: Annotated[
+            bool,
+            Field(
+                description="Let the user switch to another session of the project and branch off. "
+                "False keeps the user on this session, e.g. so that they see what you see"
+            ),
+        ] = True,
+        locale: LocaleArg = None,
+    ) -> dict[str, Any]:
+        """Show the history of the session's project as a tree, the sessions as coloured
+        markers: undo, redo, a click jumps to a state; with `sessions` also switching to
+        another session and branching off. In clients without MCP Apps this returns
+        the session."""
+        return await opened(session_key)
+
+    app_html(mcp, HISTORY_APP_URI, "History", "history-app.html", base_url, static_dir)
 
     # --- Session state (session key only) ------------------------------------
 
@@ -214,13 +345,30 @@ def build(
         known_rev: Annotated[
             int | None, Field(description="Last revision the caller has; if unchanged, only {rev, unchanged}")
         ] = None,
+        at: Annotated[
+            str | None,
+            Field(
+                description="Hash of an earlier state (get_history): return that state instead, without going there"
+            ),
+        ] = None,
     ) -> dict[str, Any]:
-        """A session: name, revision, its state (phantom, view, fov, matrix, sequence) and the
-        link to open it in the browser."""
+        """A session: name, its project, revision, the state it is at (`head`) with the
+        state itself (phantom, view, fov, matrix, sequence, layout) and the link to
+        open it in the browser. With `at`: any state of the project's history."""
         session = await load(session_key)
+        if at is not None:
+            node = await projects.node(session.project, at)
+            return {
+                "hash": node.hash,
+                "parent": node.parent,
+                "change": node.change,
+                "actor": node.actor,
+                "time": node.time,
+                "state": node.state.model_dump(),
+            }
         if known_rev is not None and known_rev == session.rev:
             return {"rev": session.rev, "unchanged": True}
-        return public(session)
+        return await full(session)
 
     @mcp.tool
     async def patch_state(
@@ -235,23 +383,24 @@ def build(
         ],
         expected_rev: ExpectedRev = None,
     ) -> dict[str, Any]:
-        """Change several parts of a session's state at once. Returns the session."""
+        """Change several parts of a session's state at once (a new state in its history).
+        Returns the session."""
         session = await change(
             session_key,
             lambda st: State.model_validate(merge_patch(st.model_dump(), patch)),
             expected_rev,
         )
-        return public(session)
+        return await full(session)
 
-    @mcp.tool(app=AppConfig(resource_uri=SESSION_APP_URI), annotations={"readOnlyHint": True})
-    async def open_session(session_key: SessionKey, locale: LocaleArg = None) -> dict[str, Any]:
+    @mcp.tool(app=AppConfig(resource_uri=STATE_APP_URI), annotations={"readOnlyHint": True})
+    async def open_state(session_key: SessionKey, locale: LocaleArg = None) -> dict[str, Any]:
         """Show the session's state as JSON for the user to edit: "Update" sends the
         changes (patch_state, rejected with the reason if they do not validate or the
         session changed meanwhile), "Reload" drops them and loads the current state.
         In clients without MCP Apps this returns the session and the web link."""
         return await opened(session_key)
 
-    app_html(mcp, SESSION_APP_URI, "Session", "session-app.html", base_url, static_dir)
+    app_html(mcp, STATE_APP_URI, "State", "state-app.html", base_url, static_dir)
 
     # --- Workspace: several tools in panels ---------------------------------
 
@@ -361,7 +510,7 @@ def build(
         and the `state` to start from. A tool adds its own data under its own key
         (e.g. `files`)."""
         if session_key:
-            return public(await load(session_key))
+            return await full(await load(session_key))
         return {"key": None, "state": State().model_dump()}
 
     app_html(mcp, FOV_APP_URI, "FOV planner", "fov-app.html", base_url, static_dir)

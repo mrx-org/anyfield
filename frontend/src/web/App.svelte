@@ -1,5 +1,6 @@
 <script lang="ts">
-  // Standalone web app: `/` lists your sessions (login), `/s/{key}` opens one.
+  // Standalone web app: `/` lists your projects with their sessions (login), `/s/{key}`
+  // opens a session.
   import X from "@lucide/svelte/icons/x";
   import { Dialog, Portal } from "@skeletonlabs/skeleton-svelte";
   import { onMount } from "svelte";
@@ -13,7 +14,7 @@
   import Toaster from "../lib/components/Toaster.svelte";
   import { toaster } from "../lib/toast";
   import { SessionStore } from "../lib/state/session.svelte";
-  import type { SessionSummary } from "../lib/types";
+  import type { ProjectSummary } from "../lib/types";
   import { formatDateTime, i18n } from "../lib/i18n.svelte";
   import { m } from "../paraglide/messages.js";
 
@@ -21,7 +22,7 @@
   const client = new AnyfieldClient(transport);
 
   let path = $state(location.pathname);
-  let sessions = $state<SessionSummary[] | null>(null);
+  let projects = $state<ProjectSummary[] | null>(null);
   let error = $state<string | null>(null);
   let keyInput = $state("");
   let loggedIn = $state(transport.loggedIn);
@@ -37,6 +38,8 @@
   $effect(() => {
     if (!sessionKey) return;
     const s = new SessionStore(client, sessionKey);
+    // The history tool switches to another session of the project: open its page
+    s.navigate = (key) => go(`/s/${key}`);
     store = s;
     s.start();
     return () => s.stop();
@@ -56,29 +59,30 @@
     }
   }
 
-  const loadSessions = () => run(async () => {
-    sessions = await client.listSessions();
+  // A project without sessions gets one from the server (`default`)
+  const loadProjects = () => run(async () => {
+    projects = await client.listProjects();
     loggedIn = transport.loggedIn;
   });
 
   async function create() {
-    const s = await run(() => client.createSession(`Session ${formatDateTime(new Date())}`));
+    const s = await run(() => client.createProject(`${m.app_new_project()} ${formatDateTime(new Date())}`));
     if (s) go(`/s/${s.key}`);
   }
 
-  async function rename(s: SessionSummary) {
-    const name = prompt(m.app_new_name(), s.name);
-    if (name) await run(() => client.renameSession(s.key, name).then(loadSessions));
+  async function rename(p: ProjectSummary) {
+    const name = prompt(m.app_new_name(), p.name);
+    if (name) await run(() => client.renameProject(p.id, name).then(loadProjects));
   }
 
-  async function remove(s: SessionSummary) {
-    if (confirm(m.app_confirm_delete({ name: s.name }))) await run(() => client.deleteSession(s.key).then(loadSessions));
+  async function remove(p: ProjectSummary) {
+    if (confirm(m.app_confirm_delete_project({ name: p.name }))) await run(() => client.deleteProject(p.id).then(loadProjects));
   }
 
   function logout() {
     transport.logout();
     loggedIn = false;
-    sessions = null;
+    projects = null;
   }
 
   async function copyLink() {
@@ -97,7 +101,7 @@
       await transport.completeLogin();
       path = location.pathname;
       loggedIn = transport.loggedIn;
-      if (loggedIn && !sessionKey) await loadSessions();
+      if (loggedIn && !sessionKey) await loadProjects();
     });
     return () => removeEventListener("popstate", onPop);
   });
@@ -110,7 +114,10 @@
     <button class="btn btn-sm px-1 font-semibold hover:preset-tonal" onclick={() => go("/")}>anyfield</button>
     {#if store && sessionKey}
       <span class="text-muted">/</span>
-      <span>{store.server?.name ?? "…"}</span>
+      <span class="truncate">{store.server?.project.name ?? "…"}</span>
+      <span class="text-muted">/</span>
+      {#if store.server}<span class="size-2.5 shrink-0 rounded-full" style="background: {store.server.color}" aria-hidden="true"></span>{/if}
+      <span class="truncate">{store.server?.name ?? "…"}</span>
       <button class="btn btn-sm hover:preset-tonal ml-auto" onclick={() => (showState = true)} aria-haspopup="dialog">
         {m.app_state_json()}
       </button>
@@ -150,7 +157,7 @@
   </Dialog>
 
   {#if sessionKey && store}
-    <!-- The session editor (MCP tool open_session) as a modal; opened fresh each time -->
+    <!-- The state editor (MCP tool open_state) as a modal; opened fresh each time -->
     <Dialog open={showState} onOpenChange={(e) => (showState = e.open)}>
       <Portal>
         <Dialog.Backdrop class="fixed inset-0 z-50 bg-bg/80 backdrop-blur-sm" />
@@ -163,7 +170,7 @@
               </Dialog.CloseTrigger>
             </header>
             {#if showState}
-              <ToolFrame name="session" class="min-h-0 flex-1"><SessionEditor sel={store} /></ToolFrame>
+              <ToolFrame name="state" class="min-h-0 flex-1"><SessionEditor sel={store} /></ToolFrame>
             {/if}
           </Dialog.Content>
         </Dialog.Positioner>
@@ -187,27 +194,45 @@
 
       <section class="flex flex-col gap-2">
         <div class="flex items-center">
-          <h2 class="text-sm font-semibold uppercase tracking-wide text-muted">{m.app_my_sessions()}</h2>
+          <h2 class="text-sm font-semibold uppercase tracking-wide text-muted">{m.app_my_projects()}</h2>
           {#if loggedIn}<button class="btn btn-sm hover:preset-tonal ml-auto text-xs" onclick={logout}>{m.app_logout()}</button>{/if}
         </div>
-        {#if sessions === null}
-          <button class="btn preset-outlined-surface-300-700 self-start" onclick={loadSessions}>
+        {#if projects === null}
+          <button class="btn preset-outlined-surface-300-700 self-start" onclick={loadProjects}>
             {m.app_login()}
           </button>
         {:else}
-          <ul class="flex flex-col divide-y divide-border rounded border border-border">
-            {#each sessions as s (s.key)}
-              <li class="flex items-center gap-2 px-3 py-2">
-                <a class="flex-1 hover:text-accent" href="/s/{s.key}" onclick={(e) => { e.preventDefault(); go(`/s/${s.key}`); }}>{s.name}</a>
-                <span class="text-xs text-muted">{formatDateTime(new Date(s.updated_at * 1000))}</span>
-                <button class="btn btn-sm hover:preset-tonal text-xs" onclick={() => rename(s)}>{m.app_rename()}</button>
-                <button class="btn btn-sm hover:preset-tonal-error text-xs" onclick={() => remove(s)}>{m.app_delete()}</button>
+          <!-- Each project with its sessions (newest first) -->
+          <ul class="flex flex-col gap-2">
+            {#each projects as p (p.id)}
+              <li class="card flex flex-col gap-1 border border-border p-2">
+                <div class="flex items-center gap-2">
+                  <span class="min-w-0 flex-1 truncate font-medium">{p.name}</span>
+                  <span class="text-xs text-muted">{formatDateTime(new Date(p.updated_at * 1000))}</span>
+                  <button class="btn btn-sm hover:preset-tonal text-xs" onclick={() => rename(p)}>{m.app_rename()}</button>
+                  <button class="btn btn-sm hover:preset-tonal-error text-xs" onclick={() => remove(p)}>{m.app_delete()}</button>
+                </div>
+                <ul class="flex flex-col">
+                  {#each p.sessions as s (s.key)}
+                    <li>
+                      <a
+                        class="flex items-center gap-2 rounded px-2 py-1 text-sm hover:preset-tonal"
+                        href="/s/{s.key}"
+                        onclick={(e) => { e.preventDefault(); go(`/s/${s.key}`); }}
+                      >
+                        <span class="size-2.5 shrink-0 rounded-full" style="background: {s.color}" aria-hidden="true"></span>
+                        <span class="min-w-0 flex-1 truncate">{s.name}</span>
+                        <span class="text-xs text-muted">{formatDateTime(new Date(s.updated_at * 1000))}</span>
+                      </a>
+                    </li>
+                  {/each}
+                </ul>
               </li>
             {:else}
-              <li class="px-3 py-2 text-muted">{m.app_no_sessions()}</li>
+              <li class="text-muted">{m.app_no_projects()}</li>
             {/each}
           </ul>
-          <button class="btn preset-filled-primary-500 self-start" onclick={create}>{m.app_new_session()}</button>
+          <button class="btn preset-filled-primary-500 self-start" onclick={create}>{m.app_new_project()}</button>
         {/if}
       </section>
 

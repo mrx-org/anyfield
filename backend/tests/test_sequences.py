@@ -31,7 +31,7 @@ async def client(as_user):
     as_user("alice")
     mcp = build(MemoryStore(), "https://anyfield.test", files=UserFiles(FakeGateway(), "https://gw.test"))
     async with Client(mcp) as c:
-        c.key = (await c.call_tool("create_session", {})).structured_content["key"]
+        c.key = (await c.call_tool("create_project", {})).structured_content["key"]
         yield c
 
 

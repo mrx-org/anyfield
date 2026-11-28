@@ -6,5 +6,5 @@ import { stateSummary } from "./summary";
 
 mount(McpApp, {
   target: document.getElementById("app")!,
-  props: { name: "anyfield-session", toolName: "session", tool: SessionEditor, summary: stateSummary },
+  props: { name: "anyfield-state", toolName: "state", tool: SessionEditor, summary: stateSummary },
 });

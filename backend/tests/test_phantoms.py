@@ -137,7 +137,7 @@ async def client(gateway, as_user):
         files=UserFiles(gateway, "https://gw.test"),
     )
     async with Client(mcp) as c:
-        c.key = (await c.call_tool("create_session", {})).structured_content["key"]
+        c.key = (await c.call_tool("create_project", {})).structured_content["key"]
         yield c
 
 

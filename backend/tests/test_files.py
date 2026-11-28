@@ -80,7 +80,7 @@ async def test_file_list_with_a_session(as_user):
     as_user("alice")
     mcp = build(MemoryStore(), "https://anyfield.test", files=UserFiles(FakeGateway(), GATEWAY))
     async with Client(mcp) as c:
-        key = (await call(c, "create_session"))["key"]
+        key = (await call(c, "create_project"))["key"]
         r = await call(c, "open_file_list", session_key=key, mode="bifti")
         # The session for the app (a click makes a bifti its phantom), and the files
         assert r["key"] == key and "state" in r and len(r["files"]) == 1

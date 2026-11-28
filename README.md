@@ -21,17 +21,45 @@ anyfield mit `resource=https://mcp.anyfield.net/mcp`.
 
 | Was | Wie |
 | -- | -- |
-| Sessions auflisten, anlegen, umbenennen, löschen | Login über WorkOS AuthKit (GitHub oder E-Mail). Der Server verlangt ihn erst, wenn eines dieser Tools aufgerufen wird. |
-| Alle anderen Tools | Ohne Login. Mit Session nur der Session-Key als Tool-Parameter `session_key`: Wer ihn kennt, darf die Session lesen und ändern; er lässt sich teilen. |
+| Projekte auflisten, anlegen, umbenennen, löschen | Login über WorkOS AuthKit (GitHub oder E-Mail). Der Server verlangt ihn erst, wenn eines dieser Tools aufgerufen wird. |
+| Alle anderen Tools | Ohne Login. Mit Session nur der Session-Key als Tool-Parameter `session_key`: Wer ihn kennt, darf die Session lesen und ändern, ihren Verlauf und die anderen Sessions des Projekts sehen und abzweigen; er lässt sich teilen. |
 
-Web-App: `/` (eigene Sessions), `/s/{key}` (eine Session, mit Ansicht des Zustands-JSON).
+Web-App: `/` (eigene Projekte mit ihren Sessions), `/s/{key}` (eine Session im Workspace).
+
+## Projekte, Sessions, Verlauf
+
+Ein **Projekt** (Name, Eigentümer) hält einen Baum von Zuständen: jeder Knoten ist
+`{parent, state, change, actor, time}`, adressiert über den Hash darüber, unveränderlich;
+dazu die Blätter (Enden der Zweige). Eine **Session** ist ein benannter Pointer (`head`)
+in diesen Baum, wie ein Git-Branch, mit Farbe; ein Projekt hat beliebig viele.
+
+- Jede Änderung wird automatisch zum Knoten (keine Commit-Messages). Dieselbe Änderung
+  (gleiche Schlüssel, z. B. `fov.center_mm`) vom selben Akteur innerhalb von 5 s ersetzt
+  den letzten Knoten, solange er ein Blatt ist, auf das keine andere Session zeigt: ein
+  FOV-Ziehen ist ein Schritt. Der Client sendet trotzdem sofort (Live-Sync bleibt).
+- Akteur: der anyfield-Client (`_meta` `anyfield/client`: `anyfield-web`, die MCP Apps),
+  sonst der Name des MCP-Clients, mit Login der Nutzer.
+- `undo`, `redo`, `goto_state` verschieben nur den Pointer der eigenen Session; Redo an
+  einer Gabelung folgt dem Zweig, aus dem sie zurückkam. Eine Änderung nach Undo
+  verzweigt. Mehrere Nutzer derselben Session hängen linear an.
+- `create_session` zweigt ab: eine neue Session (eigener Key) an einem beliebigen Knoten.
+  `delete_session` entfernt nur den Pointer; hat ein Projekt keine Session mehr, legt der
+  Server `default` auf das neueste Blatt an (auch `list_projects`). Nichts wird aufgeräumt.
+- Das **History-Tool** (`history`, `open_history`) zeigt den Baum wie `git log --graph`,
+  neueste oben, die Sessions als farbige Marken; Klick springt, oben Undo und Redo. Mit
+  `sessions` (Standard) auch Wechsel der Session, Abzweigen, Umbenennen, Löschen; im Chat
+  setzt die KI `sessions=false`, damit der Nutzer auf ihrer Session bleibt. Gewechselt wird
+  über die Hülle (`Selection.navigate`: Website navigiert, MCP App bindet neu).
+
+Gespeichert als `p:<id>`, `n:<projekt>:<hash>`, `s:<key>`, `o:<owner>` (Projekt-IDs).
 
 ## Tools
 
 | Tool | Tools |
 | -- | -- |
-| Sessions (Login) | `list_sessions`, `create_session`, `rename_session`, `delete_session` |
-| Zustand | `get_state`, `patch_state` (JSON Merge Patch), `open_session` (JSON-Editor) |
+| Projekte (Login) | `list_projects`, `create_project`, `rename_project`, `delete_project` |
+| Sessions, Verlauf | `list_sessions`, `create_session` (abzweigen), `rename_session`, `delete_session`, `get_history`, `undo`, `redo`, `goto_state`, `open_history` |
+| Zustand | `get_state` (`at`: ein früherer Zustand), `patch_state` (JSON Merge Patch), `open_state` (JSON-Editor) |
 | Dateien | `list_user_files`, `create_file_upload_url`, `open_file_upload`, `open_file_list`, `open_file_manager` |
 | FOV-Planer | `set_fov`, `move_fov`, `rotate_fov`, `open_fov_planner`, `open_fov_viewer` |
 | Phantom (BIfTI) | `list_phantom_collections`, `list_phantoms`, `list_phantom_tissues`, `select_phantom`, `set_phantom_property`, `get_phantom_maps`, `open_phantom_browser`, `open_phantom_preview` |
@@ -165,7 +193,7 @@ gespreizt wird, um so viel, wie die Finger entlang dieser Achse auseinandergehen
 beide; je Achse ab 3 mm). Die Achsen drehen dabei mit der Box mit, Drehen und Spreizen
 gehen also gleichzeitig.
 
-Der **Session-Editor** (`session`, `open_session`, nur mit Session-Key) zeigt den Zustand
+Der **Zustands-Editor** (`state`, `open_state`, nur mit Session-Key) zeigt den Zustand
 als JSON zum Bearbeiten (CodeMirror, Syntaxfehler im Text markiert). „Update“ schickt,
 was sich gegenüber dem geladenen Stand geändert hat, als Merge Patch an `patch_state`, mit
 `expected_rev` (gelöschte Felder: zurück auf ihren Standard). Prüft der Server die
@@ -208,6 +236,8 @@ backend/   Python (uv), FastMCP, Modal
   src/anyfield/gateway.py    Gateway-Tools im Namen des Nutzers (Token Exchange) oder als `visitor`
   src/anyfield/store.py      Modal Dict + Volume (Dict-Einträge verfallen nach 7 Tagen)
   src/anyfield/migrations.py Migrationen gespeicherter Sessions (Schema-Versionen)
+  src/anyfield/projects.py   Projekte, Sessions, Schreibpfad mit Verlauf (Undo, Redo, Abzweigen)
+  src/anyfield/history.py    Hash, geänderte Schlüssel, Zusammenfassen (rein)
   src/anyfield/phantoms.py   Katalog und Karten vom Gateway, FOV → Scan-Raster
   src/anyfield/phantom_tools.py  Phantom-Tool
   src/anyfield/sequences.py  Sequenz-Quellen (Platzhalter, bis das Gateway sie listet)
@@ -220,7 +250,8 @@ frontend/  Svelte 5, TypeScript, Vite, NiiVue, Skeleton (UI), Lucide (Icons)
   src/lib/state/             Selection: SessionStore (Polling, optimistisch) oder LocalSelection
   src/lib/components/fov/    FOV-Planer (Slider) und visueller FOV-Planer
   src/lib/components/phantom/  Phantom-Browser, Phantom-Vorschau, Viewer-Baustein PhantomViewer
-  src/lib/components/session/  Session-Editor (JSON)
+  src/lib/components/session/  Zustands-Editor (JSON, Tool `state`)
+  src/lib/components/history/  History-Tool (Graph aus src/lib/history.ts)
   src/lib/components/files/    Datei-Upload, Dateiliste, Dateimanager
   src/lib/components/sequence/ Sequenz-Browser
   src/lib/components/workspace/ Workspace (dockview), Verzeichnis der Tools in src/lib/tools.ts,
@@ -268,6 +299,11 @@ Jede gespeicherte Session trägt `version` (Schema-Version, fehlt bei alten Sess
 
 Ein veröffentlichter Schritt wird nie mehr geändert; jede Änderung bekommt einen neuen.
 Neue Felder mit Standardwert brauchen keine Migration.
+
+Ein Schritt darf weitere Einträge anlegen (unter `_extra`, geschrieben nur wenn sie noch
+fehlen): v2 → v3 macht aus jeder Session ein Projekt (ID = alter Key, so bleibt die Liste
+`o:<owner>` gültig) mit dem Zustand als Wurzelknoten und eine Session `default` unter dem
+alten Key; alte Links bleiben gültig. Im Layout heißt das Tool `session` jetzt `state`.
 
 Beim Start jedes Containers (`modal_app.web`) schreibt `migrate_modal_store` alle
 Sessions in Dict und Volume auf die aktuelle Version um. Ein Marker im Dict

@@ -36,7 +36,7 @@ class FakeVolume:
 async def test_dict_miss_falls_back_to_volume(tmp_path):
     d, v = FakeDict(), FakeVolume()
     store = ModalStore(d, v, tmp_path, flush_s=0)
-    await store.put(Session(key="k1", name="a"))
+    await store.put(Session(key="k1", project="p", name="a", head="h"))
     await store.set_owned_by("u", ["k1"])
     await store.flush()
     assert v.commits == 1

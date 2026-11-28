@@ -20,6 +20,8 @@ export interface SessionStoreOptions {
  */
 export class SessionStore implements Selection {
   server = $state<Session | null>(null);
+  /** Open another session in this view (set by the shell). */
+  navigate: ((key: string) => void) | null = null;
   /** Patch not yet confirmed by the server (accumulated). */
   pending = $state<StatePatch | null>(null);
   error = $state<string | null>(null);

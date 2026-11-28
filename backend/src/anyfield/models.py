@@ -163,17 +163,78 @@ class State(BaseModel):
         return sorted(set(v)) or None if v is not None else None
 
 
-class Session(BaseModel):
-    version: int = Field(
-        default=SCHEMA_VERSION, description="Schema version of the stored session (migrations.py)"
+# Colours of the sessions of a project (markers in the history), in this order
+SESSION_COLORS = ["#3b82f6", "#f59e0b", "#10b981", "#ef4444", "#8b5cf6", "#ec4899", "#14b8a6", "#84cc16"]
+
+
+class Node(BaseModel):
+    """A state in a project's tree of changes: immutable, addressed by its hash over
+    everything else (history.node_hash). Stored as `n:<project>:<hash>`."""
+
+    version: int = SCHEMA_VERSION
+    hash: str
+    parent: str | None = None
+    state: State
+    change: list[str] = Field(
+        default_factory=list, description="What changed from the parent, e.g. ['fov.center_mm']"
     )
-    key: str
+    actor: str = ""
+    time: float = Field(default_factory=time.time)
+
+
+class NodeInfo(BaseModel):
+    """A node without its state: the project's index of its tree."""
+
+    parent: str | None = None
+    change: list[str] = Field(default_factory=list)
+    actor: str = ""
+    time: float = 0.0
+
+
+class SessionRef(BaseModel):
+    """A session as its project lists it (the session itself is `s:<key>`)."""
+
+    name: str
+    color: str
+    head: str
+    updated_at: float = 0.0
+
+
+class Project(BaseModel):
+    """What a user owns: a name, the tree of states (`nodes`, without their states)
+    with its ends (`leaves`), and the sessions that point into it. Stored as `p:<id>`."""
+
+    version: int = SCHEMA_VERSION
+    id: str
     name: str
     owner: str | None = Field(default=None, description="User id (WorkOS `sub`) of the creator")
     created_at: float = Field(default_factory=time.time)
     updated_at: float = Field(default_factory=time.time)
+    nodes: dict[str, NodeInfo] = Field(default_factory=dict)
+    leaves: list[str] = Field(default_factory=list)
+    sessions: dict[str, SessionRef] = Field(default_factory=dict, description="Its sessions by key")
+
+
+class Session(BaseModel):
+    """A named pointer into its project's tree (like a branch). `state` is the state of
+    `head`, kept here so that reading a session is one lookup. Whoever has the key may
+    use it. Stored as `s:<key>`."""
+
+    version: int = Field(
+        default=SCHEMA_VERSION, description="Schema version of the stored session (migrations.py)"
+    )
+    key: str
+    project: str
+    name: str
+    color: str = SESSION_COLORS[0]
+    created_at: float = Field(default_factory=time.time)
+    updated_at: float = Field(default_factory=time.time)
     rev: int = 0
+    head: str
     state: State = Field(default_factory=State)
+    redo: dict[str, str] = Field(
+        default_factory=dict, description="Per node the child this session last came back from (redo)"
+    )
 
 
 def merge_patch(target: Any, patch: Any) -> Any:
