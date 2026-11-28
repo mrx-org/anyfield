@@ -1,8 +1,9 @@
 <script lang="ts">
   // The page's question dialog (lib/dialog.svelte.ts), Skeleton's Dialog; mounted once
   // per page. Enter confirms, Escape or a click outside cancels. `grow` (MCP Apps): while
-  // a dialog is open the page is taller by its height, so that a chat, which sizes the
-  // app's iframe to its content, makes room for it.
+  // a dialog is open the page is at least as tall as the dialog (and a margin), so that a
+  // chat, which sizes the app's iframe to its content, makes room for it; a page that is
+  // tall enough stays as it is.
   import X from "@lucide/svelte/icons/x";
   import { Dialog, Portal } from "@skeletonlabs/skeleton-svelte";
   import { m } from "../../paraglide/messages.js";
@@ -13,6 +14,17 @@
   const d = $derived(dialogs.current);
   let text = $state("");
   let field = $state<HTMLInputElement>();
+  /** Height of the open dialog (px). */
+  let height = $state(0);
+
+  $effect(() => {
+    if (!grow || !d || !height) return;
+    // + the dialog's padding and border, and the margin around it (p-4 each)
+    document.body.style.minHeight = `${height + 72}px`;
+    return () => {
+      document.body.style.minHeight = "";
+    };
+  });
 
   // A new question: its text in the field, focused and selected
   $effect(() => {
@@ -27,10 +39,11 @@
 
 <Dialog open={!!d} onOpenChange={(e) => !e.open && cancel()}>
   <Portal>
-    <Dialog.Backdrop class="fixed inset-0 z-50 bg-bg/80 backdrop-blur-sm" />
+    <Dialog.Backdrop class="fixed inset-0 z-50 bg-white/50 dark:bg-black/50" />
     <Dialog.Positioner class="fixed inset-0 z-50 flex items-center justify-center p-4">
       <Dialog.Content class="card flex w-full max-w-sm flex-col gap-3 border border-border bg-bg p-4 text-sm text-text shadow-xl">
         {#if d}
+          <div class="flex flex-col gap-3" bind:clientHeight={height}>
           <header class="flex items-center gap-2">
             <Dialog.Title class="font-semibold">{d.title}</Dialog.Title>
             <Dialog.CloseTrigger class="btn-icon btn-icon-sm hover:preset-tonal ml-auto" aria-label={m.common_close()}>
@@ -60,9 +73,9 @@
               {d.confirm ?? m.common_ok()}
             </button>
           </div>
+          </div>
         {/if}
       </Dialog.Content>
     </Dialog.Positioner>
   </Portal>
 </Dialog>
-{#if grow && d}<div class="h-64" aria-hidden="true"></div>{/if}
