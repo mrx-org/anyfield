@@ -22,6 +22,7 @@ tests/prot_uv_colab_conform_tests/.colab_conform_*
 zu_tun.md
 __pycache__/
 *.pyc
+.venv/
 .pytest_cache/
 # Repo-local extracted system libs for headless Chromium (Playwright e2e tests)
 # on machines without root/apt access -- see scripts/setup_e2e_deps.sh

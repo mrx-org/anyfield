@@ -1,6 +1,6 @@
 # Anyfield MRI scanner
 
-*v4.0.0 — [release notes](release_notes.md)*
+*v4.1.0 — [release notes](release_notes.md)*
 
 *Plan and run Pulseq MRI sequences in a virtual scanner environment.*
 

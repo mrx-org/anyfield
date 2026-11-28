@@ -19,7 +19,7 @@ import pytest
 from playwright.sync_api import BrowserContext, ConsoleMessage, Page
 from playwright.sync_api import TimeoutError as PlaywrightTimeoutError
 
-from app_seam import CONTEXT_JS, EXPLORER_JS, NV_JS
+from app_seam import EXPLORER_JS, NV_JS
 from github_stub import GitHubStub, install_github_stub
 from phantom_stub import PhantomStub, install_phantom_stub
 
@@ -59,10 +59,9 @@ BOOT_TIMEOUT_MS = 180_000
 
 # The default phantom's ~25MB .tar.gz no longer comes from the network: tests/e2e/phantom_stub.py
 # serves it from tests/e2e/.phantom-cache/. So this is not a download budget any more. What
-# remains is the app's own work -- gzip + tarfile over the 29MB archive inside Pyodide, then
-# three NIfTIs and the JSON written into its VFS -- plus the stub deliberately holding the
-# response until the app's shared Pyodide exists (that module documents the app race it is
-# working around, and why the wait costs no wall time).
+# remains is the app's own work -- unpacking the archive in the page and adding the three
+# NIfTIs to the viewer. The worker /phantom VFS is not part of it: the app writes the archive
+# there only when Execute / JSON Save first needs it.
 #
 # Measured over 5 instrumented suite runs (30 boots), the phantom was ready 0.0-1.0s after
 # `wait_ready` returned, every time. 60s is therefore a huge margin, kept so on purpose: it is
@@ -82,24 +81,15 @@ APP_READY_JS = f"""
 DEFAULT_PHANTOM_JSON = "subj04-3T-1mm-tra.json"
 DEFAULT_PHANTOM_NIFTIS = ("subj04.nii.gz", "subj04_dB0.nii.gz", "subj04_B1+.nii.gz")
 
-# That load races APP_READY_JS: it is a separate promise chain in bootstrap() that nothing
-# waits for, so at app-ready the worker /phantom VFS is regularly still half-written
-# (observed with one of the three NIfTIs and no JSON at all). Anything touching /phantom
-# must wait for the whole set -- the JSON on the worker VFS, in the editor, and the group
-# in the viewer. Checking the VFS specifically is what caught the app race described in
-# tests/e2e/phantom_stub.py: the viewer can show all three volumes while /phantom does
-# not exist at all. Extract only needs worker whenInit(); ready() waits on pynufft.
+# That load is its own promise chain in bootstrap(), and APP_READY_JS can be true before it
+# lands. Anything using the phantom must wait for the whole set -- the JSON
+# in the editor and the group in the viewer. The worker /phantom VFS is deliberately not
+# checked: it stays empty until Execute / JSON Save needs it (NiivueModule._phantomVfsWorker).
 PHANTOM_READY_JS = f"""
-async () => {{
+() => {{
   const nv = {NV_JS};
-  const host = {CONTEXT_JS}?.pyWorker;
-  if (!host || !nv?.jsonTabCurrentName) return false;
-  let client;
-  try {{ client = await host.whenInit(); }} catch (_) {{ return false; }}
-  let entries;
-  try {{ entries = await client.fsReaddir('/phantom'); }} catch (_) {{ return false; }}
-  return entries.includes(nv.jsonTabCurrentName)
-    && nv.volumeGroups.some(g => g.jsonFileName === nv.jsonTabCurrentName && g.volumes.length > 0)
+  if (!nv?.jsonTabCurrentName) return false;
+  return nv.volumeGroups.some(g => g.jsonFileName === nv.jsonTabCurrentName && g.volumes.length > 0)
     && String(nv.getJsonEditorValue() || '').trim().length > 0;
 }}
 """
@@ -163,8 +153,7 @@ class BootedApp:
         the archive comes off local disk.
 
         The load can still fail outright: loudly (a console error mentioning phantom)
-        or silently, with the viewer showing volumes while the worker /phantom VFS
-        never receives them. Either way the phantom simply never arrives here.
+        or silently. Either way the phantom simply never arrives here.
         Waiting the full boot timeout for that would cost three minutes and report
         nothing, so this gets its own shorter budget and quotes what the app logged
         -- deliberately no retry, because a test that hides the race is worth less
@@ -179,7 +168,7 @@ class BootedApp:
                 m.text for m in self.console if "phantom" in m.text.lower() and m.type != "log"
             ]
             raise AssertionError(
-                "bootstrap()'s default phantom never landed in the worker /phantom VFS within "
+                "bootstrap()'s default phantom never landed in the viewer within "
                 f"{PHANTOM_TIMEOUT_MS / 1000:.0f}s. The app logged:\n  "
                 + ("\n  ".join(reported) or "(nothing about a phantom)")
                 + "\nThis is the known intermittent failure of loadDefaultCachePhantom(), "

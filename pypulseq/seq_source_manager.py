@@ -3,15 +3,10 @@ Python-based source manager for sequence explorer.
 Handles cloning, inspecting, and extracting sequences from various sources.
 """
 import json
-import inspect
-import importlib
-import pkgutil
 import os
 import sys
 import re
 import ast
-from pathlib import Path
-from typing import get_origin, get_args
 
 try:
     import tomllib
@@ -441,85 +436,27 @@ class SourceManager:
         else:
             raise ValueError("Config must be a string (TOML or JSON)")
     
-    def get_functions_from_package(self, package_path, filter_seq_prefix=False):
+    def find_module_file(self, module_path):
         """
-        Extract functions from all modules in a package.
-        
-        Args:
-            package_path: Python package path (e.g., 'mrseq.scripts')
-            filter_seq_prefix: If True, only return functions starting with 'seq_' or named 'main'
-            
+        Locate the source file of a dotted module path by scanning sys.path plus the
+        filesystem root (execute_function's import root for VFS mirrors such as
+        /built_in_seq), without importing it or its parent packages (whose __init__
+        may import pypulseq).
+
         Returns:
-            Dictionary mapping module names to their functions
+            Path to ``a/b/c.py``, or ``a/b/c/__init__.py`` for a package.
+
+        Raises:
+            ModuleNotFoundError: when neither exists.
         """
-        try:
-            package = importlib.import_module(package_path)
-            package_path_obj = package.__path__ if hasattr(package, '__path__') else None
-            
-            all_functions = {}
-            
-            if package_path_obj:
-                for importer, modname, ispkg in pkgutil.iter_modules(package_path_obj, package_path + '.'):
-                    if ispkg:
-                        continue
-                    
-                    try:
-                        module = importlib.import_module(modname)
-                        # Last dotted segment, matching noexec's file stem. The tree
-                        # stores `${moduleName}.py` and labels the last segment.
-                        module_basename = modname.rsplit('.', 1)[-1]
-                        
-                        functions = []
-                        for name in dir(module):
-                            if name.startswith('_'):
-                                continue
-                            
-                            obj = getattr(module, name)
-                            if inspect.isfunction(obj):
-                                # Apply filter
-                                if filter_seq_prefix and not (name.startswith('seq_') or name == 'main'):
-                                    continue
-                                
-                                functions.append({
-                                    'name': name,
-                                    'doc': inspect.getdoc(obj) or '',
-                                    'signature': str(inspect.signature(obj))
-                                })
-                        
-                        if functions:
-                            all_functions[module_basename] = {
-                                'functions': functions,
-                                'full_module_path': modname
-                            }
-                    except Exception as e:
-                        print(f"Warning: Could not load module {modname}: {e}", file=sys.stderr)
-                        continue
-            else:
-                # Single module
-                module = importlib.import_module(package_path)
-                module_name = package_path.rsplit('.', 1)[-1]
-                functions = []
-                for name in dir(module):
-                    if name.startswith('_'):
-                        continue
-                    obj = getattr(module, name)
-                    if inspect.isfunction(obj):
-                        if filter_seq_prefix and not (name.startswith('seq_') or name == 'main'):
-                            continue
-                        functions.append({
-                            'name': name,
-                            'doc': inspect.getdoc(obj) or '',
-                            'signature': str(inspect.signature(obj))
-                        })
-                if functions:
-                    all_functions[module_name] = {
-                        'functions': functions,
-                        'full_module_path': package_path
-                    }
-            
-            return all_functions
-        except Exception as e:
-            return {'error': str(e)}
+        parts = module_path.split('.')
+        root = os.path.abspath(os.path.sep)
+        for base in sys.path + ([root] if root not in sys.path else []):
+            stem = os.path.join(base, *parts)
+            for candidate in (stem + '.py', os.path.join(stem, '__init__.py')):
+                if os.path.isfile(candidate):
+                    return candidate
+        raise ModuleNotFoundError(f'No source file for {module_path!r} on sys.path')
 
     def get_functions_from_package_noexec(self, package_path):
         """
@@ -527,9 +464,10 @@ class SourceManager:
         any module.  Locates the package directory by scanning sys.path, then reads
         each .py file and parses with ast.parse — no importlib.import_module calls,
         so module-level side-effects (e.g. importing pypulseq) are never triggered.
+        A dotted path that names a single module file lists just that file.
 
         Args:
-            package_path: Dotted package path (e.g. 'mrseq.scripts')
+            package_path: Dotted package or module path (e.g. 'mrseq.sequences')
 
         Returns:
             Dict mapping module_basename -> {'functions': [...], 'full_module_path': str}
@@ -546,6 +484,14 @@ class SourceManager:
                 pkg_dir = candidate
                 break
         if pkg_dir is None:
+            for base in sys.path:
+                module_file = os.path.join(base, *parts) + '.py'
+                if os.path.isfile(module_file):
+                    with open(module_file, 'r', encoding='utf-8', errors='replace') as f:
+                        functions = self.parse_file_functions(f.read(), filter_seq_prefix=False)
+                    if not functions:
+                        return {}
+                    return {parts[-1]: {'functions': functions, 'full_module_path': package_path}}
             return {'error': f'Package directory for {package_path!r} not found in sys.path'}
 
         for fn in sorted(os.listdir(pkg_dir)):
@@ -659,82 +605,6 @@ class SourceManager:
 
         return {'params': params, 'doc': doc}
 
-    def extract_function_parameters(self, module_path, function_name):
-        """
-        Extract parameters from a function using inspect (requires import).
-        
-        Args:
-            module_path: Full module path (e.g., 'mrseq.scripts.t1_inv_rec_gre_single_line')
-            function_name: Name of the function
-            
-        Returns:
-            List of parameter dictionaries with 'name', 'default', 'type'
-        """
-        import numpy as np
-        import os
-        import sys
-        
-        params = []
-        try:
-            func = None
-            
-            if module_path:
-                # Ensure filesystem root is on path so /built_in_seq, /pypulseq_examples, etc. can be imported
-                _root = os.path.abspath(os.path.sep)
-                if _root not in sys.path:
-                    sys.path.insert(0, _root)
-                module = importlib.import_module(module_path)
-                func = getattr(module, function_name, None)
-            else:
-                raise ValueError("module_path must be provided")
-            
-            if func is None:
-                raise AttributeError(f"Function '{function_name}' not found")
-            
-            # Extract parameters using inspect
-            sig = inspect.signature(func)
-            for name, p in sig.parameters.items():
-                if name == 'system':
-                    continue
-                
-                d = p.default
-                val = d
-                type_name = type(d).__name__
-                
-                if isinstance(d, np.ndarray):
-                    val = d.tolist()
-                    type_name = 'ndarray'
-                elif isinstance(d, (tuple, list)):
-                    val = list(d)
-                    type_name = 'list'
-                elif d is inspect._empty:
-                    val = None
-                    type_name = 'None'
-                
-                # Override type for typing.Annotated[str, "file"] or Annotated[str, "url"]
-                if hasattr(p, 'annotation') and p.annotation is not inspect.Parameter.empty:
-                    ann = p.annotation
-                    origin = get_origin(ann)
-                    if origin is not None:  # Annotated has a non-None origin in 3.9+
-                        args = get_args(ann)
-                        if len(args) >= 2 and args[1] in ('file', 'url'):
-                            type_name = args[1]
-
-                val = _json_safe_default(val)
-
-                params.append({
-                    'name': name,
-                    'default': val,
-                    'type': type_name
-                })
-            
-            return params
-        except (AttributeError, ValueError) as e:
-            # Re-raise our clear "function not found" / "invalid args" messages as-is
-            raise
-        except Exception as e:
-            raise Exception(f"Failed to extract parameters: {e}")
-    
     def convert_notebook_to_python(self, notebook_json):
         """
         Convert Jupyter notebook JSON to Python code.

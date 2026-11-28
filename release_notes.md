@@ -1,5 +1,14 @@
 # Release notes
 
+## v4.1.0
+
+- **PDGo1 backend, new SCAN default** — new Modal HTTP gateway PDGo1 (T4 / A10; CUDA PDG v8 with off-resonant shaped RF pulses). SCAN▶ now runs on **PDGo1 T4** for pro and non-pro users; pro SCAN▶▶ runs on **PDGv2 T4**. The gear's backend choice is session-only again (no `localStorage`), so stale picks no longer swap the buttons after a reload. Old links naming `mr0sim` / `rapisim` still map to mr0 T4.
+- **Faster startup (~8 s instead of ~20 s to a usable UI)** — the main-thread Pyodide boots slim with only `numpy` + `micropip`. pypulseq, matplotlib and scipy load there lazily, only for a matplotlib plot speed (Full / Fast / Faster, or the no-WebGPU fallback). Sequence build and the default ChartGPU plot run on the worker, which warms up after the loader closes. Sequence parameters and docstrings for every source (file, folder, and module sources like `mrseq.sequences`) are read via AST without importing the module; main installs only `mrseq` itself (no h5py / ismrmrd / pypulseq), its full dependency set goes to the worker. Removed the import-based extraction helpers.
+- **Phantom unpacked in JS** — the downloaded phantom `.tar.gz` is gunzipped and untarred in the browser (`unpackPhantomArchive` in `scan_zero/bifti_cache.js`), so volumes and JSON show right after the download. The archive is copied into the worker's `/phantom` only on the first `/phantom` JSON Execute.
+- **Loader progress bar** — the startup overlay shows progress through the runtime boot and the phantom download / unpack / display.
+- **Sim duration in the scan tooltip** — each finished HTTP scan records its simulate time (submit until the gateway reports done, including upload and Modal queue / cold start) as `[simulation].sim_duration_s` in its protocol; the tooltip shows it on the backend line, e.g. `backend: PDGo1 T4 (m), sim 39.6 s`.
+- **Scan list on the worker** — showing a finished scan's `.seq` (ChartGPU) and reading its `matrix` definition for recon now run on the Python worker.
+
 ## v4.0.0
 
 - **Pyodide in a Web Worker** — the main app's Python (sequence build + plot, `/phantom` JSON execute, HTTP result decode, scan recon) runs on a dedicated worker (`anyfield_py_worker.js`), so the UI stays responsive during long runs. ChartGPU samples cross as bytes; the no-WebGPU fallback renders an Agg PNG.

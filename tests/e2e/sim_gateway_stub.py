@@ -1,8 +1,8 @@
 """Answer the Modal HTTP sim gateway's job protocol from memory, without simulating.
 
-`DEFAULT_SIM_BACKEND_ID` in scan_zero/sim_backends.js is `modal_http_t4`, whose
+`DEFAULT_SIM_BACKEND_ID` in scan_zero/sim_backends.js is `pdgo1_t4`, whose
 `transport` is `'http'`, so the whole remote half of a scan is three plain HTTP calls
-against `TOOL_MR0SIM_HTTP_MODAL` (see `_httpSubmitJob` / `_httpGetStatus` /
+against `TOOL_PDGO1_HTTP` (see `_httpSubmitJob` / `_httpGetStatus` /
 `_httpFetchResultNpz`). That makes the scan pipeline drivable with `page.route()` alone --
 no WebSocket interception, and no GPU.
 
@@ -24,10 +24,10 @@ from dataclasses import dataclass, field
 
 from playwright.sync_api import Page, Route
 
-# scan_zero/sim_backends.js: TOOL_MR0SIM_HTTP_MODAL, the httpBaseUrl of every modal_http_*
-# backend. `_getHttpSimBaseUrl` falls back to bifti_cache.js's `simGatewayBase()`, which
-# resolves to this same constant unless window.ANYFIELD_HTTP_SIM_URL overrides it.
-GATEWAY_BASE = "https://mzaiss--tool-mr0sim-modal-http-gateway.modal.run"
+# scan_zero/sim_backends.js: TOOL_PDGO1_HTTP, the httpBaseUrl of pdgo1_t4
+# (DEFAULT_SIM_BACKEND_ID). `_getHttpSimBaseUrl` uses the job's own gateway unless
+# window.ANYFIELD_HTTP_SIM_URL overrides it.
+GATEWAY_BASE = "https://mzaiss--pdgo1-gateway.modal.run"
 
 JOB_ID = "e2e-sim-job"
 

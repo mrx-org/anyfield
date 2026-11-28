@@ -164,8 +164,8 @@ Built-in sequences are fetched from GitHub (`anyseq`, `builtin` folder sources) 
 **Intent:** `sources.toml` only describes *where* to get code (`type`, `path`/`url`). At runtime, **every loaded sequence function is always used as a module** — i.e. we always call with `module_path` and `function_name`, never with raw `code`.
 
 **Benefits:**
-- **Single code path** for parameter extraction and execution: no branching on “file vs module”.
-- **Faster inspect:** `importlib.import_module(module_path)` then `inspect.signature(getattr(module, function_name))`. No `exec(code)` of the full file; `if __name__ == '__main__':` blocks do not run on import.
+- **Single code path** for execution: no branching on “file vs module”.
+- **No exec of the full file:** execution imports the module (`if __name__ == '__main__':` blocks do not run); parameter extraction never imports (§6).
 - **Predictable behavior:** No accidental execution of script blocks; same semantics for built-ins, folder, remote, and user files.
 
 **Implementation outline:**
@@ -173,7 +173,8 @@ Built-in sequences are fetched from GitHub (`anyseq`, `builtin` folder sources) 
   1. Fetch or read the code from the configured path/url (unchanged).
   2. Write files into a VFS directory that is a valid Python package (with `__init__.py` where needed), e.g. `/anyseq/scripts/`, `/pypulseq_examples/scripts/`, `/remote_modules/`, `/user/seq/`, `/user/prot/`.
   3. Set **`fullModulePath`** (e.g. `anyseq.scripts.gre_seq`, `pypulseq_examples.scripts.write_epi`, `user.seq.foo`, `user.prot.prot_gre`) for each discovered sequence/protocol and attach it to the source/sequence metadata. The sequence key in the explorer is `fullModulePath` for folder and remote; for user files it is path or `fullModulePath` as set by the loader.
-- **Parameter loading** and **execution** use only the module path: `extract_function_parameters(module_path, function_name)` and `execute_function(module_path, function_name, args_dict)`. There is no `code` argument or fallback; if `fullModulePath` is missing, the UI throws a clear error (e.g. "Sequence has no module path; cannot load parameters."). All loaders must provide `fullModulePath`.
+- **Execution** uses only the module path: `execute_function(module_path, function_name, args_dict)` (on the Python worker, or on the main thread for the matplotlib plot speeds). If `fullModulePath` is missing, the UI throws a clear error (e.g. "Sequence has no module path; cannot load parameters."). All loaders must provide `fullModulePath`.
+- **Parameter loading** AST-parses the source (§6): the kept code / VFS mirror for file and folder sources, or the installed package file located by `find_module_file(module_path)` for module sources.
 - Protocol generation and import statements use the same module path (e.g. `from anyseq.scripts.gre_seq import seq_gre`).
 
 ### 5. Protocol generation and FOV sync
@@ -205,14 +206,15 @@ Protocol files are generated with:
 
 **Intent:** The UI builds dynamic parameter controls from the **base sequence**’s function signature. When executing or when saving a protocol, we need to turn UI values into Python argument expressions that the base sequence accepts.
 
-**Inspection (Python, `seq_source_manager.py`) — inspect only:**
-- Parameters are extracted via **inspect only**: get the function (by importing the module), then `inspect.signature(func)` and each parameter's default. No AST path; one code path, real runtime types and defaults.
-- **Resolving the function (unified module model, §4a):** All loaded sequences and protocols have a `fullModulePath`. We always use **`importlib.import_module(module_path)`** then **`getattr(module, function_name)`**. No `exec(code)`; if `module_path` is missing, Python raises `ValueError("module_path must be provided")`. The JS throws a user-facing error when `fullModulePath` is absent (e.g. for protocols, ensure it is set when saving and when loading from `user/prot/` or `user/seq/`).
+**Inspection (Python, `seq_source_manager.py`) — AST only:**
+- Parameters and the docstring come from `extract_function_parameters_noexec(file_path, function_name, code=None)`: `ast.parse` of the source, top-level function only, `system` skipped. Nothing is imported, so the slim main-thread Pyodide (numpy + micropip) never needs pypulseq or a sequence's other packages to show its parameters.
+- **Which source:** file and folder sources pass their kept code (or VFS mirror); module sources (e.g. `mrseq.sequences`) pass `find_module_file(module_path)`, which scans `sys.path` (plus the VFS root) for `a/b/c.py` without importing parent packages. The main thread installs only the module source's own package (no deps) so the file exists; all declared deps go to the worker.
+- Defaults are evaluated from literals plus simple arithmetic and `np.pi` / `np.inf` / `np.nan` / `np.array([...])`. A default that needs runtime values (a module constant, a function call) is not resolved. Checked equal to the former import-based extraction for all 26 `mrseq.sequences` functions (mrseq 0.260810).
 - **Type normalization:** All extracted types are normalized before sending to the frontend:
   - `tuple` and `list` → stored as **type `'list'`**, value converted to a list (so the sequence’s `fov: tuple = (256e-3, 256e-3, 3e-3)` becomes type `'list'` and default `[0.256, 0.256, 0.003]`).
   - `np.ndarray` → **type `'ndarray'`**, value as list (`.tolist()`).
   - Other types → type is `type(default).__name__` (e.g. `'int'`, `'float'`, `'bool'`, `'str'`), or `'None'` if no default.
-- Runs when the user selects a sequence in the UI (once per selection). Cost is dominated by import/exec; `inspect.signature()` is negligible. Signature types (e.g. tuple) are normalized to list/ndarray in the UI.
+- Runs when the user selects a sequence in the UI (once per selection); parsing one file is cheap. Signature types (e.g. tuple) are normalized to list/ndarray in the UI.
 
 **Protocol argument generation (JS, `seq_explorer.js`):**
 - When building the protocol file or the execute script, UI values are turned into Python expression strings:
@@ -241,9 +243,8 @@ Protocol files are generated with:
 - It lives in the `anyseq/` folder and is discovered via the `anyseq` GitHub folder source (no separate registration).
 
 **Type detection (Python, `seq_source_manager.py`):**
-- In `extract_function_parameters`, after deriving `type_name` from the default value, **optionally** inspect the parameter’s annotation.
-- If the annotation is `typing.Annotated[...]` (use `get_origin` and `get_args`), and the metadata (second element of `get_args`) is the string `"file"` or `"url"`, set `type_name = 'file'` or `'url'` instead of `'str'`.
-- No other inspect logic changes; only this override for annotated params.
+- In the AST extraction (`_ast_param_type_from_annotation`), after deriving `type_name` from the default value, read the parameter’s annotation.
+- If the annotation is `Annotated[...]` whose second element is the string `"file"` or `"url"`, set `type_name = 'file'` or `'url'` instead of `'str'`.
 
 **Param UI (JS, `seq_explorer.js`):**
 - In `renderParameterControls`, for `param.type === 'file'` or `param.type === 'url'`: render a **text input** (path/URL) plus an **upload button** (for `'file'`). On file selection: write the file to the Pyodide VFS (e.g. `/uploads/`), ensure the directory exists, and set the text input’s value to that VFS path. The value passed to execute is always a string (path or URL).

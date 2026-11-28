@@ -19,7 +19,7 @@
 
 import { NiivueModule, ScanPreviewModule, ComparePane } from './niivue_app.js';
 import { MainHistogramController, PreviewJointHistogramController } from './hist_panel/histogram-clim-panel.js';
-import { SequenceExplorer, patchSequencePlotFromCode } from './pypulseq/seq_explorer.js';
+import { SequenceExplorer } from './pypulseq/seq_explorer.js';
 import { ScanModule } from './scan_zero/scan_module.js?v=14';
 import { AppContext, setAppContext } from './app_context.js';
 import { initFooterCards } from './footer_cards.js';
@@ -62,26 +62,16 @@ if (initialSeqUrl && !initialProt) {
 
 export async function bootstrap() {
     try {
-        // Prefetch plot utils while Pyodide downloads (patch runs inside pyodidePromise, under loader).
-        const plotUtilsFetch = fetch(`pypulseq/seq_plot_utils.py?${Date.now()}`).then(async (r) => {
-            if (!r.ok) throw new Error(`seq_plot_utils.py: ${r.status}`);
-            return r.text();
-        });
-
-        // A. START PYODIDE & PACKAGES IN BACKGROUND (do not await)
+        // A. START PYODIDE IN BACKGROUND (do not await)
+        // Slim on purpose: sources, the tree and the parameter table are stdlib-only, and
+        // sequences run and plot (ChartGPU) on ctx.pyWorker. pypulseq + matplotlib + scipy
+        // cost ~10s here and only the main-thread matplotlib plot needs them, so
+        // SequenceExplorer.ensureMainPlotStack() loads them on that path.
         const pyodidePromise = (async () => {
             const py = await loadPyodide({
                 indexURL: "https://cdn.jsdelivr.net/pyodide/v0.29.0/full/",
             });
-            await py.loadPackage(['numpy', 'micropip', 'matplotlib', 'scipy']);
-            const plotUtilsCode = await plotUtilsFetch;
-            // Pin pypulseq for reproducible .seq format and API.
-            // deps=False: numpy already loaded; matplotlib/scipy loaded on demand — skips ~3s of transitive dep downloads.
-            await py.runPythonAsync(`
-import micropip
-await micropip.install('pypulseq==1.5.0.post1', deps=False)
-`);
-            await patchSequencePlotFromCode(py, plotUtilsCode);
+            await py.loadPackage(['numpy', 'micropip']);
             return py;
         })();
 
@@ -112,7 +102,6 @@ await micropip.install('pypulseq==1.5.0.post1', deps=False)
             }
         });
         ctx.explorer = explorer;
-        explorer._plotStackReady = pyodidePromise;
         explorer.renderTree('seq-tree-container');
         explorer.renderParams('seq-params-container');
         await explorer.renderPlot('seq-plot-container');
@@ -175,16 +164,93 @@ await micropip.install('pypulseq==1.5.0.post1', deps=False)
 
         const mainViewerEl = document.getElementById('nv-viewer-container');
         if (mainViewerEl) mainViewerEl.classList.add('viewer-waiting-demo');
+
+        // Boot bar: Python creeps through the first 55 points; the phantom archive
+        // owns the rest (download, extract, show) and the overlay stays up until both finish.
+        const loaderProgress = (() => {
+            const BOOT_MAX = 55;
+            const PHANTOM_MAX = 44;
+            let bootScore = 0;
+            let phantomScore = 0;
+            let bootDone = false;
+            const PHANTOM_GUESS = 26_000_000;
+            const paint = () => {
+                const n = Math.max(0, Math.min(99, Math.round(bootScore + phantomScore)));
+                const fill = document.querySelector('.loader-progress-fill');
+                const label = document.querySelector('.loader-progress-label');
+                if (fill) fill.style.width = `${n}%`;
+                if (label) label.style.setProperty('--loader-pct', String(n));
+            };
+            const creep = setInterval(() => {
+                let changed = false;
+                if (!bootDone && bootScore < BOOT_MAX - 1) {
+                    bootScore = Math.min(BOOT_MAX - 1, bootScore + Math.max(1, (BOOT_MAX - bootScore) * 0.08));
+                    changed = true;
+                }
+                // Adding the volumes to Niivue has no byte stream. Keep those points moving until they land.
+                if (phantomScore >= 38 && phantomScore < 43) {
+                    phantomScore = Math.min(43, phantomScore + Math.max(0.25, (43 - phantomScore) * 0.15));
+                    changed = true;
+                }
+                if (changed) paint();
+            }, 400);
+            return {
+                notePhantom(info) {
+                    const text = document.getElementById('loader-text');
+                    if (text) text.classList.add('is-phantom');
+                    const phase = info?.phase;
+                    if (phase === 'download') {
+                        let fraction = info.fraction;
+                        if (fraction == null) {
+                            const guess = info.total > 0 ? info.total : PHANTOM_GUESS;
+                            fraction = Math.min(0.97, (info.received || 0) / guess);
+                        }
+                        phantomScore = Math.max(phantomScore, Math.min(36, fraction * 36));
+                    } else if (phase === 'extract') {
+                        phantomScore = Math.max(phantomScore, 37);
+                    } else if (phase === 'show') {
+                        phantomScore = Math.max(phantomScore, 38);
+                    } else if (phase === 'ready') {
+                        phantomScore = PHANTOM_MAX;
+                    }
+                    paint();
+                },
+                finishBoot() {
+                    bootDone = true;
+                    bootScore = BOOT_MAX;
+                    paint();
+                },
+                complete() {
+                    bootDone = true;
+                    bootScore = BOOT_MAX;
+                    phantomScore = PHANTOM_MAX;
+                    paint();
+                },
+                stop() {
+                    clearInterval(creep);
+                },
+            };
+        })();
+
         // Wait for the gate so we don't load the default phantom then replace it with the shared one.
-        const phantomReady = sharedGateReady.then(({ accepted, preview }) => {
-            if (accepted && preview?.phantom) {
-                // The shared phantom is loaded by selectInitialSequence (applySimulationStateFromMeta).
+        // The load itself is part of this promise: the overlay must not hide before the volumes exist.
+        const phantomReady = sharedGateReady.then(async ({ accepted, preview }) => {
+            const opts = { onProgress: (info) => loaderProgress.notePhantom(info) };
+            try {
+                if (accepted && preview?.phantom) {
+                    const loading = nvModule.loadPhantomFromCache(preview.phantom, opts);
+                    // selectInitialSequence applies FOV afterwards and waits on this instead of downloading again.
+                    explorer._sharedPhantomPromise = loading;
+                    await loading;
+                    explorer._sharedPhantomAlreadyLoaded = true;
+                    return;
+                }
+                await nvModule.loadDefaultCachePhantom(opts);
+            } catch (err) {
+                console.error('Default phantom load failed:', err);
+            } finally {
                 if (mainViewerEl) mainViewerEl.classList.remove('viewer-waiting-demo');
-                return;
             }
-            return nvModule.loadDefaultCachePhantom().finally(() => {
-                if (mainViewerEl) mainViewerEl.classList.remove('viewer-waiting-demo');
-            });
         }).catch((err) => {
             console.error('Default phantom load failed:', err);
             if (mainViewerEl) mainViewerEl.classList.remove('viewer-waiting-demo');
@@ -252,8 +318,9 @@ await micropip.install('pypulseq==1.5.0.post1', deps=False)
             }, { passive: true });
         })();
 
-        // C. WHEN PYODIDE IS READY: finish setup, then hide loader and show footer
+        // C. Hide the loader only once Python, the sources, AND the phantom are in.
         function hideLoaderAndShowFooter() {
+            loaderProgress.stop();
             const loaderEl = document.getElementById('loader');
             const footerWrapper = document.querySelector('.footer-wrapper');
             if (loaderEl) loaderEl.classList.add('hidden');
@@ -270,8 +337,12 @@ await micropip.install('pypulseq==1.5.0.post1', deps=False)
             await Promise.all([
                 nvModule.initPyodide(),
                 explorer.loadSourcesFromConfig(configCode),
+                phantomReady,
             ]);
+            loaderProgress.finishBoot();
             nvModule.updateJsonTab();
+            const phantomIn = (nvModule.nv?.volumes?.length || 0) > 0;
+            if (phantomIn) loaderProgress.complete();
             hideLoaderAndShowFooter();
             // Warm the Python worker only now. Its slow part is micropip fetching
             // pynufft, scipy and nibabel, and starting it any earlier would compete for
@@ -279,8 +350,6 @@ await micropip.install('pypulseq==1.5.0.post1', deps=False)
             // still cannot arrive before this, since it needs a sequence selected first
             // -- and if one does, it joins this same promise rather than installing twice.
             ctx.pyWorker.startWarmUp();
-            // Default phantom fetch/render may still finish in background
-            phantomReady.catch(() => {});
         }).catch(async (e) => {
             console.error("Pyodide/background setup failed:", e);
             hideLoaderAndShowFooter();

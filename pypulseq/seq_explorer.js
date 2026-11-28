@@ -184,7 +184,7 @@ const SEQ_TEMPLATES = {
     }
 };
 
-export async function patchSequencePlotFromCode(pyodide, plotUtilsCode) {
+async function patchSequencePlotFromCode(pyodide, plotUtilsCode) {
     await pyodide.runPythonAsync(plotUtilsCode);
     await pyodide.runPythonAsync('patch_pypulseq()');
 }
@@ -234,7 +234,7 @@ export class SequenceExplorer {
         this.filterSeqPrefix = this.config.onlySeqPrefix;
         this.installedPackages = new Set(); // Track installed packages to avoid reinstalling
         this.defaultInterpreterSeqPath = null; // Preloaded default .seq path for interpreter
-        this._plotStackReady = null; // Promise: plot patch complete (set by bootstrap; await before first plot)
+        this._mainPlotStack = null; // Promise: main-thread matplotlib + pypulseq + plot patch (ensureMainPlotStack)
         this._seqChartGpuDisconnect = null;
         this._seqChartGpuCharts = null;
         this._seqChartGpuDevice = null;
@@ -423,6 +423,7 @@ export class SequenceExplorer {
         }
         if (!extras.length) return;
         this._workerInstallChain = this._workerInstallChain.then(async () => {
+            await host.afterWarmUpRequested();
             const client = await host.ready();
             await client.installPackages({ micropip: extras });
         }).catch((e) => {
@@ -767,7 +768,13 @@ json.dumps(code)
             console.warn('[share] scan-resolution apply failed', e);
         }
         let haveVolume = !!nvMod?.nv?.volumes?.length;
-        if (loadPhantom && sim.phantom && typeof nvMod?.loadPhantomFromCache === 'function') {
+        if (this._sharedPhantomPromise) {
+            // Startup already started this archive so the boot bar could count it.
+            try { await this._sharedPhantomPromise; haveVolume = !!nvMod?.nv?.volumes?.length; } catch (_) { /* ignore */ }
+            if (!haveVolume && loadPhantom && typeof nvMod?.loadDefaultCachePhantom === 'function') {
+                try { await nvMod.loadDefaultCachePhantom(); haveVolume = true; } catch (_) { /* ignore */ }
+            }
+        } else if (loadPhantom && sim.phantom && typeof nvMod?.loadPhantomFromCache === 'function') {
             try {
                 await nvMod.loadPhantomFromCache(sim.phantom);
                 haveVolume = true;
@@ -778,10 +785,6 @@ json.dumps(code)
                     try { await nvMod.loadDefaultCachePhantom(); haveVolume = true; } catch (_) { /* ignore */ }
                 }
             }
-        } else if (!loadPhantom && this._sharedPhantomPromise) {
-            // index.html already kicked off the shared phantom load; wait so FOV has a reference volume.
-            try { await this._sharedPhantomPromise; } catch (_) { /* ignore */ }
-            haveVolume = !!nvMod?.nv?.volumes?.length;
         }
         if (haveVolume && Array.isArray(sim.fov_affine) && Array.isArray(sim.fov_matrix)
             && typeof nvMod?.applyFovFromAffine === 'function') {
@@ -1270,7 +1273,7 @@ plt.rcParams['font.size'] = 8`;
     async disposeSeqChartGpu() {
         await disposeSeqChartGpuHost(this);
         clearKspaceHostCache(this);
-        if (this.config.pyodide) {
+        if (this.config.pyodide && this._mainPlotStack) {
             await releaseKspaceCache(this.config.pyodide);
         }
     }
@@ -1379,24 +1382,15 @@ plt.rcParams['font.size'] = 8`;
         this.showStatus('Loading sequences...', 'info');
         this.sequences = {};
 
-        // Install all unique dependencies once before loading (simple batch; version conflicts possible across sources)
+        // Sequences run on the worker, so that is where the sources' packages go. The main
+        // thread installs them only on its matplotlib path (_executeFunctionNow), except a
+        // module source, which needs its package to be discovered at all (loadSource).
         if (this.config.pyodide) {
             const allDeps = [];
             for (const source of this.config.sources) {
                 for (const d of this.normalizeSourceDeps(source)) allDeps.push(d);
             }
-            const seen = new Set();
-            const uniqueDeps = allDeps.filter((d) => {
-                const spec = typeof d === 'string' ? d : (d.name || '');
-                const pkgName = String(spec).split(/[>=<!~]/)[0].trim();
-                if (seen.has(pkgName)) return false;
-                seen.add(pkgName);
-                return true;
-            });
-            if (uniqueDeps.length > 0) {
-                this.showStatus('Installing dependencies...', 'info');
-                await this.installDependencies(uniqueDeps);
-            }
+            this._queueWorkerExtraInstalls(allDeps);
         }
 
         // Load all sources in parallel for better performance
@@ -2268,7 +2262,8 @@ result
     
     async loadSource(source) {
         const sourceType = this.resolveSourceType(source);
-        // Dependencies are installed once in loadSequences() and on demand (missing only) in loadParamsForSequence()
+        // Module sources install their own package on the main thread (no deps): discovery and
+        // parameters AST-parse its files. All declared deps are queued for the worker (loadSequences).
         if (sourceType === 'local_file' || sourceType === 'built-in') {
             await this.loadLocalFile(source);
         } else if (sourceType === 'remote_file') {
@@ -2277,6 +2272,8 @@ result
         } else if (sourceType === 'folder') {
             await this.loadFolder(source);
         } else if (sourceType === 'pyodide_module') {
+            const own = this._moduleSourceOwnPackage(source);
+            if (own) await this.installDependencies([own]);
             await this.loadPyodideModule(source);
         } else {
             throw new Error(`Unknown source type: ${sourceType}`);
@@ -2301,6 +2298,23 @@ result
             const name = spec.split(/[>=<!~]/)[0].trim();
             return noDeps.has(name) ? { name: spec, deps: false } : spec;
         });
+    }
+
+    /**
+     * The declared dependency that provides a module source's top-level package
+     * (`mrseq` for `mrseq.sequences`), as a no-deps install, or null if none is declared.
+     * @param {{module?: string, path?: string, dependencies?: Array}} source
+     * @returns {{name: string, deps: false}|null}
+     */
+    _moduleSourceOwnPackage(source) {
+        const top = String(source?.module || source?.path || '').split('.')[0].trim();
+        if (!top) return null;
+        for (const dep of this.normalizeSourceDeps(source)) {
+            const spec = typeof dep === 'string' ? dep : (dep.name || '');
+            const name = String(spec).split(/[>=<!~\[]/)[0].trim();
+            if (name.replace(/-/g, '_').toLowerCase() === top.toLowerCase()) return { name: spec, deps: false };
+        }
+        return null;
     }
 
     async installDependencies(dependencies) {
@@ -2829,21 +2843,10 @@ json.dumps(_results)
                     console.log(`Parsed ${functions.length} functions from ${fullModulePath}`);
                     loadedCount++;
                 }
-                // Install per-file deps from registry (folder sources materialize PEP from sources.toml).
+                // Per-file deps from the registry (folder sources materialize PEP from sources.toml)
+                // go to the worker, where these scripts run.
                 if (folderDeps.length > 0) {
-                    const seenDep = new Set();
-                    const uniqFolderDeps = folderDeps.filter((d) => {
-                        const spec = typeof d === 'string' ? d : (d.name || '');
-                        const nm = String(spec).split(/[>=<!~]/)[0].trim();
-                        if (seenDep.has(nm)) return false;
-                        seenDep.add(nm);
-                        return true;
-                    });
-                    try {
-                        await this.installDependencies(uniqFolderDeps);
-                    } catch (e) {
-                        console.warn(`Failed installing deps for folder "${source.name || source.path}":`, e);
-                    }
+                    this._queueWorkerExtraInstalls(folderDeps);
                 }
             } else {
                 // No pyodide: fall back to JS-side parsing is unavailable; just register stubs
@@ -2869,23 +2872,12 @@ json.dumps(_results)
         
         const pyodide = this.config.pyodide;
         const modulePath = source.module || source.path;
-        const folderPath = source.folder || '';
-        
-        // Try to load without installing dependencies first
-        // If it fails due to missing dependencies, we'll catch it and handle gracefully
-        // Dependencies will be installed on-demand when functions are actually used
-        
-        // Check if this is a package submodule (e.g., mrseq.tests.scripts)
-        // If so, load all modules in that package
-        const isPackageSubmodule = modulePath.includes('.') && !modulePath.endsWith('.py');
-        
+
         try {
-            if (isPackageSubmodule) {
-                // Load all modules in the package using SourceManager.
-                // Use get_functions_from_package_noexec (AST-only) to avoid triggering
-                // slow module-level imports (e.g. import pypulseq) during startup.
-                await this.ensureSourceManager();
-                const result = await pyodide.runPythonAsync(`
+            // AST-only: the main thread never imports module sources, whose module-level
+            // imports (pypulseq, …) it does not have.
+            await this.ensureSourceManager();
+            const result = await pyodide.runPythonAsync(`
 import json
 from seq_source_manager import SourceManager
 
@@ -2895,13 +2887,7 @@ json.dumps(all_functions)
 `);
             
             const allFunctions = JSON.parse(result);
-            if (allFunctions.error) {
-                // Dependencies should already be installed by loadSource(), so this is a real error
-                const errorMsg = allFunctions.error;
-                console.error(`Failed to load module ${modulePath}: ${errorMsg}`);
-                this.showStatus(`Error loading source "${source.name || source.path || source.url}": ${errorMsg}`, 'error');
-                throw new Error(`Failed to load module ${modulePath}: ${errorMsg}`);
-            }
+            if (allFunctions.error) throw new Error(allFunctions.error);
             
             // Create a file entry for each module
             for (const [moduleName, moduleData] of Object.entries(allFunctions)) {
@@ -2925,70 +2911,7 @@ json.dumps(all_functions)
                     });
                 }
             }
-        } else {
-            // Single module loading (original behavior)
-            const result = await pyodide.runPythonAsync(`
-import inspect
-import json
-import importlib
-import sys
-
-def get_functions_from_module(module_path, folder_path=""):
-    """Extract functions from a Python module."""
-    try:
-        # Import the module
-        if folder_path:
-            sys.path.insert(0, folder_path)
-        
-        module = importlib.import_module(module_path)
-        
-        functions = []
-        for name in dir(module):
-            if name.startswith('_'):
-                continue
-            obj = getattr(module, name)
-            if inspect.isfunction(obj):
-                functions.append({
-                    'name': name,
-                    'doc': inspect.getdoc(obj) or '',
-                    'signature': str(inspect.signature(obj))
-                })
-        
-        return json.dumps(functions)
-    except Exception as e:
-        return json.dumps({'error': str(e)})
-
-get_functions_from_module('${modulePath}', '${folderPath}')
-`);
-            
-            const functions = JSON.parse(result);
-            if (functions.error) {
-                // Dependencies should already be installed by loadSource(), so this is a real error
-                const errorMsg = functions.error;
-                console.error(`Failed to load module ${modulePath}: ${errorMsg}`);
-                this.showStatus(`Error loading source "${source.name || source.path || source.url}": ${errorMsg}`, 'error');
-                throw new Error(`Failed to load module ${modulePath}: ${errorMsg}`);
-            }
-            
-            const fileName = source.name || source.path || modulePath;
-            if (!this.sequences[fileName]) {
-                this.sequences[fileName] = { functions: [], source: source };
-            } else {
-                this.sequences[fileName].functions = [];
-                this.sequences[fileName].source = source;
-            }
-            
-            for (const func of functions) {
-                this.sequences[fileName].functions.push({
-                    name: func.name,
-                    doc: func.doc,
-                    signature: func.signature,
-                    source: source
-                });
-            }
-        }
         } catch (error) {
-            // Dependencies should already be installed by loadSource(), so this is a real error
             const errorMsg = error.message || String(error);
             console.error(`Failed to load module ${modulePath}: ${errorMsg}`);
             this.showStatus(`Error loading source "${source.name || source.path || source.url}": ${errorMsg}`, 'error');
@@ -3342,158 +3265,44 @@ json.dumps(functions)
             
             console.log('Loading parameters for:', { fileName, functionName, sourceType: source.type, source, hasDoc: !!doc, docLength: doc?.length });
             
-            // Install only missing dependencies (e.g. for sources added after initial load)
             const normDeps = this.normalizeSourceDeps(source);
-            if (normDeps.length > 0) {
-                const missing = normDeps.filter((pkg) => {
-                    const spec = typeof pkg === 'string' ? pkg : (pkg.name || '');
-                    const pkgName = String(spec).split(/[>=<!~]/)[0].trim();
-                    return !this.installedPackages.has(pkgName);
-                });
-                if (missing.length > 0) {
-                    this.showStatus('Installing dependencies...', 'info');
-                    await this.installDependencies(missing);
-                }
-            }
+            this._queueWorkerExtraInstalls(normDeps);
 
-            const sourceType = this.resolveSourceType(source);
-            const useModulePath = source.fullModulePath || (sourceType === 'pyodide_module' ? (source.module || source.path) : null);
-            if (!useModulePath) {
+            const isModuleSource = this.resolveSourceType(source) === 'pyodide_module';
+            if (!source.fullModulePath && !isModuleSource) {
                 throw new Error('Sequence has no module path; cannot load parameters.');
             }
-            const modulePath = source.fullModulePath || source.module || source.path;
             await this.ensureSourceManager();
 
-            // For file-type sources (built-in, private, user), use AST extraction to avoid
-            // triggering 'import pypulseq' which takes ~11s cold.
-            if (source.type === 'file' && fileName) {
-                const fileData = this.sequences[fileName];
-                const cachedCode = fileData?.code;
-                let noexecResult;
-                if (cachedCode) {
-                    pyodide.globals.set('_param_extract_code', cachedCode);
-                    noexecResult = await pyodide.runPythonAsync(`
-import json
-from seq_source_manager import SourceManager
-manager = SourceManager()
-_code = _param_extract_code.to_py() if hasattr(_param_extract_code, 'to_py') else str(_param_extract_code)
-result = manager.extract_function_parameters_noexec(${JSON.stringify(this.vfsPath(fileName))}, ${JSON.stringify(functionName)}, code=_code)
-json.dumps(result)
-`);
-                } else {
-                    await this.ensureSequenceFileInVfs(fileName);
-                    noexecResult = await pyodide.runPythonAsync(`
-import json
-from seq_source_manager import SourceManager
-manager = SourceManager()
-result = manager.extract_function_parameters_noexec(${JSON.stringify(this.vfsPath(fileName))}, ${JSON.stringify(functionName)})
-json.dumps(result)
-`);
-                }
-                const { params, doc } = JSON.parse(noexecResult);
-                this.functionParams = params;
-                if (doc && doc.trim()) {
-                    this.selectedSequence.doc = doc;
-                    const fileData = this.sequences[fileName];
-                    if (fileData) {
-                        const func = fileData.functions.find(f => f.name === functionName);
-                        if (func) func.doc = doc;
-                    }
-                }
-                this.renderParameterControls(params);
-                executeBtn.disabled = false;
-                return;
-            }
-
-            const paramsJson = await pyodide.runPythonAsync(`
-import json
-from seq_source_manager import SourceManager
-
-manager = SourceManager()
-params = manager.extract_function_parameters(
-    module_path='${modulePath}',
-    function_name='${functionName}'
-)
-json.dumps(params)
-`);
-
-            const params = JSON.parse(paramsJson);
-            this.functionParams = params;
-            
-            // Always fetch docstring BEFORE rendering controls, so tooltips can use it
-            // When we used module for params (fullModulePath or pyodide_module), fetch docstring via module
-            if (useModulePath) {
-                try {
-                    const modulePath = source.fullModulePath || source.module || source.path;
-                    console.log('Fetching docstring for module function:', { modulePath, functionName, source });
-                    await this.ensureSourceManager();
-                    const docResult = await pyodide.runPythonAsync(`
-import inspect
-import json
-import importlib
-import sys
-
-_result = ''
-try:
-    module = importlib.import_module('${modulePath}')
-    func = getattr(module, '${functionName}', None)
-    if func is None:
-        print(f"Function '${functionName}' not found in module '${modulePath}'", file=sys.stderr)
-        _result = ''
-    else:
-        doc = inspect.getdoc(func)
-        if doc:
-            print(f"Found docstring for '${functionName}': {len(doc)} chars", file=sys.stderr)
-            _result = doc
-        else:
-            print(f"No docstring found for '${functionName}'", file=sys.stderr)
-            _result = ''
-except Exception as e:
-    print(f"Error fetching docstring: {e}", file=sys.stderr)
-    import traceback
-    traceback.print_exc()
-    _result = ''
-
-# Always return a valid JSON string
-json.dumps(_result)
-`);
-                    const docstring = JSON.parse(docResult);
-                    console.log('Fetched docstring result:', { modulePath, functionName, docLength: docstring?.length || 0, hasDoc: !!docstring, preview: docstring?.substring(0, 100) });
-                    if (docstring && docstring.trim()) {
-                        this.selectedSequence.doc = docstring;
-                        // Also update the function in sequences for future reference
-                        const fileData = this.sequences[fileName];
-                        if (fileData) {
-                            const func = fileData.functions.find(f => f.name === functionName);
-                            if (func) {
-                                func.doc = docstring;
-                                console.log('Updated stored function docstring');
-                            }
-                        }
-                    } else {
-                        console.warn('No docstring found or docstring is empty');
-                    }
-                } catch (e) {
-                    console.error('Could not fetch docstring for module function:', e);
-                }
+            // AST extraction for every source: importing the module would import pypulseq, which
+            // the slim main-thread Pyodide does not have. Module sources parse the installed
+            // package file; the others parse the kept code or their VFS mirror.
+            const fileData = this.sequences[fileName];
+            let extractArgs;
+            if (isModuleSource) {
+                const modulePath = source.fullModulePath || source.module || source.path;
+                extractArgs = `manager.find_module_file(${JSON.stringify(modulePath)}), ${JSON.stringify(functionName)}`;
+            } else if (fileData?.code) {
+                pyodide.globals.set('_param_extract_code', fileData.code);
+                extractArgs = `${JSON.stringify(this.vfsPath(fileName))}, ${JSON.stringify(functionName)}, code=str(_param_extract_code)`;
             } else {
-                // For file-based sources, ensure docstring is available
-                if (!this.selectedSequence.doc) {
-                    const fileData = this.sequences[fileName];
-                    if (fileData) {
-                        const func = fileData.functions.find(f => f.name === functionName);
-                        if (func && func.doc) {
-                            this.selectedSequence.doc = func.doc;
-                            console.log('Using stored docstring from file data');
-                        }
-                    }
-                }
+                await this.ensureSequenceFileInVfs(fileName);
+                extractArgs = `${JSON.stringify(this.vfsPath(fileName))}, ${JSON.stringify(functionName)}`;
             }
-            
-            // Now render controls with the docstring available
+            const { params, doc: astDoc } = JSON.parse(await pyodide.runPythonAsync(`
+import json
+from seq_source_manager import SourceManager
+manager = SourceManager()
+json.dumps(manager.extract_function_parameters_noexec(${extractArgs}))
+`));
+            this.functionParams = params;
+            if (astDoc && astDoc.trim()) {
+                this.selectedSequence.doc = astDoc;
+                const func = fileData?.functions.find(f => f.name === functionName);
+                if (func) func.doc = astDoc;
+            }
             this.renderParameterControls(params);
             executeBtn.disabled = false;
-            
         } catch (error) {
             console.error('Error loading function parameters:', error);
             paramsControls.innerHTML = `<div class="seq-error-message" style="display: block;">Error loading parameters: ${error.message}</div>`;
@@ -4051,9 +3860,6 @@ json.dumps(_result)
             console.warn('No function selected or Pyodide not available');
             return;
         }
-        if (this._plotStackReady) {
-            await this._plotStackReady;
-        }
 
         // If a protocolName is provided, save a snapshot first
         this._lastProtocolSnapshotPath = null;
@@ -4169,13 +3975,8 @@ json.dumps(_result)
             }
             console.log('Arguments built:', argsDict);
             
-            // Install dependencies first if specified
             const execDeps = this.normalizeSourceDeps(source);
-            if (execDeps.length > 0) {
-                this.showStatus('Installing dependencies...', 'info');
-                await this.installDependencies(execDeps);
-            }
-            
+
             if (fileName && this.isUserArtifactPath(fileName)) {
                 await this.ensureSequenceFileInVfs(fileName);
             }
@@ -4194,6 +3995,7 @@ json.dumps(_result)
                 if (!host) {
                     throw new Error('Sequence execute needs ctx.pyWorker');
                 }
+                this._queueWorkerExtraInstalls(execDeps);
                 const client = await host.ready();
                 await this._flushWorkerVfs();
                 await this._awaitWorkerInstalls();
@@ -4230,6 +4032,12 @@ json.dumps(_result)
                     await this.renderSeqChartGpuAfterPlot(plotRoot, client.getBridge(), plotContainer, harvest);
                 }
             } else {
+                if (execDeps.length > 0) {
+                    this.showStatus('Installing dependencies...', 'info');
+                    await this.installDependencies(execDeps);
+                }
+                if (!this._mainPlotStack) this.showStatus('Loading matplotlib plot...', 'info');
+                await this.ensureMainPlotStack();
                 await this.ensureSourceManager();
                 const script = this.buildExecuteScript({
                     modulePath,
@@ -4559,6 +4367,39 @@ json.dumps(_result)
         }, 100);
     }
     
+    /**
+     * matplotlib, scipy, pinned pypulseq and the `seq_plot_utils` patch on the main-thread
+     * Pyodide. Boot skips them (~10s): ChartGPU plots and silent scan prep run on the worker,
+     * so only a matplotlib plot speed on the main thread pays this, once. pypulseq imports
+     * scipy and matplotlib at module level, so neither can be left out.
+     * @returns {Promise<void>}
+     */
+    ensureMainPlotStack() {
+        if (!this._mainPlotStack) {
+            this._mainPlotStack = (async () => {
+                const pyodide = this.config.pyodide;
+                if (!pyodide) throw new Error('Pyodide not available');
+                const codeFetch = fetch(this.resolvePath('seq_plot_utils.py?') + Date.now()).then((r) => {
+                    if (!r.ok) throw new Error(`seq_plot_utils.py: ${r.status}`);
+                    return r.text();
+                });
+                await pyodide.loadPackage(['matplotlib', 'scipy']);
+                if (!this.installedPackages.has('pypulseq')) {
+                    await pyodide.runPythonAsync(`
+import micropip
+await micropip.install('pypulseq==1.5.0.post1', deps=False)
+`);
+                    this.installedPackages.add('pypulseq');
+                }
+                await patchSequencePlotFromCode(pyodide, await codeFetch);
+            })().catch((e) => {
+                this._mainPlotStack = null;
+                throw e;
+            });
+        }
+        return this._mainPlotStack;
+    }
+
     async ensureSourceManager() {
         // Ensure SourceManager is loaded and available in Pyodide
         if (!this.config.pyodide) {
@@ -4902,16 +4743,22 @@ path = "https://github.com/mrx-org/anyfield/tree/main/pypulseq/anyseq"
         return { callTargetFile: baseFile, callTargetFunc: baseFunc, baseMode, origin };
     }
 
+    /**
+     * Pin bare package deps to the versions installed on the worker, which (unlike the
+     * slim main thread) has every selected source's dependencies.
+     */
     async pinBarePackageDependencies(deps) {
-        if (!this.config?.pyodide || !Array.isArray(deps) || !deps.length) return deps || [];
+        const host = this.ctx?.pyWorker;
+        if (!host || !Array.isArray(deps) || !deps.length) return deps || [];
         const bare = deps
             .filter((d) => typeof d === 'string' && /^[A-Za-z0-9_.-]+(\[[^\]]+\])?$/.test(d.trim()))
             .map((d) => d.trim());
         if (!bare.length) return deps;
-        this.config.pyodide.globals.set('_anyfield_pin_names', bare);
         let versions = {};
         try {
-            const result = await this.config.pyodide.runPythonAsync(`
+            const client = await host.ready();
+            await this._awaitWorkerInstalls();
+            const result = await client.runPython(`
 import json
 try:
     from importlib.metadata import version
@@ -4925,7 +4772,7 @@ for _name in list(_anyfield_pin_names):
     except Exception:
         pass
 json.dumps(_out)
-`);
+`, { globals: { _anyfield_pin_names: bare } });
             versions = JSON.parse(result || '{}');
         } catch (e) {
             console.warn('Could not pin package dependency versions:', e);
@@ -5141,7 +4988,9 @@ parse_metadata_toml(_toml_payload)
         if (simulation && Object.keys(simulation).length) {
             lines.push('Simulation:');
             if (simulation.backend != null) {
-                lines.push(`  backend: ${formatSimBackendLabel(simulation.backend)}`);
+                const dur = Number(simulation.sim_duration_s);
+                const durText = Number.isFinite(dur) ? `, sim ${dur.toFixed(1)} s` : '';
+                lines.push(`  backend: ${formatSimBackendLabel(simulation.backend)}${durText}`);
             }
             if (simulation.phantom != null) lines.push(`  phantom: ${simulation.phantom}`);
             const base = Array.isArray(simulation.phantom_matrix) ? simulation.phantom_matrix : null;
@@ -5259,28 +5108,15 @@ parse_metadata_toml(_toml_payload)
                     const modulePath = source.fullModulePath || source.module || source.path;
                     
                     await this.ensureSourceManager();
-                    // Get the full module source file
                     const sourceCode = await this.config.pyodide.runPythonAsync(`
-import inspect
 import json
-import importlib
-import os
+from seq_source_manager import SourceManager
 
 _result = ''
 try:
-    module = importlib.import_module('${modulePath}')
-    # Get the full module source file
-    module_file = inspect.getfile(module)
-    if os.path.exists(module_file):
-        with open(module_file, 'r', encoding='utf-8') as f:
-            _result = f.read()
-    else:
-        # Fallback: try to get source via inspect.getsource for the module itself
-        try:
-            _result = inspect.getsource(module)
-        except:
-            _result = ''
-except Exception as e:
+    with open(SourceManager().find_module_file(${JSON.stringify(modulePath)}), 'r', encoding='utf-8') as f:
+        _result = f.read()
+except Exception:
     _result = ''
 
 json.dumps(_result)

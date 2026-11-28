@@ -4,7 +4,7 @@ import { eventHub } from "./event_hub.js";
 import { isProUser } from "./pro_mode.js";
 import { formatScanDisplayTitle } from "./scan_zero/scan_module.js";
 import { volumeIs4D, syncVolumeClimsToCurrent4DFrame, installFrameAwareContrastDrag, installFrameAwareBriConReset } from "./hist_panel/histogram-clim-panel.js";
-import { DEFAULT_CACHE_PHANTOM_ID, biftiCacheAdminBase, fetchCachedPhantomIds, downloadPhantomTarGz, normalizeCacheId, splitCacheId, phantomFolderId } from "./scan_zero/bifti_cache.js";
+import { DEFAULT_CACHE_PHANTOM_ID, biftiCacheAdminBase, fetchCachedPhantomIds, downloadPhantomTarGz, unpackPhantomArchive, normalizeCacheId, splitCacheId, phantomFolderId } from "./scan_zero/bifti_cache.js";
 import { PyWorkerHost } from "./py_worker_host.js";
 
 /**
@@ -216,6 +216,10 @@ export class NiivueModule {
     this._phantomJsonByName = new Map();
     /** Bumped on every `switchActivePhantomConfig`; a stale generation must not apply. */
     this._phantomConfigSwitchGen = 0;
+    /** Last cache phantom archive, not yet written to the worker `/phantom` VFS. */
+    this._pendingPhantomTar = null;
+    /** In-flight write of `_pendingPhantomTar` to `/phantom`, or null. */
+    this._phantomVfsWrite = null;
     /** Phantom group ids explicitly expanded in the volume list (default: collapsed). */
     this.expandedGroups = new Set();
     this._initWaiters = [];
@@ -245,6 +249,29 @@ export class NiivueModule {
   _phantomWorker(phase = 'init') {
     const host = this._ensurePhantomWorkerHost();
     return phase === 'ready' ? host.ready() : host.whenInit();
+  }
+
+  /**
+   * `_phantomWorker`, once the last cache phantom's archive is on `/phantom`. Loads only
+   * park the archive (`_pendingPhantomTar`); the first caller here writes it, which
+   * replaces `/phantom` wholesale, and concurrent callers wait on that same write.
+   * @param {'init' | 'ready'} [phase]
+   */
+  async _phantomVfsWorker(phase = 'init') {
+    const tarBytes = this._pendingPhantomTar;
+    if (tarBytes) {
+      this._pendingPhantomTar = null;
+      const started = this._phantomWorker('init')
+        .then((client) => client.extractAndPopulatePhantom({ tarBytes }))
+        .finally(() => {
+          if (this._phantomVfsWrite === started) this._phantomVfsWrite = null;
+        });
+      this._phantomVfsWrite = started;
+    }
+    const write = this._phantomVfsWrite;
+    const client = await this._phantomWorker(phase);
+    if (write) await write;
+    return client;
   }
 
   /**
@@ -642,7 +669,7 @@ export class NiivueModule {
   }
 
   async _unlinkPhantomVfs(paths) {
-    const client = await this._phantomWorker('init');
+    const client = await this._phantomVfsWorker('init');
     for (const p of paths) {
       await client.fsUnlink(p);
     }
@@ -861,7 +888,7 @@ export class NiivueModule {
    */
   async _writePhantomJsonToVfs(name, jsonBody, { writeVfs = true } = {}) {
     if (writeVfs) {
-      const client = await this._phantomWorker('init');
+      const client = await this._phantomVfsWorker('init');
       await client.fsWrite(`/phantom/${name}`, jsonBody);
     }
     this._rememberPhantomJson(name, jsonBody);
@@ -873,7 +900,7 @@ export class NiivueModule {
    * @returns {Promise<Array<{name: string, path: string, bytes: Uint8Array}>>} averaged maps, in output order
    */
   async _executePhantomToVolumeData(name, jsonBody) {
-    const client = await this._phantomWorker('ready');
+    const client = await this._phantomVfsWorker('ready');
     const result = await client.executePhantom({ jsonName: name, jsonBody });
     return result.files || [];
   }
@@ -3611,8 +3638,8 @@ export class NiivueModule {
    * Base URL may be absolute (GitHub raw) or relative to the current page.
    */
   /** Load the fixed default phantom (`DEFAULT_CACHE_PHANTOM_ID`) from the Modal cache. */
-  async loadDefaultCachePhantom() {
-    return this.loadPhantomFromCache(DEFAULT_CACHE_PHANTOM_ID);
+  async loadDefaultCachePhantom(opts) {
+    return this.loadPhantomFromCache(DEFAULT_CACHE_PHANTOM_ID, opts);
   }
 
   /** Back-compat alias: startup / "Default phantom" button now load from the cache. */
@@ -3625,15 +3652,23 @@ export class NiivueModule {
    * extract the `.tar.gz`, and show it in Niivue. Tags the group with `biftiRegistryId`
    * (the scan-ready id used by Modal HTTP sim).
    * @param {string} phantomId — e.g. `brainweb-20-v2/subj04-3T-1mm-tra`
+   * @param {{ onProgress?: (info: { phase: string, fraction?: number|null, received?: number, total?: number }) => void }} [opts]
+   *   Startup uses `onProgress` so the boot bar can include the download.
    */
-  async loadPhantomFromCache(phantomId) {
+  async loadPhantomFromCache(phantomId, opts = {}) {
     await this.waitForInit();
     const id = normalizeCacheId(phantomId);
     if (!id) throw new Error("loadPhantomFromCache: empty phantom id");
+    const onProgress = typeof opts.onProgress === "function" ? opts.onProgress : null;
     const { folderId, name: folderName, config } = splitCacheId(id);
     // Download is folder-based (all JSON configs + shared NIfTIs); the id's optional
     // third segment selects which JSON config is active for scanning.
-    const tarBytes = new Uint8Array(await downloadPhantomTarGz(id));
+    onProgress?.({ phase: "download", fraction: 0, received: 0, total: 0 });
+    const tarBytes = new Uint8Array(await downloadPhantomTarGz(id, ({ received, total }) => {
+      const fraction = total > 0 ? Math.min(1, received / total) : null;
+      onProgress?.({ phase: "download", fraction, received, total });
+    }));
+    onProgress?.({ phase: "extract" });
     const { jsonFiles, niftiFiles } = await this._extractPhantomTarGz(tarBytes, id);
     if (!jsonFiles.length || niftiFiles.length === 0) {
       throw new Error(`Phantom "${id}": archive missing JSON or NIfTIs`);
@@ -3647,6 +3682,7 @@ export class NiivueModule {
     const defaultJsonName = jsonFiles.find((f) => eq(f.name, `${folderName}.json`))?.name
       ?? (config ? null : jsonFile.name);
     await this._replacePhantomJsonCatalog(jsonFiles);
+    onProgress?.({ phase: "show" });
     await this.loadMultiPhantomFromFiles(jsonFile, niftiFiles, {
       biftiRegistryId: scanId,
       folderId,
@@ -3654,6 +3690,7 @@ export class NiivueModule {
     });
     this.jsonTabCurrentName = jsonFile.name;
     this.updateJsonTab();
+    onProgress?.({ phase: "ready" });
   }
 
   /** Pick the active JSON config: `{config}.json` when requested, else the folder default `{name}.json`. */
@@ -3716,29 +3753,27 @@ export class NiivueModule {
   }
 
   /**
-   * Extract a phantom `.tar.gz` onto the worker `/phantom` VFS and return JSON + NIfTI
-   * `File`s for Niivue. Download stays JS `fetch` — Pyodide urllib cannot open https.
+   * Unpack a phantom `.tar.gz` in the page and return JSON + NIfTI `File`s for Niivue.
+   * The archive is only parked for the worker `/phantom` VFS; `_phantomVfsWorker`
+   * writes it when Execute / JSON Save first needs it. Scans never do: Modal resolves
+   * the NIfTIs from `phantom.id` itself.
    * @param {Uint8Array} tarBytes
    * @param {string} id — scan-ready id (for error messages)
    */
   async _extractPhantomTarGz(tarBytes, id) {
-    const client = await this._phantomWorker('init');
     let result;
     try {
-      result = await client.extractAndPopulatePhantom({ tarBytes });
+      result = await unpackPhantomArchive(tarBytes);
     } catch (e) {
-      const msg = typeof this.formatPyodideError === "function" ? this.formatPyodideError(e) : (e?.message || String(e));
-      throw new Error(`Phantom "${id}": ${msg}`);
+      throw new Error(`Phantom "${id}": could not unpack archive (${e?.message || String(e)})`);
     }
-    const toFile = ({ name, bytes }) => {
-      const buf = bytes instanceof Uint8Array ? bytes : new Uint8Array(bytes || []);
-      return new File([buf], name, { type: "application/octet-stream" });
-    };
-    const jsonFiles = (result.jsonFiles || []).map(toFile);
-    const niftiFiles = (result.niftiFiles || []).map(toFile);
+    const toFile = ({ name, bytes }) => new File([bytes], name, { type: "application/octet-stream" });
+    const jsonFiles = result.jsonFiles.map(toFile);
+    const niftiFiles = result.niftiFiles.map(toFile);
     if (jsonFiles.length === 0) {
       throw new Error(`Phantom "${id}": no JSON found in archive`);
     }
+    this._pendingPhantomTar = tarBytes;
     return { jsonFiles, jsonFile: jsonFiles[0], niftiFiles };
   }
 

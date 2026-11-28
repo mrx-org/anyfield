@@ -68,9 +68,9 @@ The sim pipeline supports oblique (coronal, sagittal, arbitrary) FOV boxes. Unde
 
 ## Interface & Workflow
 - **CROP Button**: Resample-to-FOV only (see above).
-- **SCAN▶**: runs simulation on the scan backend. Default: **`modal_http_t4`** (mr0 T4 on Modal HTTP); non-pro users always get the default.
-- **SCAN▶▶** (pro): runs the same scan on the compare backend (default **`pdgv2_t4`**). The gear **Simulation backend** dialog assigns both slots and the PDG prune settings; choices persist in `localStorage`. Shared links / protocol TOML `[simulation].backend` still apply when loading a share; the retired ids `mr0sim` / `rapisim` resolve to the default.
-- **Backend registry**: `scan_zero/sim_backends.js` — Modal HTTP gateways: mr0 (CPU / T4 / A10 / A100) and PDGv2 (T4 / A10).
+- **SCAN▶**: runs simulation on the scan backend. Every page load starts on **`pdgo1_t4`** (PDGo1 T4, CUDA PDG v8); non-pro users always get it. In pro mode the gear can switch it for the current session.
+- **SCAN▶▶** (pro): runs the same scan on the compare backend; every page load starts on **`pdgv2_t4`**. The gear **Simulation backend** dialog assigns both slots (session only, not persisted, so pro and non-pro start from the same defaults) and the PDG prune settings (persisted in `localStorage`). Shared links / protocol TOML `[simulation].backend` still apply when loading a share; the retired ids `mr0sim` / `rapisim` resolve to mr0 T4 (`modal_http_t4`).
+- **Backend registry**: `scan_zero/sim_backends.js` — Modal HTTP gateways: mr0 (CPU / T4 / A10 / A100), PDGv2 (T4 / A10), and PDGo1 (T4 / A10; CUDA PDG v8 with off-resonant shaped RF pulses).
 - **Queue Item**: Shows the job number, label, and 24h timestamp (`${scanNumber}. ${name}`). **CROP** jobs use label **`crop`**. While scanning, a short stage caption (`wake`, `seq`, `load`, `sim`, `reco`, …) follows the gateway's status.
 - **Visual Feedback**: Uses a color-coded left border (Green: Done, Yellow: Scanning, Red: Error).
 - **Actions**:

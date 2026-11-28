@@ -5,15 +5,12 @@ import { isProUser } from '../pro_mode.js';
 import { SequenceExplorer } from '../pypulseq/seq_explorer.js';
 import { phantomFolderId } from './bifti_cache.js';
 import {
+    DEFAULT_SIM_BACKEND_COMPARE_ID,
     DEFAULT_SIM_BACKEND_ID,
     SIM_BACKENDS,
     formatSimBackendLabel,
-    persistSimBackendCompareId,
-    persistSimBackendId,
     persistHttpSimPruneOptions,
     readStoredHttpSimPruneOptions,
-    readStoredSimBackendCompareId,
-    readStoredSimBackendId,
     formatHttpSimPruneInput,
     resolveHttpSimBaseUrl,
     resolveSimBackendId,
@@ -135,6 +132,28 @@ const HTTP_RETRY_STATUSES = new Set([429, 500, 502, 503, 504]);
 export const RECON_METHOD = 'anyfield-pynufft';
 
 /**
+ * `_readSeqMatrixDefinition` on the worker: the `.seq` at `sim_seq_path` → JSON
+ * `[nx, ny, nz]`, or `null` when it has no usable `matrix` definition.
+ */
+const SEQ_MATRIX_PY = `
+import json
+_matrix = None
+try:
+    import os
+    import pypulseq as pp
+    _p = str(sim_seq_path)
+    if os.path.exists(_p):
+        _seq = pp.Sequence()
+        _seq.read(_p)
+        _m = _seq.get_definition('matrix')
+        if _m is not None:
+            _matrix = [int(_m[0]), int(_m[1]), int(_m[2]) if len(_m) > 2 else 1]
+except Exception:
+    pass
+json.dumps(_matrix)
+`;
+
+/**
  * The recon call `_reconstructJob` runs on the worker, reading the `sim_npz_bytes` /
  * `sim_ref_bytes` / `sim_output_mode` / `sim_matrix` / `sim_reco_out_path` globals.
  */
@@ -199,8 +218,9 @@ export class ScanModule {
         this.scanCounter = 0;
         /** Live protocol being edited in col-params; shown as top queue row until SCAN. */
         this.draftJob = null;
-        this._scanBackendId = readStoredSimBackendId();
-        this._compareBackendId = readStoredSimBackendCompareId();
+        /** Pro gear choices for SCAN ▶ / ▶▶, this session only (non-pro always uses the default). */
+        this._scanBackendId = DEFAULT_SIM_BACKEND_ID;
+        this._compareBackendId = DEFAULT_SIM_BACKEND_COMPARE_ID;
 
         this.setupEventListeners();
     }
@@ -223,10 +243,8 @@ export class ScanModule {
         const id = this._resolveBackendId(backendId);
         if (slot === 'compare') {
             this._compareBackendId = id;
-            persistSimBackendCompareId(id);
         } else {
             this._scanBackendId = id;
-            persistSimBackendId(id);
         }
         this._syncScanControlLabels();
     }
@@ -272,12 +290,12 @@ export class ScanModule {
     }
 
     /**
-     * Read the `matrix` definition out of a job's prepared `.seq` on the VFS.
+     * Read the `matrix` definition out of a job's prepared `.seq` (main-thread VFS).
      *
      * A step of its own rather than part of `_reconstructJob`: it is the only piece of the recon
      * that needs the `.seq` bytes and pypulseq, so keeping it out lets the recon take `matrix`
-     * as plain data — a recon running off the main thread would otherwise have to be shipped
-     * the sequence and have pypulseq installed just to recover three integers.
+     * as plain data. It runs on the worker, which has pypulseq warm; the main thread does not
+     * load pypulseq at all unless a matplotlib plot asks for it.
      *
      * Tolerant, as it was inside the recon: no path, a path absent from the VFS, or any pypulseq
      * failure all yield null. Only `kspace_log` output consults it (recon.py's non-Cartesian
@@ -288,30 +306,19 @@ export class ScanModule {
      * @returns {Promise<number[]|null>} `[nx, ny, nz]`, or null when unavailable
      */
     async _readSeqMatrixDefinition(job, nvMod) {
-        return nvMod.enqueuePyodideTask(job.id, 'sim-seq-matrix', async () => {
-            nvMod.pyodide.globals.set('sim_seq_path', job.vfsSeqPath || '');
-            const matrixRes = await nvMod.pyodide.runPythonAsync(`
-_matrix = None
-_seq_path = sim_seq_path.to_py() if hasattr(sim_seq_path, 'to_py') else sim_seq_path
-if _seq_path:
-    try:
-        import os
-        import pypulseq as pp
-        _p = str(_seq_path)
-        if os.path.exists(_p):
-            _seq = pp.Sequence()
-            _seq.read(_p)
-            _m = _seq.get_definition('matrix')
-            if _m is not None:
-                _matrix = [int(_m[0]), int(_m[1]), int(_m[2]) if len(_m) > 2 else 1]
-    except Exception:
-        pass
-_matrix
-`);
-            const matrix = matrixRes?.toJs ? matrixRes.toJs() : matrixRes;
-            if (matrixRes?.destroy) matrixRes.destroy();
-            return matrix ?? null;
-        });
+        const path = job.vfsSeqPath;
+        const host = this.ctx?.pyWorker;
+        if (!path || !host) return null;
+        try {
+            const seqBytes = nvMod.pyodide.FS.readFile(path);
+            const py = await host.ready();
+            await py.fsWrite(path, seqBytes);
+            const raw = await py.runPython(SEQ_MATRIX_PY, { globals: { sim_seq_path: path } });
+            const matrix = JSON.parse(raw || 'null');
+            return Array.isArray(matrix) ? matrix : null;
+        } catch {
+            return null;
+        }
     }
 
     /**
@@ -1132,6 +1139,24 @@ _matrix
         });
     }
 
+    /**
+     * Record the simulate time (submit → gateway reports done, so it includes upload, Modal
+     * queue / cold start and up to one poll interval) as `[simulation].sim_duration_s`.
+     * Best effort: a failed patch only loses the tooltip entry.
+     */
+    async _patchProtocolSimDuration(job) {
+        if (job?.simDurationS == null || !job.scanNumber || !this.ctx.explorer) return;
+        try {
+            const protocolPath = this.ctx.explorer.findProtocolPathForScanNumber(job.scanNumber);
+            if (!protocolPath) return;
+            await this.ctx.explorer.patchProtocolTomlSections(protocolPath, {
+                simulation: { sim_duration_s: Math.round(job.simDurationS * 10) / 10 },
+            });
+        } catch (e) {
+            console.warn('Could not record sim duration:', e);
+        }
+    }
+
     /** Scan-ready bifti cache id of the active phantom group (or null). Public wrapper. */
     getActiveBiftiId() {
         const nvMod = this.ctx.nv;
@@ -1538,6 +1563,7 @@ _matrix
 
             if (job.abortSim) throw new Error('user stopped');
             const _tSubmit = performance.now();
+            job._tSimSubmitAt = _tSubmit;
             const httpJobId = await this._httpSubmitJob(httpBase, seqBytes, seqFilename, options);
             job.httpJobId = httpJobId;
             console.log(`[HTTP] submit ${httpJobId}: ${(performance.now() - _tSubmit).toFixed(0)}ms`);
@@ -1611,6 +1637,9 @@ _matrix
             return;
         }
         if (st === 'done') {
+            if (job._tSimSubmitAt != null) {
+                job.simDurationS = (performance.now() - job._tSimSubmitAt) / 1000;
+            }
             job._reconStarted = true;
             void this._httpFinishJob(job); // detached: fetch + recon must not block other jobs' polls
         }
@@ -1679,6 +1708,7 @@ _matrix
             job.seqUrl = URL.createObjectURL(new Blob([job.seqText || ''], { type: 'text/plain' }));
             job.status = 'done';
             console.log(`[HTTP] *** TOTAL pipeline: ${(performance.now() - (job._tSubmittedAt ?? _tFinish)).toFixed(0)}ms ***`);
+            await this._patchProtocolSimDuration(job);
             // Focus the latest finished scan: load every completed result into the viewer + SCANS
             // list. syncFov=false keeps the user's in-progress FOV planning intact.
             this.loadJob(job.id, false);
@@ -2072,19 +2102,29 @@ data
                               ? 'float("-inf")'
                               : String(timeRange[1]);
                     const timeRangePy = `time_range=(${t0}, ${t1})`;
-                    const plotBlock =
-                        plotSpeed === 'chartgpu'
-                            ? `        seq.plot(plot_now=False, plot_speed="chartgpu", ${timeRangePy})`
-                            : `        seq.plot(plot_now=False, plot_speed="${plotSpeed}", ${timeRangePy})
+                    const onWorker = plotSpeed === 'chartgpu';
+                    const plotBlock = onWorker
+                        ? `        seq.plot(plot_now=False, plot_speed="chartgpu", ${timeRangePy})`
+                        : `        seq.plot(plot_now=False, plot_speed="${plotSpeed}", ${timeRangePy})
         plt.show()`;
                     void (async () => {
                         try {
                             if (plotContainer) {
                                 await explorer.disposeSeqChartGpu();
                                 plotContainer.innerHTML = '';
-                                document.pyodideMplTarget = plotContainer;
                             }
-                            await py.runPythonAsync(`
+                            // ChartGPU (and its no-WebGPU PNG fallback) on the worker, which has
+                            // pypulseq warm; only a matplotlib speed loads it on the main thread.
+                            let runner = py;
+                            if (onWorker) {
+                                const client = await this.ctx.pyWorker.ready();
+                                await client.fsWrite(job.vfsSeqPath, py.FS.readFile(job.vfsSeqPath));
+                                runner = client.getBridge();
+                            } else {
+                                await explorer.ensureMainPlotStack();
+                                if (plotContainer) document.pyodideMplTarget = plotContainer;
+                            }
+                            await runner.runPythonAsync(`
 import pypulseq as pp
 import matplotlib.pyplot as plt
 import sys
@@ -2107,8 +2147,8 @@ ${plotBlock}
 except Exception as e:
     print(f"Error reading/plotting seq file: {e}")
                             `);
-                            if (plotSpeed === 'chartgpu' && plotContainer) {
-                                await explorer.renderSeqChartGpuAfterPlot(plotRoot, py, plotContainer);
+                            if (onWorker && plotContainer) {
+                                await explorer.renderSeqChartGpuAfterPlot(plotRoot, runner, plotContainer);
                             }
                         } catch (e) {
                             console.error('viewSeq plot failed:', e);

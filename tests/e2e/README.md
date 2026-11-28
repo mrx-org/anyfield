@@ -121,7 +121,7 @@ So no run of this suite changes `api.github.com/rate_limit`'s `remaining`.
 
 ## The sim gateway never runs a simulation
 
-`DEFAULT_SIM_BACKEND_ID` in `scan_zero/sim_backends.js` is `modal_http_t4`, whose
+`DEFAULT_SIM_BACKEND_ID` in `scan_zero/sim_backends.js` is `pdgo1_t4`, whose
 `transport` is `'http'`, so the remote half of a scan is three plain HTTP calls
 and needs no WebSocket interception. `tests/e2e/sim_gateway_stub.py` answers them
 per page — submit, one status poll that returns `done`, and a `.npz` of synthetic
@@ -175,11 +175,11 @@ Pyodide and the micropip installs, which are out of scope.
   `pypulseq/sources.toml` but ships no importable package, so it errors on every
   boot).
 - **`wait_ready` does not imply the phantom is loaded.** The default phantom load
-  is a separate promise chain in `bootstrap()` that nothing waits for, so at
-  app-ready the worker `/phantom` VFS is regularly still half-written (observed:
-  one of the three NIfTIs present and no JSON at all). Anything touching
-  `/phantom` or scanning must call `BootedApp.wait_for_default_phantom()` first;
-  skipping it is a flake, not a slow test. When a load failure hits, that wait is
+  is a separate promise chain in `bootstrap()`, so app-ready can come before the
+  phantom is in the viewer. Anything using the phantom or scanning must call
+  `BootedApp.wait_for_default_phantom()` first. The worker `/phantom` VFS stays
+  empty after boot; the app writes the archive there on the first Execute or JSON Save.
+  Skipping the wait is a flake, not a slow test. When a load failure hits, that wait is
   where it surfaces, with the app's own log quoted — and `(nothing about a
   phantom)` in that message is the *silent* shape of the race, not a missing log.
 - The Execute button and the pro-only sim backends need `?pro=1` (`pro_mode.js`),

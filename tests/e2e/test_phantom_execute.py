@@ -93,15 +93,20 @@ MAP_STATS_JS = f"""
 """
 
 
-def _averaged_dir(app) -> list[str]:
-    return sorted(
-        app.page.evaluate(
-            f"""async () => {{
-              const client = await {CONTEXT_JS}.pyWorker.whenInit();
-              return await client.fsReaddir('/phantom/averaged');
-            }}"""
-        )
+def _vfs_dir(app, path: str) -> list[str] | None:
+    """Entries of a worker VFS directory, or None when it does not exist."""
+    entries = app.page.evaluate(
+        f"""async (path) => {{
+          const client = await {CONTEXT_JS}.pyWorker.whenInit();
+          try {{ return await client.fsReaddir(path); }} catch (_) {{ return null; }}
+        }}""",
+        path,
     )
+    return None if entries is None else sorted(entries)
+
+
+def _averaged_dir(app) -> list[str] | None:
+    return _vfs_dir(app, "/phantom/averaged")
 
 
 def _viewer_volume_names(app) -> list[str]:
@@ -147,7 +152,8 @@ def test_execute_phantom_writes_json_and_loads_averaged_maps(boot_app):
     # executing something else (or nothing).
     assert page.evaluate(f"() => {NV_JS}.jsonTabCurrentName") == DEFAULT_PHANTOM_JSON
     assert _viewer_volume_names(app) == list(DEFAULT_PHANTOM_NIFTIS)
-    assert _averaged_dir(app) == [], "/phantom/averaged should be empty before Execute"
+    # The boot unpacks the archive in the page; the worker VFS only gets it on first use.
+    assert _vfs_dir(app, "/phantom") is None, "/phantom should stay unwritten until Execute"
 
     edited_body = page.evaluate(ADD_FILE_TYPE_JS)
     assert '"file_type"' in edited_body
@@ -167,6 +173,8 @@ def test_execute_phantom_writes_json_and_loads_averaged_maps(boot_app):
         f"g => g.jsonFileName === '{DEFAULT_PHANTOM_JSON}').jsonContent"
     )
 
+    # Execute wrote the parked archive first: the NIfTIs execute_phantom read are there.
+    assert set(DEFAULT_PHANTOM_NIFTIS) <= set(_vfs_dir(app, "/phantom") or [])
     # The compute half really produced the files it reported paths for.
     assert _averaged_dir(app) == sorted(AVERAGED_MAPS)
 

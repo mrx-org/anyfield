@@ -112,6 +112,22 @@ export class PyWorkerHost {
         this._init = null;
         /** @type {Promise<AnyfieldPyClient> | null} */
         this._ready = null;
+        /** @type {() => void} */
+        this._markWarmUpRequested = () => {};
+        this._warmUpRequested = new Promise((resolve) => {
+            this._markWarmUpRequested = resolve;
+        });
+    }
+
+    /**
+     * Resolves once something has asked for the warm-up: `startWarmUp` after boot, or an
+     * earlier plot / scan via `ready()`. Work that only *adds* to the warm worker (extra
+     * source packages) waits on this, so queuing it during boot does not start the warm-up
+     * there and compete with the boot it is meant to stay out of.
+     * @returns {Promise<void>}
+     */
+    afterWarmUpRequested() {
+        return this._warmUpRequested;
     }
 
     /**
@@ -135,6 +151,7 @@ export class PyWorkerHost {
      * @returns {Promise<AnyfieldPyClient>}
      */
     ready() {
+        this._markWarmUpRequested();
         if (!this._ready) {
             this._ready = this._warmUp().catch((e) => {
                 this._ready = null;

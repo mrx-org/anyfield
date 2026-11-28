@@ -54,8 +54,8 @@ def test_app_boots_and_renders_default_params(default_app):
         f"{default_app.page.evaluate(f'() => Object.keys({EXPLORER_JS}.sequences).length')} files"
     )
 
-    # The loader only hides once Pyodide, the Niivue module and the sources have
-    # all finished, so it doubles as an "everything got there" assertion.
+    # The loader hides once Pyodide, the sources, and the default phantom are in,
+    # so it doubles as an "everything got there" assertion.
     expect(page.locator("#loader")).to_have_class(re.compile(r"\bhidden\b"), timeout=SLOW_MS)
 
     params = page.locator("#seq-params-controls .params-table-row")

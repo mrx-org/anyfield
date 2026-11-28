@@ -848,15 +848,23 @@ def test_extract_function_parameters_noexec_reports_an_absent_docstring_as_empty
     assert result == {"params": [], "doc": ""}
 
 
+def test_extract_function_parameters_noexec_evaluates_an_ndarray_default(manager):
+    """`seq_explorer.js` treats `list`/`ndarray` as a JSON list in the input box
+    and wraps the user's text in `np.array(...)` on execute and share."""
+    body = "import numpy as np\n\n\ndef seq_a(arr=np.array([1.0, 2.0])):\n    pass\n"
+    params = manager.extract_function_parameters_noexec("/x.py", "seq_a", code=body)["params"]
+    assert params == [{"name": "arr", "default": [1.0, 2.0], "type": "ndarray"}]
+
+
 # ---------------------------------------------------------------------------
-# extract_function_parameters -- the inspect path, aligned with noexec on ndarray
+# find_module_file -- module sources are parsed from their installed file, never imported
 # ---------------------------------------------------------------------------
 
 
 @pytest.fixture
 def importable_module(tmp_path, monkeypatch):
-    """Write a module to disk and make it importable, without leaking either the
-    `sys.path` entry or the import into the rest of the session."""
+    """Write a module to disk on `sys.path`, without leaking either the
+    `sys.path` entry or an import into the rest of the session."""
     monkeypatch.syspath_prepend(str(tmp_path))
     created: list[str] = []
 
@@ -870,118 +878,46 @@ def importable_module(tmp_path, monkeypatch):
         sys.modules.pop(name, None)
 
 
-def test_extract_function_parameters_uses_inspect_defaults(manager, importable_module):
+def test_find_module_file_locates_a_module_without_importing_it(manager, importable_module):
+    name = importable_module("probe_locate", "raise RuntimeError('must not be imported')\n")
+    assert Path(manager.find_module_file(name)).name == f"{name}.py"
+    assert name not in sys.modules
+
+
+def test_find_module_file_resolves_packages_and_submodules(manager, importable_package):
+    package = importable_package("probe_locate_pkg", {"a": "def seq_a(): pass\n"})
+    assert Path(manager.find_module_file(package)).parts[-2:] == (package, "__init__.py")
+    assert Path(manager.find_module_file(f"{package}.a")).parts[-2:] == (package, "a.py")
+    assert f"{package}.a" not in sys.modules
+
+
+def test_find_module_file_raises_for_an_unknown_module(manager):
+    with pytest.raises(ModuleNotFoundError, match="no_such_module_anywhere"):
+        manager.find_module_file("no_such_module_anywhere")
+
+
+def test_module_source_parameters_come_from_the_located_file(manager, importable_module):
     name = importable_module(
-        "probe_params",
-        """
-        import numpy as np
-        from typing import Annotated
+        "probe_module_params",
+        '''
+        import pypulseq_that_is_not_installed
 
-        def seq_a(n=3, x=1.5, flag=True, text='s', fov=(1, 2),
-                  arr=np.array([1.0, 2.0]), nothing=None, system=None,
-                  path: Annotated[str, 'file'] = '', link: Annotated[str, 'url'] = '',
-                  required=None):
-            pass
-        """,
+        def main(n=3, flag=True, system=None):
+            """Doc."""
+        ''',
     )
-    params = {p["name"]: p for p in manager.extract_function_parameters(name, "seq_a")}
-    assert "system" not in params
-    assert params["n"] == {"name": "n", "default": 3, "type": "int"}
-    assert params["flag"]["type"] == "bool"
-    assert params["fov"] == {"name": "fov", "default": [1, 2], "type": "list"}
-    assert params["arr"] == {"name": "arr", "default": [1.0, 2.0], "type": "ndarray"}
-    assert params["nothing"] == {"name": "nothing", "default": None, "type": "NoneType"}
-    assert params["path"]["type"] == "file"
-    assert params["link"]["type"] == "url"
-
-
-def test_extract_function_parameters_reports_a_missing_default_as_type_none(manager, importable_module):
-    name = importable_module("probe_nodefault", "def seq_a(n):\n    pass\n")
-    assert manager.extract_function_parameters(name, "seq_a") == [
-        {"name": "n", "default": None, "type": "None"}
-    ]
-
-
-def test_extract_function_parameters_maps_non_finite_defaults_to_null(manager, importable_module):
-    """Regression: inspect parameter defaults must be JSON-safe.
-
-    The noexec path already maps `inf`/`nan` through `_json_safe_default`.
-    This extractor is the other `seq_explorer.js` `json.dumps` + `JSON.parse`
-    site, so the same encoding is required or the params pane fails silently.
-    """
-    name = importable_module(
-        "probe_nonfinite",
-        """
-        import numpy as np
-
-        def seq_a(t=np.inf, n=np.nan):
-            pass
-        """,
-    )
-    params = manager.extract_function_parameters(name, "seq_a")
-    dumped = json.dumps(params)
-    assert dumped == (
-        '[{"name": "t", "default": null, "type": "float"}, '
-        '{"name": "n", "default": null, "type": "float"}]'
-    )
-    assert json.loads(dumped) == params
-
-
-def test_extract_function_parameters_agrees_with_the_ast_path_on_ndarray(manager, importable_module):
-    """Both extractors emit type `ndarray` plus the evaluated list.
-
-    `seq_explorer.js` treats `list`/`ndarray` as a JSON list in the input box
-    and wraps the user's text in `np.array(...)` on execute and share. The live
-    path is noexec; inspect now matches that pair so a `file` vs module source
-    no longer changes how the same box is interpreted.
-    """
-    body = "import numpy as np\n\n\ndef seq_a(arr=np.array([1.0, 2.0])):\n    pass\n"
-    name = importable_module("probe_divergence", body)
-
-    via_inspect = manager.extract_function_parameters(name, "seq_a")[0]
-    via_ast = manager.extract_function_parameters_noexec("/x.py", "seq_a", code=body)["params"][0]
-    expected = {"name": "arr", "default": [1.0, 2.0], "type": "ndarray"}
-
-    assert via_inspect == expected
-    assert via_ast == expected
-    assert via_inspect == via_ast
-
-
-def test_extract_function_parameters_requires_a_module_path(manager):
-    with pytest.raises(ValueError, match="module_path must be provided"):
-        manager.extract_function_parameters("", "seq_a")
-
-
-def test_extract_function_parameters_raises_for_a_missing_function(manager, importable_module):
-    name = importable_module("probe_missing_fn", "def other(): pass\n")
-    with pytest.raises(AttributeError, match="Function 'seq_a' not found"):
-        manager.extract_function_parameters(name, "seq_a")
-
-
-def test_extract_function_parameters_wraps_an_import_failure(manager):
-    """CHARACTERISATION: an unimportable module is reported as a bare `Exception`
-    with the original type erased from the class but kept in the message."""
-    with pytest.raises(Exception, match="Failed to extract parameters") as excinfo:
-        manager.extract_function_parameters("no_such_module_anywhere", "seq_a")
-    assert type(excinfo.value) is Exception
-
-
-def test_extract_function_parameters_puts_the_filesystem_root_on_sys_path(
-    manager, importable_module, isolated_interpreter_state
-):
-    """Both parameter paths insert the VFS root so `/built_in_seq` is importable.
-    On a real filesystem that means `'/'`, and the entry is never removed."""
-    import os
-
-    root = os.path.abspath(os.path.sep)
-    name = importable_module("probe_syspath", "def seq_a(): pass\n")
-    assert root not in sys.path or sys.path.count(root) == 1
-    manager.extract_function_parameters(name, "seq_a")
-    assert root in sys.path
+    result = manager.extract_function_parameters_noexec(manager.find_module_file(name), "main")
+    assert result == {
+        "params": [
+            {"name": "n", "default": 3, "type": "int"},
+            {"name": "flag", "default": True, "type": "bool"},
+        ],
+        "doc": "Doc.",
+    }
 
 
 # ---------------------------------------------------------------------------
-# Package listing -- the importing and the AST-only variants
+# Package listing -- AST only
 # ---------------------------------------------------------------------------
 
 
@@ -1003,78 +939,6 @@ def importable_package(tmp_path, monkeypatch):
     for package in created:
         for name in [k for k in sys.modules if k == package or k.startswith(package + ".")]:
             sys.modules.pop(name, None)
-
-
-def test_get_functions_from_package_lists_module_functions(manager, importable_package):
-    package = importable_package(
-        "probe_pkg",
-        {
-            "a": 'def seq_a(n=1):\n    """Doc A."""\n\ndef helper():\n    pass\n',
-            "b": "def main():\n    pass\n",
-            "_private": "def seq_hidden():\n    pass\n",
-        },
-    )
-    result = manager.get_functions_from_package(package)
-    assert set(result) == {"a", "b", "_private"}
-    entry = result["a"]
-    assert entry["full_module_path"] == f"{package}.a"
-    # `dir()` order, so alphabetical rather than source order.
-    assert [f["name"] for f in entry["functions"]] == ["helper", "seq_a"]
-    doc = next(f for f in entry["functions"] if f["name"] == "seq_a")
-    assert doc["doc"] == "Doc A."
-    assert doc["signature"] == "(n=1)"
-
-
-def test_get_functions_from_package_keys_match_the_noexec_variant(
-    manager, importable_package
-):
-    """Both listers key on the bare file stem (`foo`), not `mrseq.scripts.foo`.
-
-    The live path is `get_functions_from_package_noexec`. `seq_explorer.js`
-    stores `${moduleName}.py` and the tree labels the last path/dot segment, so
-    the stem is what the UI already displays.
-    """
-    package = importable_package("probe_pkg_keys", {"a": "def seq_a(): pass\n"})
-    importing = manager.get_functions_from_package(package)
-    ast_only = manager.get_functions_from_package_noexec(package)
-    assert set(importing) == set(ast_only) == {"a"}
-    assert importing["a"]["full_module_path"] == ast_only["a"]["full_module_path"]
-
-
-def test_get_functions_from_package_filter_keeps_seq_prefix_and_main(manager, importable_package):
-    package = importable_package(
-        "probe_pkg_filter",
-        {"a": "def seq_a(): pass\ndef main(): pass\ndef helper(): pass\n"},
-    )
-    result = manager.get_functions_from_package(package, filter_seq_prefix=True)
-    assert [f["name"] for f in result["a"]["functions"]] == ["main", "seq_a"]
-
-
-def test_get_functions_from_package_skips_a_module_that_fails_to_import(
-    manager, importable_package, capsys
-):
-    package = importable_package(
-        "probe_pkg_broken",
-        {"good": "def seq_a(): pass\n", "bad": "raise RuntimeError('boom')\n"},
-    )
-    result = manager.get_functions_from_package(package)
-    assert set(result) == {"good"}
-    assert "Could not load module" in capsys.readouterr().err
-
-
-def test_get_functions_from_package_handles_a_single_module(manager, importable_module):
-    name = importable_module("probe_single", "def seq_a(): pass\n")
-    result = manager.get_functions_from_package(name)
-    assert result[name]["full_module_path"] == name
-
-
-def test_get_functions_from_package_returns_an_error_dict(manager):
-    """CHARACTERISATION: failures come back in-band as `{'error': ...}` rather
-    than as an exception, so a caller that does not check the key sees an empty
-    listing -- a silent-degradation shape for the catalog."""
-    assert manager.get_functions_from_package("no_such_package") == {
-        "error": "No module named 'no_such_package'"
-    }
 
 
 def test_get_functions_from_package_noexec_never_imports(manager, importable_package):
@@ -1107,14 +971,21 @@ def test_get_functions_from_package_noexec_returns_empty_for_a_package_without_f
 
 
 def test_get_functions_from_package_noexec_ignores_the_seq_prefix_filter(manager, importable_package):
-    """CHARACTERISATION: the AST variant hardcodes `filter_seq_prefix=False` and
-    takes no such argument, so the two listing paths return different sets for
-    the same package."""
+    """CHARACTERISATION: the AST lister hardcodes `filter_seq_prefix=False` and
+    takes no such argument."""
     package = importable_package("probe_noexec_filter", {"a": "def helper(): pass\n"})
     assert [f["name"] for f in manager.get_functions_from_package_noexec(package)["a"]["functions"]] == [
         "helper"
     ]
-    assert manager.get_functions_from_package(package, filter_seq_prefix=True) == {}
+
+
+def test_get_functions_from_package_noexec_lists_a_single_module(manager, importable_module):
+    name = importable_module("probe_noexec_single", "raise RuntimeError('boom')\n\ndef seq_a(): pass\n")
+    result = manager.get_functions_from_package_noexec(name)
+    assert list(result) == [name]
+    assert result[name]["full_module_path"] == name
+    assert [f["name"] for f in result[name]["functions"]] == ["seq_a"]
+    assert name not in sys.modules
 
 
 # ---------------------------------------------------------------------------

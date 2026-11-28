@@ -10,6 +10,8 @@
     --color: #fff;
     /* Delay for spin start: at 12% of 20s we show "Start Rotating Spins", +1s ≈ 3.4s */
     --spin-delay: 8s;
+    /* Shared clock for the status lines and the 0→99% bar. */
+    --loader-duration: 30s;
     --shadow-delay: 10s;
 }
 
@@ -208,8 +210,62 @@
 /* The magic happens here: animated loading messages driven purely by CSS */
 .loader-text::after {
     content: "Initializing...";
-    animation: loadSequence 30s linear forwards;
+    animation: loadSequence var(--loader-duration) linear forwards;
     display: block;
+}
+
+/* Small boot bar. Holds at 99% — the overlay hides when the app is actually ready. */
+@property --loader-pct {
+    syntax: "<integer>";
+    initial-value: 0;
+    inherits: false;
+}
+
+.loader-progress {
+    margin-top: 12px;
+    width: min(160px, 72%);
+    display: flex;
+    flex-direction: column;
+    align-items: stretch;
+    gap: 6px;
+}
+
+.loader-progress-track {
+    height: 3px;
+    border-radius: 999px;
+    background: rgba(232, 236, 255, 0.16);
+    overflow: hidden;
+}
+
+.loader-progress-fill {
+    height: 100%;
+    width: 0%;
+    border-radius: inherit;
+    background: var(--accent);
+}
+
+.loader-progress-label {
+    --loader-pct: 0;
+    color: #e8ecff;
+    font-family: monospace;
+    font-size: 0.72rem;
+    letter-spacing: 0.04em;
+    text-align: center;
+    counter-reset: loader-pct var(--loader-pct);
+}
+
+/* Boot script owns the percent. This line replaces the timed status once the archive starts. */
+.loader-text.is-phantom::after {
+    animation: none;
+    content: "Loading Virtual Phantoms...";
+}
+
+.loader-progress-label::before {
+    content: "loading ... ";
+}
+
+.loader-progress-label::after {
+    content: counter(loader-pct) "%";
 }
 
 /* --- ANIMATIONS --- */

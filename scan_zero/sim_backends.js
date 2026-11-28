@@ -3,15 +3,15 @@ export const TOOL_MR0SIM_HTTP_MODAL =
     'https://mzaiss--tool-mr0sim-modal-http-gateway.modal.run';
 /** PDGv2 HTTP gateway — same `/v1` contract as `TOOL_MR0SIM_HTTP_MODAL`. */
 export const TOOL_PDGV2_HTTP = 'https://mzaiss--pdgv2-gateway.modal.run';
+/** PDGo1 HTTP gateway — same `/v1` contract; CUDA PDG v8 with off-resonant shaped RF pulses. */
+export const TOOL_PDGO1_HTTP = 'https://mzaiss--pdgo1-gateway.modal.run';
 /** Local dev only — set `window.ANYFIELD_HTTP_SIM_URL` to this to use local server. */
 export const TOOL_MR0SIM_HTTP = 'http://127.0.0.1:8080';
 
-/** Default sim backend for the single SCAN button (reference HTTP gateway, T4). */
-export const DEFAULT_SIM_BACKEND_ID = 'modal_http_t4';
-/** Default backend for the pro SCAN ▶▶ button. */
+/** SCAN ▶ backend at every page load (PDGo1 T4, pro and non-pro). Not persisted. */
+export const DEFAULT_SIM_BACKEND_ID = 'pdgo1_t4';
+/** Pro SCAN ▶▶ backend at every page load. Not persisted. */
 export const DEFAULT_SIM_BACKEND_COMPARE_ID = 'pdgv2_t4';
-export const SIM_BACKEND_STORAGE_KEY = 'anyfield.simBackend';
-export const SIM_BACKEND_COMPARE_STORAGE_KEY = 'anyfield.simBackendCompare';
 
 /** Pro settings dialog order. */
 const SIM_BACKEND_OPTION_IDS = [
@@ -21,6 +21,8 @@ const SIM_BACKEND_OPTION_IDS = [
     'modal_http',
     'pdgv2_t4',
     'pdgv2_a10g',
+    'pdgo1_t4',
+    'pdgo1_a10g',
 ];
 
 /** Sim backend registry — stable ids for TOML `[simulation].backend`. */
@@ -99,6 +101,32 @@ export const SIM_BACKENDS = {
         exactTrajectories: true,
         proOnly: true,
     },
+    pdgo1_t4: {
+        id: 'pdgo1_t4',
+        label: 'PDGo1 T4 (m)',
+        transport: 'http',
+        httpBaseUrl: TOOL_PDGO1_HTTP,
+        worker: 't4',
+        forwardBackend: 'pdgo1',
+        accuracy: 1e-5,
+        recon: false,
+        useGpu: true,
+        exactTrajectories: true,
+        proOnly: false,
+    },
+    pdgo1_a10g: {
+        id: 'pdgo1_a10g',
+        label: 'PDGo1 A10 (m)',
+        transport: 'http',
+        httpBaseUrl: TOOL_PDGO1_HTTP,
+        worker: 'a10g',
+        forwardBackend: 'pdgo1',
+        accuracy: 1e-5,
+        recon: false,
+        useGpu: true,
+        exactTrajectories: true,
+        proOnly: true,
+    },
 };
 
 /** Pro settings dialog options (display label → backend id). */
@@ -116,7 +144,7 @@ export function formatSimBackendLabel(backendId) {
 
 /**
  * HTTP sim base URL. `window.ANYFIELD_HTTP_SIM_URL` always wins (local / custom gateway).
- * Otherwise use the backend's own URL (reference vs PDGv2).
+ * Otherwise use the backend's own URL (mr0, PDGv2, or PDGo1).
  */
 export function resolveHttpSimBaseUrl(httpBaseUrl) {
     if (typeof window !== 'undefined' && window.ANYFIELD_HTTP_SIM_URL) {
@@ -129,42 +157,11 @@ export function resolveSimBackendId(backendId, fallback = DEFAULT_SIM_BACKEND_ID
     const id = String(backendId || '').trim();
     if (SIM_BACKENDS[id]) return id;
     if (id === 'pdgv2') return 'pdgv2_t4';
-    // `mr0sim` / `rapisim` were the retired Fly.io WebSocket backends; old protocols,
-    // shared links and stored choices still name them.
-    if (id === 'mrzero' || id === 'mr0sim' || id === 'rapisim') return DEFAULT_SIM_BACKEND_ID;
+    if (id === 'pdgo1') return 'pdgo1_t4';
+    // `mr0sim` / `rapisim` were the retired Fly.io WebSocket backends. They stay on the
+    // reference mr0 T4 gateway; the SCAN default is PDGo1 and must not rewrite old links.
+    if (id === 'mrzero' || id === 'mr0sim' || id === 'rapisim') return 'modal_http_t4';
     return fallback;
-}
-
-export function readStoredSimBackendId() {
-    try {
-        const raw = localStorage.getItem(SIM_BACKEND_STORAGE_KEY)
-            ?? localStorage.getItem('anyfield.simGateway');
-        return resolveSimBackendId(raw, DEFAULT_SIM_BACKEND_ID);
-    } catch (_) { /* private mode / blocked storage */ }
-    return DEFAULT_SIM_BACKEND_ID;
-}
-
-export function persistSimBackendId(backendId) {
-    const id = SIM_BACKENDS[backendId] ? backendId : DEFAULT_SIM_BACKEND_ID;
-    try {
-        localStorage.setItem(SIM_BACKEND_STORAGE_KEY, id);
-    } catch (_) { /* private mode / blocked storage */ }
-}
-
-export function readStoredSimBackendCompareId() {
-    try {
-        const raw = localStorage.getItem(SIM_BACKEND_COMPARE_STORAGE_KEY)
-            ?? localStorage.getItem('anyfield.simGatewayCompare');
-        return resolveSimBackendId(raw, DEFAULT_SIM_BACKEND_COMPARE_ID);
-    } catch (_) { /* private mode / blocked storage */ }
-    return DEFAULT_SIM_BACKEND_COMPARE_ID;
-}
-
-export function persistSimBackendCompareId(backendId) {
-    const id = SIM_BACKENDS[backendId] ? backendId : DEFAULT_SIM_BACKEND_COMPARE_ID;
-    try {
-        localStorage.setItem(SIM_BACKEND_COMPARE_STORAGE_KEY, id);
-    } catch (_) { /* private mode / blocked storage */ }
 }
 
 let _simBackendMatrixUid = 0;
@@ -187,7 +184,7 @@ export function simBackendRadioMatrixHtml() {
     return `<div class="sim-backend-matrix" role="group" aria-label="Simulation backend">${head}${rows}</div>`;
 }
 
-/** HTTP job options for graph prune (both Modal backends). Omit → server defaults. */
+/** HTTP job options for graph prune (every Modal gateway). Omit → server defaults. */
 export const HTTP_SIM_PRUNE_DEFAULTS = {
     min_state_mag: 1e-4,
     max_state_count: 2000,

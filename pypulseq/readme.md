@@ -4,7 +4,7 @@ A web-based interface for interactive MR sequence design using **Pyodide**, **py
 
 ## General Implementation
 
-1.  **Dynamic UI via `inspect`:** Python's `inspect.signature` automatically detects the arguments of the selected `seq_*` function, which are then dynamically mapped to HTML sliders, checkboxes, and text inputs.
+1.  **Dynamic UI via AST:** `seq_source_manager.py` parses the selected `seq_*` function's signature with `ast` (no import), and its arguments are dynamically mapped to HTML sliders, checkboxes, and text inputs.
 2.  **Delayed Rendering:** Uses `seq.plot(plot_now=False)` followed by `plt.show()` to ensure the plotting loop doesn't block the main browser thread, keeping the UI responsive.
 3.  **Interactive Mode:** `plt.ion()` enables the interactive zoom/pan features provided by the patched `WebAgg` backend in Pyodide 0.28.0+.
 4.  **Dark Theme Toggle:** Checkbox to switch between dark theme (matches UI) and standard matplotlib styling.
