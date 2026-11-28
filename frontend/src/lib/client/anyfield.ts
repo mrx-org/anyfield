@@ -1,6 +1,7 @@
 import { phantomArgs, phantomKey } from "../phantom";
 import type { FileMode } from "../files";
 import type { FovChange, History, PhantomChoice, PhantomCollection, PhantomMaps, PhantomTree, ProjectSummary, ScanGrid, SequenceFile, SequenceSource, Session, StatePatch, UserFile, Vec3 } from "../types";
+import type { UserSettings } from "../settings.svelte";
 import type { Transport } from "./transport";
 
 export type SessionPoll = Session | { rev: number; unchanged: true };
@@ -21,6 +22,11 @@ export class AnyfieldClient {
   createProject = (name?: string) => this.call<Session>("create_project", name ? { name } : {});
   renameProject = (id: string, name: string) => this.call<ProjectSummary>("rename_project", { project_id: id, name });
   deleteProject = (id: string) => this.call<string>("delete_project", { project_id: id });
+
+  // The user's settings (stored with a login; `saved` false without one)
+  getUserSettings = () => this.call<{ saved: boolean } & UserSettings>("get_user_settings");
+  setUserSettings = (args: Record<string, unknown>) =>
+    this.call<{ saved: boolean; warning?: string } & UserSettings>("set_user_settings", args);
 
   // Sessions of a project and its history (session key only)
   listSessions = (key: string) => this.call<ProjectSummary>("list_sessions", { session_key: key });

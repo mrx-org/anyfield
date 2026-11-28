@@ -14,7 +14,14 @@
   import Minimize2 from "@lucide/svelte/icons/minimize-2";
   import Languages from "@lucide/svelte/icons/languages";
   import RotateCcw from "@lucide/svelte/icons/rotate-ccw";
-  import { i18n, LOCALE_NAMES, LOCALES, switcher, type Locale } from "../../i18n.svelte";
+  import MessageSquare from "@lucide/svelte/icons/message-square";
+  import MessageSquareOff from "@lucide/svelte/icons/message-square-off";
+  import Moon from "@lucide/svelte/icons/moon";
+  import Palette from "@lucide/svelte/icons/palette";
+  import Sun from "@lucide/svelte/icons/sun";
+  import SunMoon from "@lucide/svelte/icons/sun-moon";
+  import { i18n, LOCALE_NAMES, LOCALES, type Locale } from "../../i18n.svelte";
+  import { changePrefs, chatTheme, DEFAULT_THEME, mode, prefs, THEMES, type Mode, type ThemeName } from "../../settings.svelte";
   import {
     DEFAULT_LAYOUT,
     fromDockview,
@@ -147,6 +154,11 @@
     fullscreen = sel.client.transport.fullscreen?.() ?? fullscreen;
   }
 
+  const modeTitle = $derived(
+    { light: m.settings_mode_light(), dark: m.settings_mode_dark(), auto: m.settings_mode_auto() }[mode()],
+  );
+  const chatTitle = $derived(chatTheme() ? m.settings_chat_theme_on() : m.settings_chat_theme_off());
+
   // Narrow: one tab per panel
   const narrowPanels = $derived(panelsOf(layout));
   let tab = $state<string>("");
@@ -180,18 +192,50 @@
       </button>
     {/if}
     {#if sel.error}<span class="truncate text-xs text-error-500">{sel.error}</span>{/if}
-    <!-- Language of the UI: per device on the website, for this app in a chat -->
-    <label class="ml-auto flex shrink-0 items-center gap-1 text-muted" title={m.common_language()}>
-      <Languages class="size-4" aria-hidden="true" />
-      <select
-        class="select w-auto py-0.5 text-xs"
-        aria-label={m.common_language()}
-        value={i18n.locale}
-        onchange={(e) => switcher.choose(e.currentTarget.value as Locale)}
+    <!-- The user's settings (stored with a login, on the website also in the browser) -->
+    <div class="ml-auto flex shrink-0 items-center gap-1 text-muted">
+      <label class="flex items-center gap-1" title={m.common_language()}>
+        <Languages class="size-4" aria-hidden="true" />
+        <select
+          class="select w-auto py-0.5 text-xs"
+          aria-label={m.common_language()}
+          value={i18n.locale}
+          onchange={(e) => changePrefs({ locale: e.currentTarget.value as Locale })}
+        >
+          {#each LOCALES as l (l)}<option value={l}>{LOCALE_NAMES[l]}</option>{/each}
+        </select>
+      </label>
+      <label class="flex items-center gap-1" title={m.settings_theme()}>
+        <Palette class="size-4" aria-hidden="true" />
+        <select
+          class="select w-auto py-0.5 text-xs"
+          aria-label={m.settings_theme()}
+          value={prefs.settings.theme ?? DEFAULT_THEME}
+          onchange={(e) => changePrefs({ theme: e.currentTarget.value as ThemeName })}
+        >
+          {#each THEMES as t (t)}<option value={t}>{t}</option>{/each}
+        </select>
+      </label>
+      <button
+        type="button"
+        class="btn-icon btn-icon-sm hover:preset-tonal"
+        aria-label={modeTitle}
+        title={modeTitle}
+        onclick={() => changePrefs({ mode: ({ auto: "light", light: "dark", dark: "auto" } as Record<Mode, Mode>)[mode()] })}
       >
-        {#each LOCALES as l (l)}<option value={l}>{LOCALE_NAMES[l]}</option>{/each}
-      </select>
-    </label>
+        {#if mode() === "light"}<Sun class="size-4" aria-hidden="true" />{:else if mode() === "dark"}<Moon class="size-4" aria-hidden="true" />{:else}<SunMoon class="size-4" aria-hidden="true" />{/if}
+      </button>
+      <button
+        type="button"
+        class="btn-icon btn-icon-sm hover:preset-tonal"
+        aria-label={chatTitle}
+        aria-pressed={chatTheme()}
+        title={chatTitle}
+        onclick={() => changePrefs({ chat_theme: !chatTheme() })}
+      >
+        {#if chatTheme()}<MessageSquare class="size-4" aria-hidden="true" />{:else}<MessageSquareOff class="size-4" aria-hidden="true" />{/if}
+      </button>
+    </div>
     {#if fullscreen.available}
       <button
         type="button"

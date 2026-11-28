@@ -63,6 +63,7 @@ Gespeichert als `p:<id>`, `n:<projekt>:<hash>`, `s:<key>`, `o:<owner>` (Projekt-
 | Dateien | `list_user_files`, `create_file_upload_url`, `open_file_upload`, `open_file_list`, `open_file_manager` |
 | FOV-Planer | `set_fov`, `move_fov`, `rotate_fov`, `open_fov_planner`, `open_fov_viewer` |
 | Phantom (BIfTI) | `list_phantom_collections`, `list_phantoms`, `list_phantom_tissues`, `select_phantom`, `set_phantom_property`, `get_phantom_maps`, `open_phantom_browser`, `open_phantom_preview` |
+| Einstellungen | `get_user_settings`, `set_user_settings` (pro Nutzer, siehe unten) |
 | Workspace | `open_workspace` (Anordnung im Zustandsfeld `layout`, geändert mit `patch_state`) |
 | Sequenz | `list_sequence_sources`, `list_sequences`, `select_sequence`, `open_sequence_browser` (Quellen vorerst Platzhalter, siehe unten) |
 
@@ -274,11 +275,19 @@ Helfer in `src/lib/i18n.svelte.ts` (`formatNumber`, `formatDateTime`, Intl). Nic
 übersetzt werden Tool-Namen (Rahmen, Panel-Reiter), Fehlermeldungen und alles, was an die KI
 geht (Tool-Beschreibungen, „In den Chat“).
 
-Welche Sprache: Website: Wahl im Umschalter des Workspace (je Gerät gespeichert), sonst
-die des Browsers, sonst Englisch. MCP App: Umschalter im Workspace (nur für diese App),
-sonst das Argument `locale` des `open_*`-Aufrufs (die KI setzt die Sprache des
-Gesprächs), sonst die des Chats (`hostContext.locale`), sonst Browser, sonst Englisch. Die
-Sprache steht nicht im Session-Zustand.
+## Einstellungen
+
+Pro Nutzer (Login) speichert der Server Sprache, Farbschema (eines der 24 Skeleton-Themes,
+Standard `cerberus`), Hell/Dunkel (`light`, `dark`, `auto`) und `chat_theme`: ob MCP Apps
+im Chat die Farben des Chats übernehmen, wo er welche schickt (sonst gilt das Farbschema,
+mit eigenem Hintergrund). Sie gelten auf der Website und in jeder MCP App; die KI ändert
+sie mit `set_user_settings` (z. B. auf die Sprache des Gesprächs), `get_user_settings`
+liest sie. Ohne Login (der geteilte `visitor`) speichert der Server nichts und sagt das
+(`saved: false`, `warning`). Die Website hält die Einstellungen zusätzlich im Browser
+(`localStorage`), also auch ohne Login. Nicht gesetzt (`null`): Sprache des Chats bzw.
+Browsers, sonst Englisch; Hell/Dunkel des Chats bzw. Systems; Chat-Farben an. Umschalten:
+in der Leiste des Workspace (Sprache, Farbschema, Hell/Dunkel/Auto, Chat-Farben).
+Frontend: `src/lib/settings.svelte.ts`. Nicht im Session-Zustand.
 
 Rückfragen (Umbenennen, Löschen bestätigen) laufen über einen eigenen Dialog
 (`askConfirm`, `askText` in `src/lib/dialog.svelte.ts`, angezeigt von

@@ -6,9 +6,8 @@
   // The app is as tall as its content: the SDK reports that height to the host
   // (`ui/notifications/size-changed`, autoResize). Only a height or maxHeight the
   // host gives (`containerDimensions`) limits it; then the content scrolls inside.
-  // Language: the workspace's switcher (for this app only), else the tool call's
-  // `locale` (the AI sets the conversation's), else the chat's (`hostContext.locale`),
-  // else the browser's, else English.
+  // Language, colour theme, light/dark, chat colours: the user's settings
+  // (get_user_settings), else the chat's language and light/dark, the browser's, English.
   import { App, applyHostFonts, applyHostStyleVariables, type McpUiHostContext } from "@modelcontextprotocol/ext-apps";
   import { onDestroy, type Component } from "svelte";
   import { AnyfieldClient } from "../lib/client/anyfield";
@@ -19,9 +18,9 @@
   import { LocalSelection } from "../lib/state/local.svelte";
   import type { Selection } from "../lib/state/selection";
   import { SessionStore } from "../lib/state/session.svelte";
-  import { setDark } from "../lib/theme.svelte";
   import type { Session, State } from "../lib/types";
-  import { i18n, pickLocale, switcher, useLocale, type Locale } from "../lib/i18n.svelte";
+  import { i18n } from "../lib/i18n.svelte";
+  import { applyPrefs, chatTheme, loadPrefs, prefs } from "../lib/settings.svelte";
   import { m } from "../paraglide/messages.js";
 
   let {
@@ -61,16 +60,7 @@
         : "",
   );
 
-  let chosenLocale: Locale | null = null;
-  let argLocale: string | null = null;
-  let hostLocale: string | null = null;
-  const applyLocale = () => useLocale(pickLocale(chosenLocale, argLocale, hostLocale));
-  applyLocale();
-  // The switcher keeps nothing: the next app opens with the language of its call
-  switcher.choose = (l) => {
-    chosenLocale = l;
-    applyLocale();
-  };
+  applyPrefs();
 
   function openSession(key: string) {
     if (sel?.sessionKey === key) return;
@@ -108,10 +98,8 @@
   // Without a session the local selection starts from the tool result's state (e.g.
   // the phantom the preview was opened for), so it opens only once that arrives.
   app.ontoolinput = (params) => {
-    const { session_key: _, locale, ...rest } = params.arguments ?? {};
+    const { session_key: _, ...rest } = params.arguments ?? {};
     options = rest;
-    argLocale = typeof locale === "string" ? locale : null;
-    applyLocale();
     const key = params.arguments?.session_key;
     if (typeof key === "string" && key) openSession(key);
   };
@@ -126,24 +114,28 @@
       openLocal(r?.state);
     }
   };
-  // Blend into the chat: its light/dark and, where it sends them, its colours and fonts
-  // (app.css maps them onto our tokens; the background stays transparent). Until the
-  // host says, the system's light/dark.
-  setDark(matchMedia("(prefers-color-scheme: dark)").matches);
+  // The chat's language and light/dark (used where the user's settings leave them open)
+  // and, where it sends them, its colours and fonts (with the setting "chat colours").
   function applyHost(ctx: Partial<McpUiHostContext> | undefined) {
     if (!ctx) return;
-    if (ctx.locale && ctx.locale !== hostLocale) {
-      hostLocale = ctx.locale;
-      applyLocale();
+    if (ctx.locale !== undefined || ctx.theme !== undefined) {
+      prefs.host = {
+        locale: ctx.locale ?? prefs.host.locale,
+        dark: ctx.theme ? ctx.theme === "dark" : prefs.host.dark,
+      };
+      applyPrefs();
     }
-    if (ctx.theme) setDark(ctx.theme === "dark");
+    // The chat's colours: only used with the setting "chat colours" (app.css, chat-theme)
     if (ctx.styles?.variables) applyHostStyleVariables(ctx.styles.variables);
-    if (ctx.styles?.css?.fonts) applyHostFonts(ctx.styles.css.fonts);
+    if (ctx.styles?.css?.fonts && chatTheme()) applyHostFonts(ctx.styles.css.fonts);
     if (ctx.containerDimensions) container = ctx.containerDimensions;
   }
   app.onhostcontextchanged = applyHost;
   app.connect().then(
-    () => applyHost(app.getHostContext()),
+    () => {
+      applyHost(app.getHostContext());
+      void loadPrefs(client, false);
+    },
     (e) => (error = String(e)),
   );
 

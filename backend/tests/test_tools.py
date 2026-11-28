@@ -146,16 +146,3 @@ async def test_patch_state(client, as_user):
 async def test_open_without_session(client):
     r = await call(client, "open_fov_planner")
     assert r["key"] is None and r["state"]["fov"]["size_mm"] == [200.0, 200.0, 100.0]
-
-
-async def test_every_app_tool_takes_a_locale(client):
-    opens = [t for t in await client.list_tools() if t.name.startswith("open_")]
-    assert len(opens) >= 10
-    for t in opens:
-        assert t.inputSchema["properties"]["locale"]["anyOf"][0]["enum"] == ["en", "de", "es", "fr", "it"], (
-            t.name
-        )
-    r = await client.call_tool("open_fov_planner", {"locale": "fr"})
-    assert r.structured_content["key"] is None
-    with pytest.raises(ToolError):
-        await client.call_tool("open_fov_planner", {"locale": "pt"})

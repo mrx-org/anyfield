@@ -2,6 +2,7 @@
 // Paraglide messages (messages/<locale>.json, compiled to src/paraglide by
 // `pnpm i18n`); a message reads the locale when it is called, so a change of
 // language re-renders the UI under `{#key i18n.locale}` (web app, MCP App shell).
+// Which language: the user's settings (settings.svelte.ts).
 // Tool names, error messages and what goes to the AI stay English.
 import { baseLocale, isLocale, locales, setLocale, type Locale } from "../paraglide/runtime.js";
 
@@ -38,34 +39,6 @@ export function useLocale(locale: Locale) {
   i18n.locale = locale;
   if (typeof document !== "undefined") document.documentElement.lang = locale;
 }
-
-// The web app keeps the language chosen in the switcher per device. Storage may be
-// unavailable (a sandboxed iframe, private mode): then nothing is kept.
-const STORAGE_KEY = "anyfield.locale";
-
-export function savedLocale(): Locale | null {
-  try {
-    return matchLocale(localStorage.getItem(STORAGE_KEY));
-  } catch {
-    return null;
-  }
-}
-
-export function saveLocale(locale: Locale) {
-  try {
-    localStorage.setItem(STORAGE_KEY, locale);
-  } catch {
-    // not kept
-  }
-}
-
-/** What the language switcher does: set by the shell (web app: save and use; MCP App: use for this app only). */
-export const switcher: { choose: (locale: Locale) => void } = {
-  choose: (locale) => {
-    saveLocale(locale);
-    useLocale(locale);
-  },
-};
 
 // --- numbers and dates in the UI's language ---------------------------------------
 

@@ -147,6 +147,13 @@
   "app_rename_project": "Renombrar proyecto",
   "app_delete_project": "Eliminar proyecto",
   "history_branch_ok": "Ramificar",
+  "settings_theme": "Tema de color",
+  "settings_mode_light": "Claro (clic: oscuro)",
+  "settings_mode_dark": "Oscuro (clic: automático)",
+  "settings_mode_auto": "Automático, como el sistema o el chat (clic: claro)",
+  "settings_chat_theme_on": "En un chat: los colores del chat (clic: el tema de color)",
+  "settings_chat_theme_off": "En un chat: el tema de color (clic: los colores del chat)",
+  "settings_not_saved": "No guardado: los ajustes solo se conservan con inicio de sesión",
   "mcp_waiting": "Esperando la llamada a la herramienta …",
   "mcp_send": "Enviar al chat",
   "mcp_sent": "Enviado"

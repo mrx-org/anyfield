@@ -15,7 +15,7 @@ from fastmcp.exceptions import ToolError
 from pydantic import Field, ValidationError
 
 from . import fov as fov_ops
-from .args import LocaleArg, OptionalSessionKey, SessionKey
+from .args import OptionalSessionKey, SessionKey
 from .file_tools import UserFiles
 from .models import CasPhantom, Fov, Phantom, PhantomChoice, Session, State, View
 from .phantoms import (
@@ -256,9 +256,7 @@ def register(
         return public_maps(raw, choice, default=chosen is None)
 
     @mcp.tool(app=AppConfig(resource_uri=PHANTOM_APP_URI), annotations={"readOnlyHint": True})
-    async def open_phantom_browser(
-        session_key: OptionalSessionKey = None, locale: LocaleArg = None
-    ) -> dict[str, Any]:
+    async def open_phantom_browser(session_key: OptionalSessionKey = None) -> dict[str, Any]:
         """Show the interactive phantom browser (catalog and the user's CAS phantoms,
         selection, with the phantom preview to fold out). With a session the choice goes into the session; without
         one the user picks and the choice comes back to the chat. In clients without
@@ -281,7 +279,6 @@ def register(
                 description="Without a session: tissues to start with (list_phantom_tissues); omit for all"
             ),
         ] = None,
-        locale: LocaleArg = None,
     ) -> dict[str, Any]:
         """Show the phantom preview: a large view of a phantom, with the plane (tra,
         cor, sag, 3D, chosen by the user) and the property (PD, T1, T2, ...) to pick.

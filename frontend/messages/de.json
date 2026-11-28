@@ -147,6 +147,13 @@
   "app_rename_project": "Projekt umbenennen",
   "app_delete_project": "Projekt löschen",
   "history_branch_ok": "Abzweigen",
+  "settings_theme": "Farbschema",
+  "settings_mode_light": "Hell (Klick: dunkel)",
+  "settings_mode_dark": "Dunkel (Klick: automatisch)",
+  "settings_mode_auto": "Automatisch, wie System bzw. Chat (Klick: hell)",
+  "settings_chat_theme_on": "Im Chat: Farben des Chats (Klick: Farbschema)",
+  "settings_chat_theme_off": "Im Chat: Farbschema (Klick: Farben des Chats)",
+  "settings_not_saved": "Nicht gespeichert: Einstellungen bleiben nur mit Login erhalten",
   "mcp_waiting": "Warte auf Tool-Aufruf …",
   "mcp_send": "In den Chat",
   "mcp_sent": "Gesendet"

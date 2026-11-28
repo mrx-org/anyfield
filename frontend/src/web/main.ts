@@ -1,9 +1,9 @@
 import { mount } from "svelte";
 import "../app.css";
-import { pickLocale, savedLocale, useLocale } from "../lib/i18n.svelte";
+import { applyPrefs } from "../lib/settings.svelte";
 import App from "./App.svelte";
 
-// The language chosen on this device, else the browser's, else English
-useLocale(pickLocale(savedLocale()));
+// Until App has loaded the settings: the browser's language, the system's light/dark
+applyPrefs();
 
 mount(App, { target: document.getElementById("app")! });

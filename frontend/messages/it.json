@@ -147,6 +147,13 @@
   "app_rename_project": "Rinomina il progetto",
   "app_delete_project": "Elimina il progetto",
   "history_branch_ok": "Dirama",
+  "settings_theme": "Tema di colori",
+  "settings_mode_light": "Chiaro (clic: scuro)",
+  "settings_mode_dark": "Scuro (clic: automatico)",
+  "settings_mode_auto": "Automatico, come il sistema o la chat (clic: chiaro)",
+  "settings_chat_theme_on": "In una chat: i colori della chat (clic: il tema di colori)",
+  "settings_chat_theme_off": "In una chat: il tema di colori (clic: i colori della chat)",
+  "settings_not_saved": "Non salvato: le impostazioni restano solo con l'accesso",
   "mcp_waiting": "In attesa della chiamata allo strumento …",
   "mcp_send": "Invia alla chat",
   "mcp_sent": "Inviato"

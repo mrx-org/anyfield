@@ -147,6 +147,13 @@
   "app_rename_project": "Rename project",
   "app_delete_project": "Delete project",
   "history_branch_ok": "Branch off",
+  "settings_theme": "Colour theme",
+  "settings_mode_light": "Light (click: dark)",
+  "settings_mode_dark": "Dark (click: automatic)",
+  "settings_mode_auto": "Automatic, as the system or chat (click: light)",
+  "settings_chat_theme_on": "In a chat: the chat's colours (click: the colour theme)",
+  "settings_chat_theme_off": "In a chat: the colour theme (click: the chat's colours)",
+  "settings_not_saved": "Not saved: settings are kept only with a login",
   "mcp_waiting": "Waiting for the tool call …",
   "mcp_send": "Send to chat",
   "mcp_sent": "Sent"

@@ -1,5 +1,6 @@
 """Where projects, their nodes and sessions live: entries `p:<id>` (project),
-`n:<project>:<hash>` (node), `s:<key>` (session), `o:<owner>` (the owner's project ids).
+`n:<project>:<hash>` (node), `s:<key>` (session), `o:<owner>` (the owner's project ids),
+`u:<user>` (the user's settings).
 
 `MemoryStore` for tests and local runs. `ModalStore` on Modal: a Modal Dict as
 the fast store every container sees, plus a Volume as durable copy, because a
@@ -12,7 +13,7 @@ import asyncio
 import json
 import logging
 from pathlib import Path
-from typing import Protocol
+from typing import Any, Protocol
 
 from .migrations import migrate_json
 from .models import Node, Project, Session
@@ -70,6 +71,15 @@ class Entries:
     async def delete_node(self, project_id: str, h: str) -> None:
         await self._put(f"n:{project_id}:{h}", None)
 
+    async def get_settings(self, user: str):
+        from .settings import UserSettings
+
+        raw = await self._get(f"u:{user}")
+        return None if raw is None else UserSettings.model_validate_json(raw)
+
+    async def put_settings(self, user: str, settings) -> None:
+        await self._put(f"u:{user}", settings.model_dump_json())
+
     async def owned_by(self, owner: str) -> list[str]:
         """The ids of the owner's projects."""
         raw = await self._get(f"o:{owner}")
@@ -89,6 +99,8 @@ class SessionStore(Protocol):
     async def get_node(self, project_id: str, h: str) -> Node | None: ...
     async def put_node(self, project_id: str, node: Node) -> None: ...
     async def delete_node(self, project_id: str, h: str) -> None: ...
+    async def get_settings(self, user: str) -> Any: ...
+    async def put_settings(self, user: str, settings: Any) -> None: ...
     async def owned_by(self, owner: str) -> list[str]: ...
     async def set_owned_by(self, owner: str, ids: list[str]) -> None: ...
 

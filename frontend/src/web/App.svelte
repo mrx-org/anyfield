@@ -18,6 +18,7 @@
   import { SessionStore } from "../lib/state/session.svelte";
   import type { ProjectSummary } from "../lib/types";
   import { formatDateTime, i18n } from "../lib/i18n.svelte";
+  import { applyPrefs, loadPrefs, prefs } from "../lib/settings.svelte";
   import { m } from "../paraglide/messages.js";
 
   const transport = new McpHttpTransport();
@@ -63,8 +64,11 @@
 
   // A project without sessions gets one from the server (`default`)
   const loadProjects = () => run(async () => {
+    const was = loggedIn;
     projects = await client.listProjects();
     loggedIn = transport.loggedIn;
+    // Logged in just now: the user's settings
+    if (loggedIn && !was) await loadPrefs(client, true);
   });
 
   async function create() {
@@ -105,13 +109,22 @@
   onMount(() => {
     const onPop = () => (path = location.pathname);
     addEventListener("popstate", onPop);
+    // Light/dark "automatic" follows the system
+    const scheme = matchMedia("(prefers-color-scheme: dark)");
+    const onScheme = () => prefs.settings.mode !== "light" && prefs.settings.mode !== "dark" && applyPrefs();
+    scheme.addEventListener("change", onScheme);
     void run(async () => {
       await transport.completeLogin();
       path = location.pathname;
       loggedIn = transport.loggedIn;
+      // The settings: this browser's, then the user's (with a login)
+      await loadPrefs(client, true);
       if (loggedIn && !sessionKey) await loadProjects();
     });
-    return () => removeEventListener("popstate", onPop);
+    return () => {
+      removeEventListener("popstate", onPop);
+      scheme.removeEventListener("change", onScheme);
+    };
   });
 </script>
 

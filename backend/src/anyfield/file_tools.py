@@ -22,7 +22,7 @@ from fastmcp.apps.config import AppConfig
 from fastmcp.exceptions import ToolError
 from pydantic import Field
 
-from .args import LocaleArg, OptionalSessionKey
+from .args import OptionalSessionKey
 from .auth import current_user
 
 Call = Callable[[str, dict[str, Any]], Awaitable[Any]]
@@ -163,7 +163,7 @@ def register(
         return await files.upload_url(file_name)
 
     @mcp.tool(app=AppConfig(resource_uri=UPLOAD_APP_URI), annotations={"readOnlyHint": True})
-    async def open_file_upload(locale: LocaleArg = None) -> dict[str, Any]:
+    async def open_file_upload() -> dict[str, Any]:
         """Show the file upload: the user drops files (or picks them) to store them in
         their files; each upload's name and sha256 come back to the chat. In clients
         without MCP Apps: use create_file_upload_url."""
@@ -180,7 +180,6 @@ def register(
             ),
         ] = None,
         download: Annotated[bool, Field(description="Show the download buttons")] = True,
-        locale: LocaleArg = None,
     ) -> dict[str, Any]:
         """Show the user's files as a sortable, searchable table (name, type, size,
         uploaded) with download buttons. Clicking a name: without a session it sends
@@ -193,7 +192,7 @@ def register(
         return {**await opened(session_key), "files": listed}
 
     @mcp.tool(app=AppConfig(resource_uri=MANAGER_APP_URI), annotations={"readOnlyHint": True})
-    async def open_file_manager(locale: LocaleArg = None) -> dict[str, Any]:
+    async def open_file_manager() -> dict[str, Any]:
         """Show the file manager: the file upload above the file list (see
         open_file_upload and open_file_list). Returns the files too."""
         return {**await opened(None), "files": await files.list()}

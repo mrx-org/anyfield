@@ -147,6 +147,13 @@
   "app_rename_project": "Renommer le projet",
   "app_delete_project": "Supprimer le projet",
   "history_branch_ok": "Bifurquer",
+  "settings_theme": "Thème de couleurs",
+  "settings_mode_light": "Clair (clic : sombre)",
+  "settings_mode_dark": "Sombre (clic : automatique)",
+  "settings_mode_auto": "Automatique, comme le système ou le chat (clic : clair)",
+  "settings_chat_theme_on": "Dans un chat : les couleurs du chat (clic : le thème de couleurs)",
+  "settings_chat_theme_off": "Dans un chat : le thème de couleurs (clic : les couleurs du chat)",
+  "settings_not_saved": "Non enregistré : les réglages ne sont conservés qu'avec une connexion",
   "mcp_waiting": "En attente de l'appel d'outil …",
   "mcp_send": "Envoyer dans le chat",
   "mcp_sent": "Envoyé"

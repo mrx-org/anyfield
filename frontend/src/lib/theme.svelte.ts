@@ -5,7 +5,7 @@
 class Theme {
   /** <html> has the class "dark". */
   dark = $state(true);
-  /** Bumped on every change of <html>'s class or style (e.g. the chat's colours). */
+  /** Bumped on every change of <html>'s class, style or theme (e.g. the chat's colours). */
   version = $state(0);
 
   constructor() {
@@ -16,7 +16,7 @@ class Theme {
       this.version++;
     };
     read();
-    new MutationObserver(read).observe(html, { attributes: true, attributeFilter: ["class", "style"] });
+    new MutationObserver(read).observe(html, { attributes: true, attributeFilter: ["class", "style", "data-theme"] });
   }
 }
 
