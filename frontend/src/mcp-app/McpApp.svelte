@@ -14,6 +14,7 @@
   import { AnyfieldClient } from "../lib/client/anyfield";
   import { McpAppTransport } from "../lib/client/mcp-app";
   import ToolFrame from "../lib/components/ToolFrame.svelte";
+  import Dialogs from "../lib/components/Dialogs.svelte";
   import Toaster from "../lib/components/Toaster.svelte";
   import { LocalSelection } from "../lib/state/local.svelte";
   import type { Selection } from "../lib/state/selection";
@@ -174,3 +175,4 @@
   </ToolFrame>
 </div>
 <Toaster />
+<Dialogs grow />

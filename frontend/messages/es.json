@@ -142,6 +142,11 @@
   "app_no_projects": "Aún no hay proyectos.",
   "app_new_project": "Nuevo proyecto",
   "app_confirm_delete_project": "¿Eliminar el proyecto «{name}» con todas sus sesiones y su historial?",
+  "common_cancel": "Cancelar",
+  "common_ok": "Aceptar",
+  "app_rename_project": "Renombrar proyecto",
+  "app_delete_project": "Eliminar proyecto",
+  "history_branch_ok": "Ramificar",
   "mcp_waiting": "Esperando la llamada a la herramienta …",
   "mcp_send": "Enviar al chat",
   "mcp_sent": "Enviado"
