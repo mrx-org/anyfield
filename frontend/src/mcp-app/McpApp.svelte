@@ -6,6 +6,9 @@
   // The app is as tall as its content: the SDK reports that height to the host
   // (`ui/notifications/size-changed`, autoResize). Only a height or maxHeight the
   // host gives (`containerDimensions`) limits it; then the content scrolls inside.
+  // Language: the workspace's switcher (for this app only), else the tool call's
+  // `locale` (the AI sets the conversation's), else the chat's (`hostContext.locale`),
+  // else the browser's, else English.
   import { App, applyHostFonts, applyHostStyleVariables, type McpUiHostContext } from "@modelcontextprotocol/ext-apps";
   import { onDestroy, type Component } from "svelte";
   import { AnyfieldClient } from "../lib/client/anyfield";
@@ -17,6 +20,8 @@
   import { SessionStore } from "../lib/state/session.svelte";
   import { setDark } from "../lib/theme.svelte";
   import type { Session, State } from "../lib/types";
+  import { i18n, pickLocale, switcher, useLocale, type Locale } from "../lib/i18n.svelte";
+  import { m } from "../paraglide/messages.js";
 
   let {
     name,
@@ -54,6 +59,17 @@
         : "",
   );
 
+  let chosenLocale: Locale | null = null;
+  let argLocale: string | null = null;
+  let hostLocale: string | null = null;
+  const applyLocale = () => useLocale(pickLocale(chosenLocale, argLocale, hostLocale));
+  applyLocale();
+  // The switcher keeps nothing: the next app opens with the language of its call
+  switcher.choose = (l) => {
+    chosenLocale = l;
+    applyLocale();
+  };
+
   function openSession(key: string) {
     if (sel?.sessionKey === key) return;
     if (sel instanceof SessionStore) sel.stop();
@@ -88,15 +104,17 @@
   // Without a session the local selection starts from the tool result's state (e.g.
   // the phantom the preview was opened for), so it opens only once that arrives.
   app.ontoolinput = (params) => {
-    const { session_key: _, ...rest } = params.arguments ?? {};
+    const { session_key: _, locale, ...rest } = params.arguments ?? {};
     options = rest;
+    argLocale = typeof locale === "string" ? locale : null;
+    applyLocale();
     const key = params.arguments?.session_key;
     if (typeof key === "string" && key) openSession(key);
   };
   app.ontoolresult = (result) => {
     const r = result.structuredContent as (Partial<Session> & { state?: State }) | undefined;
     if (result.isError) {
-      error = result.content?.map((c) => ("text" in c ? c.text : "")).join("\n") || "Fehler";
+      error = result.content?.map((c) => ("text" in c ? c.text : "")).join("\n") || "Error";
     } else if (r?.key) {
       openSession(r.key);
       if (sel instanceof SessionStore) sel.accept(r as Session);
@@ -110,6 +128,10 @@
   setDark(matchMedia("(prefers-color-scheme: dark)").matches);
   function applyHost(ctx: Partial<McpUiHostContext> | undefined) {
     if (!ctx) return;
+    if (ctx.locale && ctx.locale !== hostLocale) {
+      hostLocale = ctx.locale;
+      applyLocale();
+    }
     if (ctx.theme) setDark(ctx.theme === "dark");
     if (ctx.styles?.variables) applyHostStyleVariables(ctx.styles.variables);
     if (ctx.styles?.css?.fonts) applyHostFonts(ctx.styles.css.fonts);
@@ -131,19 +153,20 @@
 <div class="flex w-full flex-col p-1" style={sizeStyle}>
   <ToolFrame name={toolName} class="flex-1">
     {#if sel}
-      <div class="min-h-0 min-w-0 flex-1 overflow-y-auto"><Tool {sel} {...options} /></div>
+      <!-- Messages read the locale when called: a new language renders the tool anew -->
+      {#key i18n.locale}<div class="min-h-0 min-w-0 flex-1 overflow-y-auto"><Tool {sel} {...options} /></div>{/key}
       {#if !sel.sessionKey && summary}
         <footer class="flex items-center gap-2 border-t border-border bg-panel px-3 py-2 text-xs">
           <span class="min-w-0 flex-1 truncate text-muted" title={sel.state ? summary(sel.state) : ""}>
             {sel.state ? summary(sel.state) : ""}
           </span>
           <button class="btn btn-sm preset-filled-primary-500 shrink-0" onclick={sendToChat}>
-            {sent ? "Gesendet" : "In den Chat"}
+            {sent ? m.mcp_sent() : m.mcp_send()}
           </button>
         </footer>
       {/if}
     {:else}
-      <p class="p-4 text-sm text-muted">{error ?? "Warte auf Tool-Aufruf …"}</p>
+      <p class="p-4 text-sm text-muted">{error ?? m.mcp_waiting()}</p>
     {/if}
   </ToolFrame>
 </div>

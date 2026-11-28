@@ -14,7 +14,7 @@ export class McpAppTransport implements Transport {
 
   async sendToChat(text: string): Promise<void> {
     const r = await this.app.sendMessage({ role: "user", content: [{ type: "text", text }] });
-    if (r.isError) throw new Error("Der Chat hat die Nachricht nicht angenommen.");
+    if (r.isError) throw new Error("The chat did not accept the message.");
   }
 
   async setChatContext(text: string): Promise<void> {
@@ -35,6 +35,6 @@ export class McpAppTransport implements Transport {
 
   async openLink(url: string): Promise<void> {
     const r = await this.app.openLink({ url });
-    if (r.isError) throw new Error("Der Chat hat den Link nicht geöffnet.");
+    if (r.isError) throw new Error("The chat did not open the link.");
   }
 }

@@ -2,6 +2,8 @@
   // Histogram of the shown property (log counts) with the window on top: two lines,
   // min (blue) and max (red), dragged with the mouse or a finger. Below it, the window
   // and the value range as text. Only draws; the viewer owns the window.
+  import { m } from "../../../paraglide/messages.js";
+  import { formatNumber, formatSignificant } from "../../i18n.svelte";
   import { onMount } from "svelte";
 
   let {
@@ -30,7 +32,7 @@
   const GRAB_PX = 10;
   const PAD_X = 5;
 
-  const fmt = (v: number) => (Math.abs(v) >= 100 ? v.toFixed(0) : Math.abs(v) >= 1 ? v.toFixed(2) : v.toPrecision(2));
+  const fmt = (v: number) => (Math.abs(v) >= 100 ? formatNumber(v, 0) : Math.abs(v) >= 1 ? formatNumber(v, 2) : formatSignificant(v, 2));
 
   let canvas: HTMLCanvasElement;
   let w = $state(0);
@@ -133,7 +135,7 @@
   <canvas
     bind:this={canvas}
     class="h-10 w-full touch-none text-muted {hover ? 'cursor-ew-resize' : ''}"
-    aria-label="Histogramm {label}, Fenster {fmt(win[0])} bis {fmt(win[1])}"
+    aria-label={m.hist_aria({ label, min: fmt(win[0]), max: fmt(win[1]) })}
     onpointerdown={onDown}
     onpointermove={onMove}
     onpointerup={onUp}
@@ -142,6 +144,6 @@
   ></canvas>
   <span class="text-xs text-muted">
     {label}: <span style="color: {MIN_COLOR}">{fmt(win[0])}</span> … <span style="color: {MAX_COLOR}">{fmt(win[1])}</span>
-    {unit} <span class="opacity-70">(Bereich {fmt(axis[0])} … {fmt(axis[1])})</span>
+    {unit} <span class="opacity-70">({m.hist_range({ min: fmt(axis[0]), max: fmt(axis[1]) })})</span>
   </span>
 </div>

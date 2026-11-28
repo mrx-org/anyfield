@@ -27,7 +27,7 @@ from starlette.types import ASGIApp, Receive, Scope, Send
 from . import file_tools, phantom_tools, seq_tools
 from . import fov as fov_ops
 from . import layout as layout_ops
-from .args import ExpectedRev, OptionalSessionKey, SessionKey, Vec3Arg
+from .args import ExpectedRev, LocaleArg, OptionalSessionKey, SessionKey, Vec3Arg
 from .auth import AuthProvider, make_login_on_demand, require_user
 from .file_tools import UserFiles
 from .gateway import GATEWAY_URL, GatewayClient
@@ -244,7 +244,7 @@ def build(
         return public(session)
 
     @mcp.tool(app=AppConfig(resource_uri=SESSION_APP_URI), annotations={"readOnlyHint": True})
-    async def open_session(session_key: SessionKey) -> dict[str, Any]:
+    async def open_session(session_key: SessionKey, locale: LocaleArg = None) -> dict[str, Any]:
         """Show the session's state as JSON for the user to edit: "Update" sends the
         changes (patch_state, rejected with the reason if they do not validate or the
         session changed meanwhile), "Reload" drops them and loads the current state.
@@ -270,6 +270,7 @@ def build(
                 "with patch_state"
             ),
         ] = None,
+        locale: LocaleArg = None,
     ) -> dict[str, Any]:
         # Description: WORKSPACE_DESCRIPTION (it names the tools)
         if session_key is not None:
@@ -333,7 +334,9 @@ def build(
         return await change_fov(session_key, lambda f: fov_ops.rotate_fov(f, _v(delta_deg)), expected_rev)
 
     @mcp.tool(app=AppConfig(resource_uri=FOV_APP_URI), annotations={"readOnlyHint": True})
-    async def open_fov_planner(session_key: OptionalSessionKey = None) -> dict[str, Any]:
+    async def open_fov_planner(
+        session_key: OptionalSessionKey = None, locale: LocaleArg = None
+    ) -> dict[str, Any]:
         """Show the FOV planner: sliders for the FOV box (position, rotation, size)
         and its matrix, with a preview of the phantom resliced onto that grid to fold
         out. With a session it edits the session's FOV; without one the user plans
@@ -342,7 +345,9 @@ def build(
         return await opened(session_key)
 
     @mcp.tool(app=AppConfig(resource_uri=FOV_VIEWER_APP_URI), annotations={"readOnlyHint": True})
-    async def open_fov_viewer(session_key: OptionalSessionKey = None) -> dict[str, Any]:
+    async def open_fov_viewer(
+        session_key: OptionalSessionKey = None, locale: LocaleArg = None
+    ) -> dict[str, Any]:
         """Show the visual FOV planner: the phantom with the FOV box, which the user
         moves, turns and resizes with the mouse (Ctrl + drag, Ctrl + right drag,
         Ctrl + wheel). With a session it edits the session's FOV; without one the user

@@ -8,6 +8,7 @@
   // comes with that tool too: folded out it says so for now.
   // Bound to a Selection: a session or local (MCP App without session, result back
   // to the chat).
+  import { m } from "../../../paraglide/messages.js";
   import {
     Collapsible,
     Tabs,
@@ -137,12 +138,12 @@
     <Collapsible open={previewOpen} onOpenChange={(d) => (previewOpen = d.open)}>
       <Collapsible.Trigger class="btn btn-sm preset-outlined-surface-300-700 w-full justify-start text-xs">
         <ChevronRight class="size-4 transition-transform {previewOpen ? 'rotate-90' : ''}" aria-hidden="true" />
-        Vorschau
+        {m.common_preview()}
       </Collapsible.Trigger>
       <Collapsible.Content class="mt-2">
         {#if previewOpen}
           <p class="rounded border border-dashed border-border p-3 text-xs text-muted">
-            Dauer, Parameter und Waveforms der Sequenz: kommen mit dem Sequenz-Tool des MRX-Gateways.
+            {m.seq_preview_later()}
           </p>
         {/if}
       </Collapsible.Content>
@@ -150,7 +151,7 @@
   {/if}
 
   <section class="flex flex-col gap-2">
-    <h2 class="text-xs font-semibold uppercase tracking-wide text-muted">Sequenz</h2>
+    <h2 class="text-xs font-semibold uppercase tracking-wide text-muted">{m.seq_heading()}</h2>
     {#if current}
       <div class="flex items-center gap-2">
         <div class="flex min-w-0 flex-1 flex-col">
@@ -162,21 +163,21 @@
         <button
           type="button"
           class="btn-icon btn-icon-sm hover:preset-tonal shrink-0"
-          aria-label="Sequenz abwählen"
-          title="Sequenz abwählen"
+          aria-label={m.seq_deselect()}
+          title={m.seq_deselect()}
           onclick={() => sel.patch({ sequence: null })}
         >
           <X class="size-4" aria-hidden="true" />
         </button>
       </div>
     {:else if sel.state}
-      <span class="text-xs text-muted">Keine gewählt.</span>
+      <span class="text-xs text-muted">{m.seq_none()}</span>
     {/if}
     {#if sel.error}<p class="text-xs text-error-500">{sel.error}</p>{/if}
   </section>
 
   {#if sourcesError}<p class="text-xs text-error-500">{sourcesError}</p>{/if}
-  {#if !sources && !sourcesError}<p class="text-xs text-muted">Lade Quellen …</p>{/if}
+  {#if !sources && !sourcesError}<p class="text-xs text-muted">{m.seq_loading_sources()}</p>{/if}
 
   {#if tab}
     <Tabs value={tab} onValueChange={(d) => (tab = d.value)}>
@@ -185,7 +186,7 @@
         {#each sources ?? [] as s (s.source)}
           <Tabs.Trigger value={s.source} title={s.description ?? s.origin}>{s.source}</Tabs.Trigger>
         {/each}
-        <Tabs.Trigger value={CAS} title="Deine Sequenzdateien (.seq, .py, .ipynb)">CAS</Tabs.Trigger>
+        <Tabs.Trigger value={CAS} title={m.seq_cas_title()}>CAS</Tabs.Trigger>
         <Tabs.Indicator />
       </Tabs.List>
       {#each sources ?? [] as s (s.source)}
@@ -193,11 +194,11 @@
           {#if tab === s.source}
             <section class="flex flex-col gap-1">
               <span class="truncate text-xs text-muted" title={s.origin}>{s.description ?? s.origin}</span>
-              <input class="input text-xs" type="search" placeholder="Suchen (Datei, Funktion)" bind:value={query} />
+              <input class="input text-xs" type="search" placeholder={m.seq_search()} bind:value={query} />
               {#if filesError[s.source]}<p class="text-xs text-error-500">{filesError[s.source]}</p>{/if}
               {#if tree}
                 {#if !tree.rootNode.children?.length}
-                  <p class="p-2 text-xs text-muted">{query ? "Nichts passt zur Suche." : "Keine Sequenzen."}</p>
+                  <p class="p-2 text-xs text-muted">{query ? m.seq_no_match() : m.seq_empty()}</p>
                 {/if}
                 <TreeView
                   collection={tree}
@@ -216,7 +217,7 @@
                   </TreeView.Tree>
                 </TreeView>
               {:else if !filesError[s.source]}
-                <p class="text-xs text-muted">Lade Sequenzen …</p>
+                <p class="text-xs text-muted">{m.seq_loading()}</p>
               {/if}
             </section>
           {/if}

@@ -232,6 +232,23 @@ frontend/  Svelte 5, TypeScript, Vite, NiiVue, Skeleton (UI), Lucide (Icons)
   dev/app-host.html          Test-Host für die MCP App
 ```
 
+## Sprachen
+
+Die UI gibt es auf Englisch (Basis und Fallback), Deutsch, Spanisch, Französisch und
+Italienisch, mit [Paraglide JS](https://paraglidejs.com): je Sprache eine Datei
+`frontend/messages/<sprache>.json` (Schlüssel → Text, Platzhalter `{name}`), daraus macht
+`pnpm i18n` (läuft vor `dev`, `check`, `test`, `build`) typisierte Funktionen in
+`src/paraglide/` (generiert, nicht im Repo): `m.files_none()`. Zahlen und Datum über die
+Helfer in `src/lib/i18n.svelte.ts` (`formatNumber`, `formatDateTime`, Intl). Nicht
+übersetzt werden Tool-Namen (Rahmen, Panel-Reiter), Fehlermeldungen und alles, was an die KI
+geht (Tool-Beschreibungen, „In den Chat“).
+
+Welche Sprache: Website: Wahl im Umschalter des Workspace (je Gerät gespeichert), sonst
+die des Browsers, sonst Englisch. MCP App: Umschalter im Workspace (nur für diese App),
+sonst das Argument `locale` des `open_*`-Aufrufs (die KI setzt die Sprache des
+Gesprächs), sonst die des Chats (`hostContext.locale`), sonst Browser, sonst Englisch. Die
+Sprache steht nicht im Session-Zustand.
+
 UI-Bausteine kommen aus Skeleton (`@skeletonlabs/skeleton-svelte`), Icons **immer** aus
 Lucide (`@lucide/svelte`, je Icon importiert: `import ChevronRight from
 "@lucide/svelte/icons/chevron-right"`). Keine Unicode-Zeichen oder eigenen SVGs als Icons.

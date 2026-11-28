@@ -11,6 +11,7 @@
   // Bump `reload` to load the list again (e.g. after an upload). Opened again, the list
   // this client loaded last shows at once while the server's (cached a few minutes)
   // comes in.
+  import { m } from "../../../paraglide/messages.js";
   import ArrowDown from "@lucide/svelte/icons/arrow-down";
   import ArrowUp from "@lucide/svelte/icons/arrow-up";
   import Download from "@lucide/svelte/icons/download";
@@ -40,11 +41,11 @@
     select?: boolean;
   } = $props();
 
-  const ALL_COLUMNS: { key: SortKey; label: string }[] = [
-    { key: "name", label: "Name" },
-    { key: "type", label: "Typ" },
-    { key: "size", label: "Größe" },
-    { key: "uploaded_at", label: "Hochgeladen" },
+  const ALL_COLUMNS: { key: SortKey; label: () => string }[] = [
+    { key: "name", label: m.files_col_name },
+    { key: "type", label: m.files_col_type },
+    { key: "size", label: m.files_col_size },
+    { key: "uploaded_at", label: m.files_col_uploaded },
   ];
   const columns = $derived(fixedMode === "bifti" ? ALL_COLUMNS.filter((c) => c.key !== "type") : ALL_COLUMNS);
 
@@ -126,21 +127,21 @@
      and nothing scrolls -->
 <div class="flex min-h-0 min-w-0 flex-col gap-2 text-sm text-text">
   <div class="flex items-center gap-2">
-    <input class="input min-w-0 flex-1 text-xs" type="search" placeholder="Suchen (Name, Typ)" bind:value={query} />
+    <input class="input min-w-0 flex-1 text-xs" type="search" placeholder={m.files_search()} bind:value={query} />
     <select
       class="select w-auto shrink-0 text-xs"
-      aria-label="Modus"
+      aria-label={m.files_mode()}
       value={mode}
       disabled={!!fixedMode}
       onchange={(e) => (chosenMode = e.currentTarget.value as FileMode)}
     >
-      {#each FILE_MODES as m (m.key)}<option value={m.key}>{m.label}</option>{/each}
+      {#each FILE_MODES as mode (mode.key)}<option value={mode.key}>{mode.label()}</option>{/each}
     </select>
     <button
       type="button"
       class="btn-icon btn-icon-sm hover:preset-tonal shrink-0"
-      aria-label="Liste neu laden"
-      title="Liste neu laden"
+      aria-label={m.files_reload()}
+      title={m.files_reload()}
       onclick={() => load(true)}
       disabled={loading}
     >
@@ -151,7 +152,7 @@
   {#if error}<p class="text-xs text-error-500">{error}</p>{/if}
 
   {#if files && !files.length}
-    <p class="p-2 text-xs text-muted">Noch keine Dateien.</p>
+    <p class="p-2 text-xs text-muted">{m.files_none()}</p>
   {:else if files}
     <!-- Skeleton's table; table-wrap scrolls it, sideways when it is too wide and down
          past a fixed height (rem, not vh: an MCP App's iframe grows with its content,
@@ -160,13 +161,13 @@
       <table class="table text-xs">
         <thead>
           <tr>
-            {#if showDownload}<th class="sticky top-0 z-10 w-0 bg-bg px-2 py-1 text-left"><span class="sr-only">Download</span></th>{/if}
+            {#if showDownload}<th class="sticky top-0 z-10 w-0 bg-bg px-2 py-1 text-left"><span class="sr-only">{m.files_download()}</span></th>{/if}
             {#each columns as c (c.key)}
               <th class="sticky top-0 z-10 bg-bg px-2 py-1 text-left whitespace-nowrap">
                 <button type="button" class="inline-flex items-center gap-0.5 hover:text-text" onclick={() => sortBy(c.key)}>
-                  {c.label}
+                  {c.label()}
                   {#if sortKey === c.key}
-                    {#if ascending}<ArrowUp class="size-3" aria-label="aufsteigend" />{:else}<ArrowDown class="size-3" aria-label="absteigend" />{/if}
+                    {#if ascending}<ArrowUp class="size-3" aria-label={m.files_ascending()} />{:else}<ArrowDown class="size-3" aria-label={m.files_descending()} />{/if}
                   {/if}
                 </button>
               </th>
@@ -179,11 +180,11 @@
               {#if showDownload}
                             <td class="px-2 py-1">
                   {#if chat}
-                    <button type="button" class="btn-icon btn-icon-sm hover:preset-tonal" aria-label="{f.name} herunterladen" title="Herunterladen" onclick={() => download(f)}>
+                    <button type="button" class="btn-icon btn-icon-sm hover:preset-tonal" aria-label={m.files_download_name({ name: f.name })} title={m.files_download()} onclick={() => download(f)}>
                       <Download class="size-4" aria-hidden="true" />
                     </button>
                   {:else}
-                    <a class="btn-icon btn-icon-sm hover:preset-tonal" href={f.url} download={f.name} aria-label="{f.name} herunterladen" title="Herunterladen">
+                    <a class="btn-icon btn-icon-sm hover:preset-tonal" href={f.url} download={f.name} aria-label={m.files_download_name({ name: f.name })} title={m.files_download()}>
                       <Download class="size-4" aria-hidden="true" />
                     </a>
                   {/if}
@@ -194,7 +195,7 @@
                   <button
                     type="button"
                     class="btn btn-sm max-w-full justify-start {f.sha256 === picked ? 'preset-filled-primary-500' : 'preset-tonal'}"
-                    title={click === "phantom" ? "Als Phantom wählen" : "Als Sequenz wählen"}
+                    title={click === "phantom" ? m.files_pick_phantom() : m.files_pick_sequence()}
                     aria-pressed={f.sha256 === picked}
                     onclick={() => pick(f)}><span class="truncate">{f.name}</span></button
                   >
@@ -212,10 +213,10 @@
     </div>
     {#if !shown.length}
       <p class="p-2 text-xs text-muted">
-        {query ? "Keine Datei passt zur Suche." : mode === "bifti" ? "Keine BIfTIs." : "Keine Sequenzdateien."}
+        {query ? m.files_no_match() : mode === "bifti" ? m.files_no_biftis() : m.files_no_sequences()}
       </p>
     {/if}
   {:else if loading}
-    <p class="p-2 text-xs text-muted">Lade Dateien …</p>
+    <p class="p-2 text-xs text-muted">{m.files_loading()}</p>
   {/if}
 </div>

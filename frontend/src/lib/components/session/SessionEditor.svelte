@@ -5,6 +5,7 @@
   // drops the edits and loads the current state. A warning on "Reload" says the
   // session has changed since it was loaded (by the AI, another tool or browser).
   // Bound to a Selection like every tool; the session (polled) or a local selection.
+  import { m } from "../../../paraglide/messages.js";
   import RefreshCw from "@lucide/svelte/icons/refresh-cw";
   import Save from "@lucide/svelte/icons/save";
   import TriangleAlert from "@lucide/svelte/icons/triangle-alert";
@@ -47,23 +48,23 @@
     try {
       edited = JSON.parse(text);
     } catch (e) {
-      error = `Kein gültiges JSON: ${e instanceof Error ? e.message : String(e)}`;
+      error = `Invalid JSON: ${e instanceof Error ? e.message : String(e)}`;
       return;
     }
     if (edited === null || typeof edited !== "object" || Array.isArray(edited)) {
-      error = "Der Zustand muss ein JSON-Objekt sein.";
+      error = "The state must be a JSON object.";
       return;
     }
     const patch = diffPatch(base.state as unknown as Record<string, unknown>, edited as Record<string, unknown>);
     if (!Object.keys(patch).length) {
-      saved = "Keine Änderung.";
+      saved = m.session_no_change();
       return;
     }
     busy = true;
     try {
       await sel.commit(patch as StatePatch, base.rev ?? undefined);
       load();
-      saved = sel.rev !== null ? `Gespeichert (rev ${sel.rev}).` : "Übernommen.";
+      saved = sel.rev !== null ? m.session_saved({ rev: sel.rev }) : m.session_applied();
     } catch (e) {
       error = e instanceof Error ? e.message : String(e);
     } finally {
@@ -90,30 +91,30 @@
     {/if}
     <div class="flex items-center gap-2">
       <span class="text-xs text-muted">
-        {base.rev !== null ? `rev ${base.rev}` : "lokal"}{dirty ? " · bearbeitet" : ""}
+        {base.rev !== null ? `rev ${base.rev}` : m.session_local()}{dirty ? ` · ${m.session_edited()}` : ""}
       </span>
       <button
         type="button"
         class="btn btn-sm preset-tonal ml-auto"
         onclick={reload}
         disabled={busy}
-        title={outdated ? "Die Session hat sich seit dem Laden geändert" : "Änderungen verwerfen und neu laden"}
+        title={outdated ? m.session_changed_since() : m.session_discard()}
       >
         {#if outdated}
-          <TriangleAlert class="size-4 text-warning-500" aria-label="Session geändert" />
+          <TriangleAlert class="size-4 text-warning-500" aria-label={m.session_changed()} />
         {:else}
           <RefreshCw class="size-4" aria-hidden="true" />
         {/if}
-        Reload
+        {m.session_reload()}
       </button>
       <button type="button" class="btn btn-sm preset-filled-primary-500" onclick={update} disabled={busy || !dirty}>
         <Save class="size-4" aria-hidden="true" />
-        Update
+        {m.session_update()}
       </button>
     </div>
   {:else if sel.error}
     <p class="p-4 text-error-500">{sel.error}</p>
   {:else}
-    <p class="p-4 text-muted">Lade Session …</p>
+    <p class="p-4 text-muted">{m.common_loading_session()}</p>
   {/if}
 </div>

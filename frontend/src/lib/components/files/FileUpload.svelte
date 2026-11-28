@@ -3,6 +3,7 @@
   // Each file goes straight to the gateway (AnyfieldClient.uploadFile), with its
   // progress; afterwards its name (click: name and hash to the chat) and hash. In a
   // chat the model is told about the uploads too. `onuploaded` fires per file.
+  import { m } from "../../../paraglide/messages.js";
   import CircleAlert from "@lucide/svelte/icons/circle-alert";
   import Upload from "@lucide/svelte/icons/upload";
   import { FileUpload } from "@skeletonlabs/skeleton-svelte";
@@ -43,7 +44,7 @@
       class="flex min-h-28 cursor-pointer flex-col items-center justify-center gap-2 rounded border-2 border-dashed border-border p-4 text-center text-muted hover:border-accent hover:text-text"
     >
       <Upload class="size-6" aria-hidden="true" />
-      <span>Dateien hierher ziehen oder klicken zum Auswählen</span>
+      <span>{m.files_drop()}</span>
     </FileUpload.Dropzone>
     <FileUpload.HiddenInput />
   </FileUpload>

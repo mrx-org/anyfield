@@ -1,5 +1,6 @@
 import { describe, expect, it } from "vitest";
-import { fileLine, filterFiles, formatSize, sortFiles } from "./files";
+import { fileLine, filterFiles, formatSize, formatTime, sortFiles } from "./files";
+import { useLocale } from "./i18n.svelte";
 import type { UserFile } from "./types";
 
 const f = (name: string, size: number | null, uploaded_at: string | null, type: string | null = null): UserFile => ({
@@ -12,11 +13,21 @@ const f = (name: string, size: number | null, uploaded_at: string | null, type: 
 });
 
 describe("files", () => {
-  it("formats sizes", () => {
+  it("formats sizes in the UI's language", () => {
+    useLocale("de");
     expect(formatSize(null)).toBe("–");
     expect(formatSize(999)).toBe("999 B");
     expect(formatSize(1500)).toBe("1,5 kB");
     expect(formatSize(250_000_000)).toBe("250,0 MB");
+    useLocale("en");
+    expect(formatSize(1500)).toBe("1.5 kB");
+  });
+
+  it("formats times in the UI's language", () => {
+    useLocale("de");
+    expect(formatTime("2026-11-23T14:05:00")).toBe("23.11.26, 14:05");
+    useLocale("en");
+    expect(formatTime("2026-11-23T14:05:00")).toMatch(/^11\/23\/26/);
   });
 
   it("hands over name and hash", () => {

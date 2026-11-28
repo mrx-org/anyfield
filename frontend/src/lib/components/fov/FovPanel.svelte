@@ -1,6 +1,8 @@
 <script lang="ts">
   // Numeric FOV and matrix controls. Emits changes; the Selection applies them.
+  import { m } from "../../../paraglide/messages.js";
   import { Slider } from "@skeletonlabs/skeleton-svelte";
+  import { formatNumber } from "../../i18n.svelte";
   import type { Fov, Vec3 } from "../../types";
 
   let {
@@ -10,10 +12,10 @@
     onmatrix,
   }: { fov: Fov; matrix: Vec3; onfov: (change: Partial<Fov>) => void; onmatrix: (matrix: Vec3) => void } = $props();
 
-  const groups: Array<{ field: keyof Fov; label: string; unit: string; min: number; max: number; step: number }> = [
-    { field: "center_mm", label: "Position", unit: "mm", min: -150, max: 150, step: 1 },
-    { field: "rotation_deg", label: "Rotation", unit: "°", min: -180, max: 180, step: 1 },
-    { field: "size_mm", label: "Größe", unit: "mm", min: 1, max: 400, step: 1 },
+  const groups: Array<{ field: keyof Fov; label: () => string; unit: string; min: number; max: number; step: number }> = [
+    { field: "center_mm", label: m.fov_position, unit: "mm", min: -150, max: 150, step: 1 },
+    { field: "rotation_deg", label: m.fov_rotation, unit: "°", min: -180, max: 180, step: 1 },
+    { field: "size_mm", label: m.fov_size, unit: "mm", min: 1, max: 400, step: 1 },
   ];
   const axes = ["x", "y", "z"] as const;
 
@@ -38,7 +40,7 @@
 <div class="flex flex-col gap-4 text-sm">
   {#each groups as g (g.field)}
     <fieldset class="fieldset flex flex-col gap-2">
-      <legend class="legend mb-1 text-xs font-semibold uppercase tracking-wide text-muted">{g.label} ({g.unit})</legend>
+      <legend class="legend mb-1 text-xs font-semibold uppercase tracking-wide text-muted">{g.label()} ({g.unit})</legend>
       {#each axes as axis, i (axis)}
         <div class="grid grid-cols-[1rem_1fr_4.5rem] items-center gap-2">
           <span class="text-muted">{axis}</span>
@@ -48,7 +50,7 @@
             step={g.step}
             value={[fov[g.field][i]]}
             onValueChange={(d) => set(g.field, i, d.value[0])}
-            aria-label={[`${g.label} ${axis}`]}
+            aria-label={[`${g.label()} ${axis}`]}
           >
             <Slider.Control>
               <Slider.Track>
@@ -67,14 +69,14 @@
             value={Math.round(fov[g.field][i] * 10) / 10}
             onchange={(e) => set(g.field, i, Number(e.currentTarget.value))}
             class="input px-1.5 py-0.5 text-right"
-            aria-label="{g.label} {axis} Wert"
+            aria-label={m.fov_value({ label: g.label(), axis })}
           />
         </div>
       {/each}
     </fieldset>
   {/each}
   <fieldset class="fieldset flex flex-col gap-2">
-    <legend class="legend mb-1 text-xs font-semibold uppercase tracking-wide text-muted">Matrix</legend>
+    <legend class="legend mb-1 text-xs font-semibold uppercase tracking-wide text-muted">{m.fov_matrix()}</legend>
     <div class="grid grid-cols-3 gap-2">
       {#each axes as axis, i (axis)}
         <label class="flex items-center gap-1">
@@ -87,11 +89,11 @@
             value={matrix[i]}
             onchange={(e) => setMatrix(i, e.currentTarget.value)}
             class="input px-1.5 py-0.5 text-right"
-            aria-label="Matrix {axis}"
+            aria-label="{m.fov_matrix()} {axis}"
           />
         </label>
       {/each}
     </div>
-    <span class="text-xs text-muted">Voxel: {voxel.map((v) => v.toFixed(2)).join(" × ")} mm</span>
+    <span class="text-xs text-muted">{m.fov_voxel()}: {voxel.map((v) => formatNumber(v, 2)).join(" × ")} mm</span>
   </fieldset>
 </div>

@@ -22,10 +22,12 @@ import PhantomBrowser from "./components/phantom/PhantomBrowser.svelte";
 import PhantomPreview from "./components/phantom/PhantomPreview.svelte";
 import SequenceBrowser from "./components/sequence/SequenceBrowser.svelte";
 import SessionEditor from "./components/session/SessionEditor.svelte";
+import { m } from "../paraglide/messages.js";
 import type { Selection } from "./state/selection";
 
 export interface ToolDef {
-  label: string;
+  /** In the UI's language. */
+  label: () => string;
   icon: Component<{ class?: string; "aria-hidden"?: boolean | "true" }>;
   // Components take `sel` and their own options as props
   component: Component<{ sel: Selection } & Record<string, unknown>>;
@@ -33,7 +35,7 @@ export interface ToolDef {
   needsSession?: boolean;
 }
 
-const tool = (label: string, icon: unknown, component: unknown, needsSession = false): ToolDef => ({
+const tool = (label: () => string, icon: unknown, component: unknown, needsSession = false): ToolDef => ({
   label,
   icon: icon as ToolDef["icon"],
   component: component as ToolDef["component"],
@@ -41,13 +43,13 @@ const tool = (label: string, icon: unknown, component: unknown, needsSession = f
 });
 
 export const TOOLS: Record<string, ToolDef> = {
-  phantom_browser: tool("Phantom-Browser", Brain, PhantomBrowser),
-  phantom_preview: tool("Phantom-Vorschau", ScanEye, PhantomPreview),
-  fov_viewer: tool("Visueller FOV-Planer", Move3d, FovViewer),
-  fov_planner: tool("FOV-Planer", SlidersHorizontal, FovPlanner),
-  sequence_browser: tool("Sequenz-Browser", AudioWaveform, SequenceBrowser),
-  file_manager: tool("Dateimanager", FolderOpen, FileManager),
-  file_list: tool("Dateiliste", Files, FileList),
-  file_upload: tool("Datei-Upload", Upload, FileUpload),
-  session: tool("Session-Zustand (JSON)", Braces, SessionEditor, true),
+  phantom_browser: tool(m.tool_phantom_browser, Brain, PhantomBrowser),
+  phantom_preview: tool(m.tool_phantom_preview, ScanEye, PhantomPreview),
+  fov_viewer: tool(m.tool_fov_viewer, Move3d, FovViewer),
+  fov_planner: tool(m.tool_fov_planner, SlidersHorizontal, FovPlanner),
+  sequence_browser: tool(m.tool_sequence_browser, AudioWaveform, SequenceBrowser),
+  file_manager: tool(m.tool_file_manager, FolderOpen, FileManager),
+  file_list: tool(m.tool_file_list, Files, FileList),
+  file_upload: tool(m.tool_file_upload, Upload, FileUpload),
+  session: tool(m.tool_session, Braces, SessionEditor, true),
 };

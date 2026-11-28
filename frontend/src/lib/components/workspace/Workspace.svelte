@@ -5,13 +5,16 @@
   // elsewhere (by the AI, on another device) is shown here. All panels hang on the
   // same Selection. Narrow (phone), the panels are tabs one after the other; the
   // layout stays as it is.
+  import { m } from "../../../paraglide/messages.js";
   import { Tabs } from "@skeletonlabs/skeleton-svelte";
   import { createDockview, type DockviewApi, type GroupPanelPartInitParameters, type IContentRenderer } from "dockview";
   import "dockview/dist/styles/dockview.css";
   import { mount, onDestroy, onMount, unmount } from "svelte";
   import Maximize2 from "@lucide/svelte/icons/maximize-2";
   import Minimize2 from "@lucide/svelte/icons/minimize-2";
+  import Languages from "@lucide/svelte/icons/languages";
   import RotateCcw from "@lucide/svelte/icons/rotate-ccw";
+  import { i18n, LOCALE_NAMES, LOCALES, switcher, type Locale } from "../../i18n.svelte";
   import {
     DEFAULT_LAYOUT,
     fromDockview,
@@ -57,7 +60,7 @@
       const def = TOOLS[this.tool];
       if (!def || (def.needsSession && !sel.sessionKey)) {
         this.element.className += " p-3 text-xs text-muted";
-        this.element.textContent = def ? `${this.tool}: nur mit Session.` : `Unbekanntes Tool: ${this.tool}`;
+        this.element.textContent = def ? m.workspace_needs_session({ tool: this.tool }) : m.workspace_unknown_tool({ tool: this.tool });
         return;
       }
       const options = (params.params?.options ?? {}) as Record<string, unknown>;
@@ -153,13 +156,13 @@
 <div class="flex h-full min-h-[32rem] flex-col text-sm text-text">
   <div class="flex items-center gap-2 border-b border-border px-2 py-1">
     <!-- One button per tool: adds it as a tab of the active area -->
-    <div class="flex min-w-0 items-center gap-0.5 overflow-x-auto" role="toolbar" aria-label="Tool hinzufügen">
+    <div class="flex min-w-0 items-center gap-0.5 overflow-x-auto" role="toolbar" aria-label={m.workspace_add_tool()}>
       {#each addable as [name, t] (name)}
         <button
           type="button"
           class="btn-icon btn-icon-sm hover:preset-tonal shrink-0"
-          aria-label="{t.label} hinzufügen"
-          title="{t.label} hinzufügen ({name})"
+          aria-label={m.workspace_add({ label: t.label() })}
+          title="{m.workspace_add({ label: t.label() })} ({name})"
           onclick={() => add(name)}
         >
           <t.icon class="size-4" aria-hidden="true" />
@@ -170,19 +173,31 @@
       <button
         type="button"
         class="btn btn-sm hover:preset-tonal text-xs"
-        title="Standard-Anordnung"
+        title={m.workspace_default_layout()}
         onclick={() => sel.patch({ layout: null })}
       >
-        <RotateCcw class="size-4" aria-hidden="true" /> Standard
+        <RotateCcw class="size-4" aria-hidden="true" /> {m.common_default()}
       </button>
     {/if}
     {#if sel.error}<span class="truncate text-xs text-error-500">{sel.error}</span>{/if}
+    <!-- Language of the UI: per device on the website, for this app in a chat -->
+    <label class="ml-auto flex shrink-0 items-center gap-1 text-muted" title={m.common_language()}>
+      <Languages class="size-4" aria-hidden="true" />
+      <select
+        class="select w-auto py-0.5 text-xs"
+        aria-label={m.common_language()}
+        value={i18n.locale}
+        onchange={(e) => switcher.choose(e.currentTarget.value as Locale)}
+      >
+        {#each LOCALES as l (l)}<option value={l}>{LOCALE_NAMES[l]}</option>{/each}
+      </select>
+    </label>
     {#if fullscreen.available}
       <button
         type="button"
-        class="btn-icon btn-icon-sm hover:preset-tonal ml-auto"
-        aria-label={fullscreen.active ? "Vollbild beenden" : "Vollbild"}
-        title={fullscreen.active ? "Vollbild beenden" : "Vollbild"}
+        class="btn-icon btn-icon-sm hover:preset-tonal shrink-0"
+        aria-label={fullscreen.active ? m.workspace_exit_fullscreen() : m.workspace_fullscreen()}
+        title={fullscreen.active ? m.workspace_exit_fullscreen() : m.workspace_fullscreen()}
         onclick={toggleFullscreen}
       >
         {#if fullscreen.active}<Minimize2 class="size-4" aria-hidden="true" />{:else}<Maximize2 class="size-4" aria-hidden="true" />{/if}
@@ -195,7 +210,7 @@
     <div bind:this={host} class="absolute inset-0"></div>
     {#if wide && layout && !layout.root}
       <p class="pointer-events-none absolute inset-0 flex items-center justify-center text-xs text-muted">
-        Leer. Oben ein Tool hinzufügen.
+        {m.workspace_empty()}
       </p>
     {/if}
   </div>
@@ -215,13 +230,13 @@
             {#if def && (!def.needsSession || sel.sessionKey)}
               <def.component {sel} {...current.options ?? {}} />
             {:else}
-              <p class="p-3 text-xs text-muted">{def ? `${current.tool}: nur mit Session.` : `Unbekanntes Tool: ${current.tool}`}</p>
+              <p class="p-3 text-xs text-muted">{def ? m.workspace_needs_session({ tool: current.tool }) : m.workspace_unknown_tool({ tool: current.tool })}</p>
             {/if}
           </div>
         {/key}
       {/if}
     {:else}
-      <p class="p-3 text-xs text-muted">Leer. Oben ein Tool hinzufügen.</p>
+      <p class="p-3 text-xs text-muted">{m.workspace_empty()}</p>
     {/if}
   {/if}
 </div>
