@@ -12,6 +12,7 @@
   import Undo2 from "@lucide/svelte/icons/undo-2";
   import { onDestroy } from "svelte";
   import { m } from "../../../paraglide/messages.js";
+  import { askConfirm, askText } from "../../dialog.svelte";
   import { actorName, childrenOf, graphRows } from "../../history";
   import { formatDateTime } from "../../i18n.svelte";
   import type { Selection } from "../../state/selection";
@@ -79,23 +80,34 @@
   const redo = () => act(() => sel.client.redo(key!));
   const goto = (hash: string) => (hash === history?.head ? undefined : act(() => sel.client.gotoState(key!, hash)));
 
-  function branch() {
-    const name = prompt(m.history_new_name(), me ? `${me.name} 2` : "");
+  async function branch() {
+    const name = await askText({
+      title: m.history_branch(),
+      input: me ? `${me.name} 2` : "",
+      placeholder: m.history_new_name(),
+      confirm: m.history_branch_ok(),
+    });
     if (name === null) return;
     void act(async () => {
-      const s = await sel.client.createSession(key!, name.trim() || undefined);
+      const s = await sel.client.createSession(key!, name);
       sel.navigate?.(s.key);
     });
   }
 
-  function rename() {
-    const name = prompt(m.history_new_name(), me?.name ?? "");
-    if (!name?.trim()) return;
-    void act(() => sel.client.renameSession(key!, name.trim()));
+  async function rename() {
+    const name = await askText({ title: m.history_rename(), input: me?.name ?? "", placeholder: m.history_new_name(), confirm: m.app_rename() });
+    if (name === null) return;
+    void act(() => sel.client.renameSession(key!, name));
   }
 
-  function remove() {
-    if (!confirm(m.history_confirm_delete({ name: me?.name ?? "" }))) return;
+  async function remove() {
+    const ok = await askConfirm({
+      title: m.history_delete(),
+      message: m.history_confirm_delete({ name: me?.name ?? "" }),
+      confirm: m.app_delete(),
+      danger: true,
+    });
+    if (!ok) return;
     void act(async () => {
       const r = await sel.client.deleteSession(key!);
       if (r.next) sel.navigate?.(r.next.key);

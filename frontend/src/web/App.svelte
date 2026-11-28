@@ -11,7 +11,9 @@
   import Workspace from "../lib/components/workspace/Workspace.svelte";
   import { LocalSelection } from "../lib/state/local.svelte";
   import ToolFrame from "../lib/components/ToolFrame.svelte";
+  import Dialogs from "../lib/components/Dialogs.svelte";
   import Toaster from "../lib/components/Toaster.svelte";
+  import { askConfirm, askText } from "../lib/dialog.svelte";
   import { toaster } from "../lib/toast";
   import { SessionStore } from "../lib/state/session.svelte";
   import type { ProjectSummary } from "../lib/types";
@@ -71,12 +73,18 @@
   }
 
   async function rename(p: ProjectSummary) {
-    const name = prompt(m.app_new_name(), p.name);
+    const name = await askText({ title: m.app_rename_project(), input: p.name, placeholder: m.app_new_name(), confirm: m.app_rename() });
     if (name) await run(() => client.renameProject(p.id, name).then(loadProjects));
   }
 
   async function remove(p: ProjectSummary) {
-    if (confirm(m.app_confirm_delete_project({ name: p.name }))) await run(() => client.deleteProject(p.id).then(loadProjects));
+    const ok = await askConfirm({
+      title: m.app_delete_project(),
+      message: m.app_confirm_delete_project({ name: p.name }),
+      confirm: m.app_delete(),
+      danger: true,
+    });
+    if (ok) await run(() => client.deleteProject(p.id).then(loadProjects));
   }
 
   function logout() {
@@ -242,3 +250,4 @@
 </div>
 {/key}
 <Toaster />
+<Dialogs />

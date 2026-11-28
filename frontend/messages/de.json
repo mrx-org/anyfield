@@ -142,6 +142,11 @@
   "app_no_projects": "Noch keine Projekte.",
   "app_new_project": "Neues Projekt",
   "app_confirm_delete_project": "Projekt „{name}“ mit allen Sessions und dem Verlauf löschen?",
+  "common_cancel": "Abbrechen",
+  "common_ok": "OK",
+  "app_rename_project": "Projekt umbenennen",
+  "app_delete_project": "Projekt löschen",
+  "history_branch_ok": "Abzweigen",
   "mcp_waiting": "Warte auf Tool-Aufruf …",
   "mcp_send": "In den Chat",
   "mcp_sent": "Gesendet"

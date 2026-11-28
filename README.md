@@ -280,6 +280,13 @@ sonst das Argument `locale` des `open_*`-Aufrufs (die KI setzt die Sprache des
 Gesprächs), sonst die des Chats (`hostContext.locale`), sonst Browser, sonst Englisch. Die
 Sprache steht nicht im Session-Zustand.
 
+Rückfragen (Umbenennen, Löschen bestätigen) laufen über einen eigenen Dialog
+(`askConfirm`, `askText` in `src/lib/dialog.svelte.ts`, angezeigt von
+`components/Dialogs.svelte`), kurze Hinweise über den Toast (`src/lib/toast.ts`); beide
+binden Website und App-Hülle einmal ein. `confirm()`/`prompt()` des Browsers zeigt ein
+MCP-App-iframe ohne `allow-modals` nicht, ein `<form>` sendet es ohne `allow-forms` nicht.
+In MCP Apps wird die Seite bei offenem Dialog höher, damit der Chat Platz macht.
+
 UI-Bausteine kommen aus Skeleton (`@skeletonlabs/skeleton-svelte`), Icons **immer** aus
 Lucide (`@lucide/svelte`, je Icon importiert: `import ChevronRight from
 "@lucide/svelte/icons/chevron-right"`). Keine Unicode-Zeichen oder eigenen SVGs als Icons.
