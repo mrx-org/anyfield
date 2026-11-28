@@ -391,12 +391,14 @@ export class NiivueModule {
         <div class="tabbed-controls">
           <div class="tabs-header">
             <button class="tab-btn active" data-tab="scans">SCANS</button>
+            ${isProUser() ? `<button class="tab-btn" data-tab="bshim" title="B1 and B0 shim">B-SHIM</button>` : ""}
             <button class="tab-btn" data-tab="phantoms">PHANTOMS</button>
             <button class="tab-btn" data-tab="fov">FOV</button>
             <button class="tab-btn" data-tab="view">OPTIONS</button>
           </div>
           <div class="tabs-content">
             <div class="tab-pane active" id="tab-scans-${this.instanceId}">${this._getPanelScansHtml()}</div>
+            ${isProUser() ? `<div class="tab-pane" id="tab-bshim-${this.instanceId}"><div id="ptx-root-${this.instanceId}"></div></div>` : ""}
             <div class="tab-pane" id="tab-phantoms-${this.instanceId}">${this._getPanelPhantomsHtml()}</div>
             <div class="tab-pane" id="tab-fov-${this.instanceId}">
                 <div class="panel-flat">
@@ -451,6 +453,14 @@ export class NiivueModule {
           btn.classList.add('active');
           const tab = btn.dataset.tab;
           this.containerControls.querySelector(`#tab-${tab}-${this.instanceId}`).classList.add('active');
+          if (labGrid) labGrid.classList.toggle('ptx-sidebar', tab === 'bshim');
+          if (tab === 'bshim') {
+            this._bshimWanted = true;
+            this.ptxPanel?.onShow();
+          } else {
+            this._bshimWanted = false;
+            this.ptxPanel?.onHide();
+          }
           if (tab === 'phantoms' && this.jsonEditorCm) this.jsonEditorCm.refresh();
         };
       });
@@ -458,6 +468,17 @@ export class NiivueModule {
 
     this.bindControlElements();
     this.setupEventListeners();
+    if (useTabs && isProUser()) {
+      const ptxRoot = this.containerControls.querySelector(`#ptx-root-${this.instanceId}`);
+      if (ptxRoot) {
+        import("./ptx/ptx_panel.js").then(({ BshimPanel }) => {
+          if (!ptxRoot.isConnected) return;
+          this.ptxPanel = new BshimPanel(this);
+          this.ptxPanel.mount(ptxRoot);
+          if (this._bshimWanted) this.ptxPanel.onShow();
+        }).catch((err) => console.error("B-shim failed to load", err));
+      }
+    }
     if ((this.containerControls || document).querySelector(`#json-editor-${this.instanceId}`)) this.initJsonEditor();
     // Do not auto-initialize Pyodide here; let the bootstrap process handle it
     // or call it manually if needed.
@@ -3534,6 +3555,7 @@ export class NiivueModule {
     this.updateJsonTab();
     this.ctx.mainHist?.scheduleRefresh?.();
     this.refreshCrosshairIntensityOverlay();
+    this.ptxPanel?.notifyVolumes?.();
   }
 
   /** Last-saved phantom JSON for `name`, or null. Catalog first; volume-groups if it never landed. */
@@ -3613,6 +3635,7 @@ export class NiivueModule {
   }
 
   updatePreviewFromSelection() {
+    if (this.ptxPanel?.ownsPreview) return;
     const scanPreview = this.ctx.scanPreview;
     if (!scanPreview) return;
 
@@ -4256,9 +4279,14 @@ export function pushPreviewStateFrom(sourceNv, ctx) {
   _previewPeerSyncGuard = true;
   try {
     if (sourceNv.volumes.length && peer.volumes.length) {
-      peer.volumes[0].cal_min = sourceNv.volumes[0].cal_min;
-      peer.volumes[0].cal_max = sourceNv.volumes[0].cal_max;
-      if (typeof peer.updateGLVolume === 'function') peer.updateGLVolume();
+      const srcVol = sourceNv.volumes[0];
+      const dstVol = peer.volumes[0];
+      const lockCal = srcVol?._ptxIndependentCal || dstVol?._ptxIndependentCal;
+      if (!lockCal) {
+        dstVol.cal_min = srcVol.cal_min;
+        dstVol.cal_max = srcVol.cal_max;
+        if (typeof peer.updateGLVolume === 'function') peer.updateGLVolume();
+      }
     }
     peer.opts.multiplanarShowRender = SHOW_RENDER.NEVER;
     peer.setSliceType(sourceNv.opts.sliceType);
@@ -4550,7 +4578,7 @@ export class ScanPreviewModule {
     target.classList.add('highlight-add');
   }
 
-  async loadSingleScan(url, name) {
+  async loadSingleScan(url, name, opts = {}) {
     await this.waitForInit();
     if (this._isSyncing) return;
     this._isSyncing = true;
@@ -4593,13 +4621,62 @@ export class ScanPreviewModule {
       this.triggerHighlight();
       
       console.log("ScanPreviewModule loaded:", name);
-      if (this.ctx.scanCompare?.isReady) {
+      if (!opts.skipPeerSync && this.ctx.scanCompare?.isReady) {
         setTimeout(() => syncPreviewPanesAfterLoad(this.role, this.ctx), 0);
-      } else {
+      } else if (!opts.skipPeerSync) {
         this.ctx.jointHist?.refresh?.();
       }
     } catch (e) {
       console.error("ScanPreviewModule load failed:", e);
+    } finally {
+      this._isSyncing = false;
+    }
+  }
+
+  /** Replace this pane with a NIfTI byte buffer (pTx B1 maps). */
+  async loadNiftiBytes(bytes, name, opts = {}) {
+    while (this._isSyncing) {
+      await new Promise((resolve) => setTimeout(resolve, 20));
+    }
+    await this.waitForInit();
+    this._isSyncing = true;
+    const blob = new Blob([bytes], { type: "application/octet-stream" });
+    const url = URL.createObjectURL(blob);
+    const previous = this._ptxBlobUrl;
+    try {
+      // Keep the current volume on screen until the new one has decoded.
+      const before = new Set(this.nv.volumes);
+      await this.nv.addVolumesFromUrl([{
+        url,
+        name: name ?? "scan",
+        colormap: opts.colormap || "gray",
+        opacity: 1.0,
+        trustCalMinMax: false,
+        percentileFrac: 0.02,
+      }]);
+      const vol = this.nv.volumes.find((v) => !before.has(v)) || this.nv.volumes[this.nv.volumes.length - 1];
+      for (const old of this.nv.volumes.slice()) {
+        if (old !== vol) this.nv.removeVolume(old);
+      }
+      if (vol) {
+        vol._ptxIndependentCal = true;
+        if (opts.colormap && typeof this.nv.setColormap === "function") {
+          this.nv.setColormap(vol.id, opts.colormap);
+        }
+        if (opts.calMin != null) vol.cal_min = opts.calMin;
+        if (opts.calMax != null) vol.cal_max = opts.calMax;
+        if (opts.colormapType != null) vol.colormapType = opts.colormapType;
+        this.nv.updateGLVolume?.();
+        this.nv.drawScene();
+      }
+      this.currentScanName = name;
+      if (opts.label) this.updateLabel(opts.label);
+      if (previous) URL.revokeObjectURL(previous);
+      this._ptxBlobUrl = url;
+    } catch (e) {
+      URL.revokeObjectURL(url);
+      console.error("ScanPreviewModule load failed:", e);
+      throw e;
     } finally {
       this._isSyncing = false;
     }
