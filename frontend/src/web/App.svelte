@@ -143,7 +143,7 @@
   <!-- The file manager (MCP tool open_file_manager) as a modal: the user's files -->
   <Dialog open={showFiles} onOpenChange={(e) => (showFiles = e.open)}>
     <Portal>
-      <Dialog.Backdrop class="fixed inset-0 z-50 bg-white/50 dark:bg-black/50" />
+      <Dialog.Backdrop class="fixed inset-0 z-50 bg-surface-50/50 backdrop-blur-sm dark:bg-surface-950/50" />
       <Dialog.Positioner class="fixed inset-0 z-50 flex items-center justify-center p-4">
         <Dialog.Content class="card flex max-h-[85vh] w-full max-w-3xl flex-col gap-2 overflow-hidden border border-border bg-bg p-3 shadow-xl">
           <header class="flex items-center">
@@ -168,7 +168,7 @@
     <!-- The state editor (MCP tool open_state) as a modal; opened fresh each time -->
     <Dialog open={showState} onOpenChange={(e) => (showState = e.open)}>
       <Portal>
-        <Dialog.Backdrop class="fixed inset-0 z-50 bg-white/50 dark:bg-black/50" />
+        <Dialog.Backdrop class="fixed inset-0 z-50 bg-surface-50/50 backdrop-blur-sm dark:bg-surface-950/50" />
         <Dialog.Positioner class="fixed inset-0 z-50 flex items-center justify-center p-4">
           <Dialog.Content class="card flex h-[80vh] w-full max-w-2xl flex-col gap-2 border border-border bg-bg p-3 shadow-xl">
             <header class="flex items-center">

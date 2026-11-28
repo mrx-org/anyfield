@@ -39,7 +39,7 @@
 
 <Dialog open={!!d} onOpenChange={(e) => !e.open && cancel()}>
   <Portal>
-    <Dialog.Backdrop class="fixed inset-0 z-50 bg-white/50 dark:bg-black/50" />
+    <Dialog.Backdrop class="fixed inset-0 z-50 bg-surface-50/50 backdrop-blur-sm dark:bg-surface-950/50" />
     <Dialog.Positioner class="fixed inset-0 z-50 flex items-center justify-center p-4">
       <Dialog.Content class="card flex w-full max-w-sm flex-col gap-3 border border-border bg-bg p-4 text-sm text-text shadow-xl">
         {#if d}
