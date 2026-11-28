@@ -56,8 +56,8 @@ export class AnyfieldClient {
       xhr.onload = () =>
         xhr.status >= 200 && xhr.status < 300
           ? resolve(xhr.responseText.trim())
-          : reject(new Error(`Upload fehlgeschlagen (${xhr.status}): ${xhr.responseText || xhr.statusText}`));
-      xhr.onerror = () => reject(new Error("Upload fehlgeschlagen (Netzwerk)."));
+          : reject(new Error(`Upload failed (${xhr.status}): ${xhr.responseText || xhr.statusText}`));
+      xhr.onerror = () => reject(new Error("Upload failed (network)."));
       xhr.send(file);
     });
   }

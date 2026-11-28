@@ -3,6 +3,7 @@
   // (state field `tissues`, picked in the browser), with the property to pick (state
   // field `view`); the viewer picks its plane itself. Loads the phantom's maps only while it is shown. Standalone (open_phantom_preview) or nested in the browser.
   // With a `grid` (FOV + matrix), the maps are resliced onto that grid (nested in the FOV planner).
+  import { m } from "../../../paraglide/messages.js";
   import { phantomSource } from "../../phantom";
   import { MapsLoader } from "../../state/maps.svelte";
   import { DEFAULT_PHANTOM } from "../../state/patch";
@@ -51,9 +52,9 @@
 <div class="flex flex-col gap-2 p-2 text-sm text-text">
   <div class="flex items-baseline gap-2">
     <span class="truncate font-medium" title="{(phantom ?? DEFAULT_PHANTOM).name} ({phantomSource(phantom ?? DEFAULT_PHANTOM)})">
-      {name}{#if !phantom}<span class="ml-1 text-xs font-normal text-muted">(Standard)</span>{/if}
+      {name}{#if !phantom}<span class="ml-1 text-xs font-normal text-muted">({m.common_default()})</span>{/if}
     </span>
-    {#if maps.loading}<span class="shrink-0 text-xs text-accent">wird vorbereitet …</span>{/if}
+    {#if maps.loading}<span class="shrink-0 text-xs text-accent">{m.common_preparing()}</span>{/if}
   </div>
 
   <PhantomViewer
@@ -63,7 +64,7 @@
     onproperty={(property) => sel.patch({ view: { property } })}
   />
   {#if grid && maps.maps && maps.maps.coarsening > 1}
-    <span class="text-xs text-muted">Im FOV-Raster, {maps.maps.coarsening}× vergröbert</span>
+    <span class="text-xs text-muted">{m.preview_coarsened({ factor: maps.maps.coarsening })}</span>
   {/if}
   {#if maps.error}<p class="text-xs text-error-500">{maps.error}</p>{/if}
   {#if sel.error}<p class="text-xs text-error-500">{sel.error}</p>{/if}

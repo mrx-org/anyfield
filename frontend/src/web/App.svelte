@@ -14,6 +14,8 @@
   import { toaster } from "../lib/toast";
   import { SessionStore } from "../lib/state/session.svelte";
   import type { SessionSummary } from "../lib/types";
+  import { formatDateTime, i18n } from "../lib/i18n.svelte";
+  import { m } from "../paraglide/messages.js";
 
   const transport = new McpHttpTransport();
   const client = new AnyfieldClient(transport);
@@ -60,17 +62,17 @@
   });
 
   async function create() {
-    const s = await run(() => client.createSession(`Session ${new Date().toLocaleString("de-DE")}`));
+    const s = await run(() => client.createSession(`Session ${formatDateTime(new Date())}`));
     if (s) go(`/s/${s.key}`);
   }
 
   async function rename(s: SessionSummary) {
-    const name = prompt("Neuer Name", s.name);
+    const name = prompt(m.app_new_name(), s.name);
     if (name) await run(() => client.renameSession(s.key, name).then(loadSessions));
   }
 
   async function remove(s: SessionSummary) {
-    if (confirm(`Session „${s.name}“ löschen?`)) await run(() => client.deleteSession(s.key).then(loadSessions));
+    if (confirm(m.app_confirm_delete({ name: s.name }))) await run(() => client.deleteSession(s.key).then(loadSessions));
   }
 
   function logout() {
@@ -82,9 +84,9 @@
   async function copyLink() {
     try {
       await navigator.clipboard.writeText(location.href);
-      toaster.success({ title: "Link kopiert", description: location.href });
+      toaster.success({ title: m.app_link_copied(), description: location.href });
     } catch (e) {
-      toaster.error({ title: "Nicht kopiert", description: e instanceof Error ? e.message : String(e) });
+      toaster.error({ title: m.common_not_copied(), description: e instanceof Error ? e.message : String(e) });
     }
   }
 
@@ -101,6 +103,8 @@
   });
 </script>
 
+<!-- Messages read the locale when called: a new language renders everything anew -->
+{#key i18n.locale}
 <div class="flex h-full flex-col">
   <header class="flex items-center gap-3 border-b border-border bg-panel px-4 py-2 text-sm">
     <button class="btn btn-sm px-1 font-semibold hover:preset-tonal" onclick={() => go("/")}>anyfield</button>
@@ -108,15 +112,15 @@
       <span class="text-muted">/</span>
       <span>{store.server?.name ?? "…"}</span>
       <button class="btn btn-sm hover:preset-tonal ml-auto" onclick={() => (showState = true)} aria-haspopup="dialog">
-        Zustand (JSON)
+        {m.app_state_json()}
       </button>
     {/if}
     <button class="btn btn-sm hover:preset-tonal {store && sessionKey ? '' : 'ml-auto'}" onclick={() => (showFiles = true)} aria-haspopup="dialog">
-      Dateien
+      {m.app_files()}
     </button>
     {#if store && sessionKey}
       <button class="btn btn-sm preset-outlined-surface-300-700" onclick={copyLink}>
-        Link kopieren
+        {m.app_copy_link()}
       </button>
     {/if}
   </header>
@@ -128,8 +132,8 @@
       <Dialog.Positioner class="fixed inset-0 z-50 flex items-center justify-center p-4">
         <Dialog.Content class="card flex max-h-[85vh] w-full max-w-3xl flex-col gap-2 overflow-hidden border border-border bg-bg p-3 shadow-xl">
           <header class="flex items-center">
-            <Dialog.Title class="text-sm font-semibold">Dateien</Dialog.Title>
-            <Dialog.CloseTrigger class="btn-icon btn-icon-sm hover:preset-tonal ml-auto" aria-label="Schließen">
+            <Dialog.Title class="text-sm font-semibold">{m.app_files()}</Dialog.Title>
+            <Dialog.CloseTrigger class="btn-icon btn-icon-sm hover:preset-tonal ml-auto" aria-label={m.common_close()}>
               <X class="size-4" aria-hidden="true" />
             </Dialog.CloseTrigger>
           </header>
@@ -153,8 +157,8 @@
         <Dialog.Positioner class="fixed inset-0 z-50 flex items-center justify-center p-4">
           <Dialog.Content class="card flex h-[80vh] w-full max-w-2xl flex-col gap-2 border border-border bg-bg p-3 shadow-xl">
             <header class="flex items-center">
-              <Dialog.Title class="text-sm font-semibold">Session-Zustand</Dialog.Title>
-              <Dialog.CloseTrigger class="btn-icon btn-icon-sm hover:preset-tonal ml-auto" aria-label="Schließen">
+              <Dialog.Title class="text-sm font-semibold">{m.app_session_state()}</Dialog.Title>
+              <Dialog.CloseTrigger class="btn-icon btn-icon-sm hover:preset-tonal ml-auto" aria-label={m.common_close()}>
                 <X class="size-4" aria-hidden="true" />
               </Dialog.CloseTrigger>
             </header>
@@ -174,36 +178,36 @@
   {:else}
     <main class="mx-auto flex w-full max-w-xl flex-col gap-6 p-6">
       <section class="flex flex-col gap-2">
-        <h2 class="text-sm font-semibold uppercase tracking-wide text-muted">Session öffnen</h2>
+        <h2 class="text-sm font-semibold uppercase tracking-wide text-muted">{m.app_open_session()}</h2>
         <form class="flex gap-2" onsubmit={(e) => { e.preventDefault(); if (keyInput.trim()) go(`/s/${keyInput.trim()}`); }}>
-          <input bind:value={keyInput} placeholder="Session-Key" class="input flex-1" />
-          <button class="btn preset-filled-primary-500">Öffnen</button>
+          <input bind:value={keyInput} placeholder={m.app_session_key()} class="input flex-1" />
+          <button class="btn preset-filled-primary-500">{m.app_open()}</button>
         </form>
       </section>
 
       <section class="flex flex-col gap-2">
         <div class="flex items-center">
-          <h2 class="text-sm font-semibold uppercase tracking-wide text-muted">Meine Sessions</h2>
-          {#if loggedIn}<button class="btn btn-sm hover:preset-tonal ml-auto text-xs" onclick={logout}>Abmelden</button>{/if}
+          <h2 class="text-sm font-semibold uppercase tracking-wide text-muted">{m.app_my_sessions()}</h2>
+          {#if loggedIn}<button class="btn btn-sm hover:preset-tonal ml-auto text-xs" onclick={logout}>{m.app_logout()}</button>{/if}
         </div>
         {#if sessions === null}
           <button class="btn preset-outlined-surface-300-700 self-start" onclick={loadSessions}>
-            Anmelden
+            {m.app_login()}
           </button>
         {:else}
           <ul class="flex flex-col divide-y divide-border rounded border border-border">
             {#each sessions as s (s.key)}
               <li class="flex items-center gap-2 px-3 py-2">
                 <a class="flex-1 hover:text-accent" href="/s/{s.key}" onclick={(e) => { e.preventDefault(); go(`/s/${s.key}`); }}>{s.name}</a>
-                <span class="text-xs text-muted">{new Date(s.updated_at * 1000).toLocaleString("de-DE")}</span>
-                <button class="btn btn-sm hover:preset-tonal text-xs" onclick={() => rename(s)}>Umbenennen</button>
-                <button class="btn btn-sm hover:preset-tonal-error text-xs" onclick={() => remove(s)}>Löschen</button>
+                <span class="text-xs text-muted">{formatDateTime(new Date(s.updated_at * 1000))}</span>
+                <button class="btn btn-sm hover:preset-tonal text-xs" onclick={() => rename(s)}>{m.app_rename()}</button>
+                <button class="btn btn-sm hover:preset-tonal-error text-xs" onclick={() => remove(s)}>{m.app_delete()}</button>
               </li>
             {:else}
-              <li class="px-3 py-2 text-muted">Noch keine Sessions.</li>
+              <li class="px-3 py-2 text-muted">{m.app_no_sessions()}</li>
             {/each}
           </ul>
-          <button class="btn preset-filled-primary-500 self-start" onclick={create}>Neue Session</button>
+          <button class="btn preset-filled-primary-500 self-start" onclick={create}>{m.app_new_session()}</button>
         {/if}
       </section>
 
@@ -211,4 +215,5 @@
     </main>
   {/if}
 </div>
+{/key}
 <Toaster />

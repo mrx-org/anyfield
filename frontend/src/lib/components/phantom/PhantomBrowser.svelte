@@ -6,6 +6,7 @@
   // Bound to a Selection: a session or local (MCP App without session, result back
   // to the chat). The phantom preview folds out at the top; folded (the
   // default) it is not rendered, so changing the phantom loads no maps here.
+  import { m } from "../../../paraglide/messages.js";
   import {
     Collapsible,
     Tabs,
@@ -179,7 +180,7 @@
     <Collapsible open={previewOpen} onOpenChange={(d) => (previewOpen = d.open)}>
       <Collapsible.Trigger class="btn btn-sm preset-outlined-surface-300-700 w-full justify-start text-xs">
         <ChevronRight class="size-4 transition-transform {previewOpen ? 'rotate-90' : ''}" aria-hidden="true" />
-        Vorschau
+        {m.common_preview()}
       </Collapsible.Trigger>
       <Collapsible.Content class="mt-2">
         <!-- Only rendered while open: folded, the preview loads nothing -->
@@ -188,12 +189,12 @@
     </Collapsible>
   {/if}
   <section class="flex flex-col gap-2">
-    <h2 class="text-xs font-semibold uppercase tracking-wide text-muted">Phantom</h2>
+    <h2 class="text-xs font-semibold uppercase tracking-wide text-muted">{m.phantom_heading()}</h2>
     {#if sel.state}
       <div class="flex items-baseline gap-2">
         <span class="truncate font-medium" title={current?.name}>
           {current?.name.replace(/\.(json|zip)$/, "")}{#if !phantom}<span
-              class="ml-1 text-xs font-normal text-muted">(Standard)</span>{/if}
+              class="ml-1 text-xs font-normal text-muted">({m.common_default()})</span>{/if}
         </span>
       </div>
       {#if current}<span class="-mt-1 truncate text-xs text-muted" title={currentCas?.sha256}>{phantomSource(current)}</span>{/if}
@@ -204,14 +205,14 @@
 
   <Tabs value={tab} onValueChange={(d) => (tab = d.value as "catalog" | "cas")}>
     <Tabs.List class="text-xs">
-      <Tabs.Trigger value="catalog">Katalog</Tabs.Trigger>
+      <Tabs.Trigger value="catalog">{m.phantom_catalog()}</Tabs.Trigger>
       <Tabs.Trigger value="cas">CAS</Tabs.Trigger>
       <Tabs.Indicator />
     </Tabs.List>
   <Tabs.Content value="catalog">
   <section class="flex flex-col gap-1">
     {#if loadError}<p class="text-xs text-error-500">{loadError}</p>{/if}
-    {#if !loaded && !loadError}<p class="text-xs text-muted">Lade Katalog …</p>{/if}
+    {#if !loaded && !loadError}<p class="text-xs text-muted">{m.phantom_loading_catalog()}</p>{/if}
     <TreeView
       collection={tree}
       {loadChildren}
@@ -265,13 +266,13 @@
           {#if node.kind === "group" && node.file}
             <button
               class="btn btn-sm ml-auto px-1 py-0 text-[10px] text-muted hover:text-accent"
-              title="Standard dieser Gruppe: {node.file}"
+              title={m.phantom_group_default({ file: node.file })}
               onclick={(e) => {
                 e.stopPropagation();
                 choose(node.file, node.collection);
               }}
               onkeydown={(e) => e.stopPropagation()}
-            >Standard</button>
+            >{m.common_default()}</button>
           {/if}
         </TreeView.BranchControl>
         <TreeView.BranchContent>

@@ -3,6 +3,7 @@
   // `tissues`, next to `phantom`; null means all. Several at once, so a menu of checkbox
   // items that stays open. Skeleton's standard anatomy; the Portal puts it on <body>,
   // out of a column that would clip it.
+  import { m } from "../../../paraglide/messages.js";
   import ChevronDown from "@lucide/svelte/icons/chevron-down";
   import Check from "@lucide/svelte/icons/check";
   import { Menu, Portal } from "@skeletonlabs/skeleton-svelte";
@@ -39,7 +40,7 @@
 
   const isOn = (t: string) => chosen === null || chosen.includes(t);
   const label = $derived(
-    chosen === null ? "Alle Gewebe" : chosen.length <= 2 ? chosen.join(", ") : `${chosen.length} Gewebe`,
+    chosen === null ? m.tissue_all_tissues() : chosen.length <= 2 ? chosen.join(", ") : m.tissue_count({ count: chosen.length }),
   );
 
   function toggle(t: string, on: boolean) {
@@ -56,17 +57,17 @@
   <Menu.Trigger
     class="input flex min-w-0 items-center gap-1 px-2 py-1 text-left text-xs"
     disabled={!tissueList}
-    aria-label="Gewebe"
-    title={chosen?.join(", ") ?? "Alle Gewebe"}
+    aria-label={m.tissue_label()}
+    title={chosen?.join(", ") ?? m.tissue_all_tissues()}
   >
-    <span class="min-w-0 flex-1 truncate">{tissueList ? label : "Gewebe …"}</span>
+    <span class="min-w-0 flex-1 truncate">{tissueList ? label : m.tissue_loading()}</span>
     <ChevronDown class="size-4 shrink-0 text-muted" aria-hidden="true" />
   </Menu.Trigger>
   <Portal>
     <Menu.Positioner>
       <Menu.Content>
         <Menu.OptionItem type="checkbox" value="*" checked={chosen === null} onCheckedChange={() => sel.patch({ tissues: null })}>
-          <Menu.ItemText>Alle</Menu.ItemText>
+          <Menu.ItemText>{m.tissue_all()}</Menu.ItemText>
           <Menu.ItemIndicator><Check class="size-4" /></Menu.ItemIndicator>
         </Menu.OptionItem>
         <Menu.Separator />
@@ -86,4 +87,4 @@
     </Menu.Positioner>
   </Portal>
 </Menu>
-{#if tissueError}<p class="text-xs text-error-500">Gewebe: {tissueError}</p>{/if}
+{#if tissueError}<p class="text-xs text-error-500">{m.tissue_label()}: {tissueError}</p>{/if}

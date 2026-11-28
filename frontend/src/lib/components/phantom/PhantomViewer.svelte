@@ -16,6 +16,7 @@
   // On touch screens a toggle above the view hands the fingers to the box: one finger
   // moves it, two fingers turn it (after a few degrees) and, spread along a box axis,
   // resize that axis (the axes turn with the box while turning).
+  import { m } from "../../../paraglide/messages.js";
   import Info from "@lucide/svelte/icons/info";
   import Move from "@lucide/svelte/icons/move";
   import { MULTIPLANAR_TYPE, NVMesh, Niivue, SHOW_RENDER, SLICE_TYPE } from "@niivue/niivue";
@@ -66,11 +67,11 @@
 
   /** From this width on (CSS px), `auto` shows the grid: each tile is then ~240 px. */
   const GRID_MIN_WIDTH_PX = 480;
-  const PLANES: { key: Plane; label: string }[] = [
-    { key: "tra", label: "Transversal" },
-    { key: "cor", label: "Koronal" },
-    { key: "sag", label: "Sagittal" },
-    { key: "3d", label: "3D" },
+  const PLANES: { key: Plane; label: () => string }[] = [
+    { key: "tra", label: m.viewer_tra },
+    { key: "cor", label: m.viewer_cor },
+    { key: "sag", label: m.viewer_sag },
+    { key: "3d", label: () => "3D" },
   ];
   const SLICE: Record<Plane, SLICE_TYPE> = {
     tra: SLICE_TYPE.AXIAL,
@@ -493,16 +494,16 @@
     {#if single}
       <select
         class="select min-w-0 flex-1 text-xs"
-        aria-label="Ebene"
+        aria-label={m.viewer_plane()}
         value={plane}
         onchange={(e) => (plane = e.currentTarget.value as Plane)}
       >
-        {#each PLANES as p (p.key)}<option value={p.key}>{p.label}</option>{/each}
+        {#each PLANES as p (p.key)}<option value={p.key}>{p.label()}</option>{/each}
       </select>
     {/if}
     <select
       class="select min-w-0 flex-1 text-xs"
-      aria-label="Eigenschaft"
+      aria-label={m.viewer_property()}
       value={shown?.key ?? ""}
       disabled={!maps}
       onchange={(e) => onproperty(e.currentTarget.value)}
@@ -513,9 +514,9 @@
       <button
         type="button"
         class="btn-icon btn-icon-sm shrink-0 {touchEdit ? 'preset-filled-primary-500' : 'hover:preset-tonal'}"
-        aria-label="FOV-Box mit den Fingern bearbeiten"
+        aria-label={m.viewer_touch_edit()}
         aria-pressed={touchEdit}
-        title="FOV-Box mit den Fingern bearbeiten"
+        title={m.viewer_touch_edit()}
         onclick={() => (touchEdit = !touchEdit)}
       >
         <Move class="size-4" aria-hidden="true" />
@@ -524,26 +525,26 @@
     {#if onfov}
       <!-- How to edit the box: behind a button, the view stays free of text -->
       <Popover>
-        <Popover.Trigger class="btn-icon btn-icon-sm hover:preset-tonal shrink-0" aria-label="Bedienung der FOV-Box">
+        <Popover.Trigger class="btn-icon btn-icon-sm hover:preset-tonal shrink-0" aria-label={m.viewer_help()}>
           <Info class="size-4" aria-hidden="true" />
         </Popover.Trigger>
         <Portal>
           <Popover.Positioner>
             <Popover.Content class="card max-w-72 space-y-2 bg-surface-100-900 p-3 text-xs shadow-xl">
-              <Popover.Title class="font-semibold">FOV-Box bearbeiten</Popover.Title>
+              <Popover.Title class="font-semibold">{m.viewer_help_title()}</Popover.Title>
               <Popover.Description>
                 <ul class="space-y-1">
-                  <li><b>Strg + ziehen:</b> verschieben</li>
-                  <li><b>Strg + Rechtsklick ziehen:</b> drehen (Shift: fein)</li>
-                  <li><b>Strg + Mausrad:</b> Größe (Shift: fein)</li>
+                  <li><b>{m.help_move_key()}</b> {m.help_move()}</li>
+                  <li><b>{m.help_rotate_key()}</b> {m.help_rotate_fine()}</li>
+                  <li><b>{m.help_size_key()}</b> {m.help_size_fine()}</li>
                 </ul>
-                <p class="mt-2 text-muted">Ohne Strg: Klick setzt das Fadenkreuz, Mausrad blättert die Schichten, Rechtsklick ziehen ändert die Fensterung.</p>
+                <p class="mt-2 text-muted">{m.help_without_ctrl()}</p>
                 {#if touchScreen}
-                  <p class="mt-2 font-semibold">Touch, mit eingeschaltetem Bearbeiten-Knopf:</p>
+                  <p class="mt-2 font-semibold">{m.help_touch()}</p>
                   <ul class="space-y-1">
-                    <li><b>Ein Finger:</b> verschieben</li>
-                    <li><b>Zwei Finger drehen:</b> drehen</li>
-                    <li><b>Zwei Finger spreizen:</b> Größe entlang der Box-Achse, in deren Richtung gespreizt wird (diagonal: beide)</li>
+                    <li><b>{m.help_one_finger_key()}</b> {m.help_move()}</li>
+                    <li><b>{m.help_turn_key()}</b> {m.help_turn()}</li>
+                    <li><b>{m.help_spread_key()}</b> {m.help_spread()}</li>
                   </ul>
                 {/if}
               </Popover.Description>

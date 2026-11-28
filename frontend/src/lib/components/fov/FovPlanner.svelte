@@ -4,6 +4,7 @@
   // out; folded (the default, per view) it is not rendered and the gateway reslices nothing.
   // The box is drawn and dragged in the visual FOV planner (FovViewer).
   // Bound to a Selection, so it works on a session, locally in an MCP App, and on the website.
+  import { m } from "../../../paraglide/messages.js";
   import ChevronRight from "@lucide/svelte/icons/chevron-right";
   import { Collapsible } from "@skeletonlabs/skeleton-svelte";
   import type { Selection } from "../../state/selection";
@@ -22,7 +23,7 @@
     <Collapsible open={previewOpen} onOpenChange={(d) => (previewOpen = d.open)}>
       <Collapsible.Trigger class="btn btn-sm preset-outlined-surface-300-700 w-full justify-start text-xs">
         <ChevronRight class="size-4 transition-transform {previewOpen ? 'rotate-90' : ''}" aria-hidden="true" />
-        Vorschau - Resampled
+        {m.fov_preview_resampled()}
       </Collapsible.Trigger>
       <Collapsible.Content class="mt-2">
         <!-- Only rendered while open: folded, nothing is resliced -->
@@ -42,7 +43,7 @@
   {:else if sel.error}
     <p class="text-error-500">{sel.error}</p>
   {:else}
-    <p class="text-muted">Lade Session …</p>
+    <p class="text-muted">{m.common_loading_session()}</p>
   {/if}
   {#if sel.state && sel.error}<p class="text-xs text-error-500">{sel.error}</p>{/if}
 </div>

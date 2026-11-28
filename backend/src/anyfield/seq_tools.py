@@ -16,7 +16,7 @@ from fastmcp.apps.config import AppConfig
 from fastmcp.exceptions import ToolError
 from pydantic import Field, ValidationError
 
-from .args import OptionalSessionKey
+from .args import LocaleArg, OptionalSessionKey
 from .file_tools import UserFiles
 from .models import CasSequence, Sequence, State
 from .phantom_tools import Ctx
@@ -142,7 +142,9 @@ def register(
         return {"rev": session.rev, "sequence": seq.model_dump() if seq else None}
 
     @mcp.tool(app=AppConfig(resource_uri=SEQUENCE_APP_URI), annotations={"readOnlyHint": True})
-    async def open_sequence_browser(session_key: OptionalSessionKey = None) -> dict[str, Any]:
+    async def open_sequence_browser(
+        session_key: OptionalSessionKey = None, locale: LocaleArg = None
+    ) -> dict[str, Any]:
         """Show the interactive sequence browser: a tab per sequence source and one for
         the user's sequence files in the CAS, to pick a sequence (file and function).
         With a session the choice goes into the session; without one it comes back to

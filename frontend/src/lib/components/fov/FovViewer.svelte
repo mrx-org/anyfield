@@ -5,6 +5,7 @@
   // (per viewer, not in the state). Tissues and property follow the state (`tissues`,
   // `view.property`), as in the phantom preview. The sliders are the FOV planner (FovPlanner).
   // Bound to a Selection, so it works on a session, locally in an MCP App, and on the website.
+  import { m } from "../../../paraglide/messages.js";
   import { MapsLoader } from "../../state/maps.svelte";
   import type { Selection } from "../../state/selection";
   import PhantomViewer from "../phantom/PhantomViewer.svelte";
@@ -35,9 +36,9 @@
   {:else if sel.error}
     <p class="p-4 text-error-500">{sel.error}</p>
   {:else}
-    <p class="p-4 text-muted">Lade Session …</p>
+    <p class="p-4 text-muted">{m.common_loading_session()}</p>
   {/if}
-  {#if maps.loading}<p class="text-xs text-accent">Phantom wird vorbereitet …</p>{/if}
+  {#if maps.loading}<p class="text-xs text-accent">{m.phantom_preparing()}</p>{/if}
   {#if sel.state && (sel.error || maps.error)}
     <p class="text-xs text-error-500">{sel.error ?? maps.error}</p>
   {/if}

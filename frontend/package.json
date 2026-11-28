@@ -4,12 +4,14 @@
   "version": "0.1.0",
   "type": "module",
   "scripts": {
-    "dev": "vite",
-    "build": "vite build && node scripts/build-apps.mjs",
-    "check": "svelte-check --tsconfig ./tsconfig.json",
-    "test": "vitest run"
+    "i18n": "paraglide-js compile --project ./project.inlang --outdir ./src/paraglide --strategy globalVariable baseLocale --silent --no-emit-readme --no-emit-prettier-ignore",
+    "dev": "pnpm i18n && vite",
+    "build": "pnpm i18n && vite build && node scripts/build-apps.mjs",
+    "check": "pnpm i18n && svelte-check --tsconfig ./tsconfig.json",
+    "test": "pnpm i18n && vitest run"
   },
   "devDependencies": {
+    "@inlang/paraglide-js": "3.2.2",
     "@lucide/svelte": "^1.77.0",
     "@skeletonlabs/skeleton": "^5.0.4",
     "@skeletonlabs/skeleton-svelte": "^5.0.4",
